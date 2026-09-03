@@ -17,7 +17,7 @@ import type { DuplexLike } from './transport.js';
 
 export interface AstmSessionOptions {
   /** Invoked with all records of one complete ASTM message. */
-  onMessage: (records: AstmRecord[]) => void;
+  onMessage: (records: AstmRecord[]) => void | Promise<void>;
   onError?: (error: Error) => void;
   /** Invoked when the session ends (EOT received and ACKed). */
   onEnd?: () => void;
@@ -26,6 +26,8 @@ export interface AstmSessionOptions {
 export class AstmSession {
   private buffer = Buffer.alloc(0);
   private closed = false;
+  /** Records accumulated across the frames of the current message (until ETX). */
+  private sessionRecords: AstmRecord[] = [];
 
   constructor(
     private readonly socket: DuplexLike,
@@ -68,9 +70,12 @@ export class AstmSession {
         }
 
         this.write(Buffer.from([CONTROL.ACK]));
+        this.sessionRecords.push(...frame.records.map(parseRecord));
         if (!frame.more) {
-          const records = frame.records.map(parseRecord);
-          this.opts.onMessage(records);
+          // Final frame (ETX): the complete message spans all frames of this session.
+          const message = this.sessionRecords;
+          this.sessionRecords = [];
+          this.opts.onMessage(message);
         }
         continue;
       }

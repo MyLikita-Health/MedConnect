@@ -27,7 +27,16 @@ export interface CanonicalizationResult {
   issues: string[];
 }
 
-/** Extract patient, order and results from ASTM records into the canonical model. */
+/**
+ * Extract patient, order and results from ASTM records into the canonical model.
+ *
+ * Reference record layout (see packages/simulator and README "Record layouts"):
+ *   P | seq | (reserved) | patient id | Last^First | (reserved) | DOB | sex
+ *   O | seq | sample id  | order/accession id | ^code^name
+ *   R | seq | ^code^name | value | unit | ref range | flag | (nature) | status
+ * Real analyzers deviate vendor-by-vendor; production adapters load a per-device
+ * profile rather than hard-coding these positions.
+ */
 export function astmToCanonical(
   records: ParsedRecord[],
   mappings: MappingTable = {},
@@ -43,7 +52,7 @@ export function astmToCanonical(
         // Header: sender name (fields[4], "name^id") identifies the device.
         break;
       case 'P': {
-        const id = (record.fields[2] ?? '').trim() || (record.fields[3] ?? '').trim();
+        const id = (record.fields[2] ?? '').trim();
         patient = {
           id,
           name: formatPersonName(record.fields[3]),
@@ -53,24 +62,24 @@ export function astmToCanonical(
         break;
       }
       case 'O': {
-        const testId = splitComponent(record.fields[3] ?? '');
+        const test = parseTestId(record.fields[3]);
         order = {
           id: (record.fields[2] ?? '').trim() || (record.fields[1] ?? '').trim(),
           sampleId: record.fields[1] || undefined,
-          tests: testId[0] ? [{ code: testId[0], name: testId[1] }] : [],
+          tests: test.code ? [{ code: test.code, name: test.name }] : [],
         };
         break;
       }
       case 'R': {
-        const testId = splitComponent(record.fields[2] ?? '');
+        const test = parseTestId(record.fields[1]);
         results.push({
-          testCode: testId[0] ?? record.fields[2] ?? '',
-          testName: testId[1],
-          value: record.fields[3] ?? '',
-          unit: record.fields[4] || undefined,
-          referenceRange: record.fields[5] || undefined,
-          flag: record.fields[6] || undefined,
-          status: record.fields[8] || 'F',
+          testCode: test.code,
+          testName: test.name,
+          value: record.fields[2] ?? '',
+          unit: record.fields[3] || undefined,
+          referenceRange: record.fields[4] || undefined,
+          flag: record.fields[5] || undefined,
+          status: record.fields[7] || 'F',
         });
         break;
       }
@@ -136,6 +145,24 @@ export function buildMessage(
     errors: issues,
     timeline,
   };
+}
+
+/**
+ * Parse a test-id field, commonly "^code^name" (leading type component empty)
+ * or a bare code like "GLU".
+ */
+function parseTestId(value: string | undefined): { code: string; name?: string } {
+  const parts = splitComponent(value ?? '');
+  if (parts.length >= 3) {
+    // ^code^name — first component is the empty (or 'L') type marker.
+    const code = parts[1] ?? parts[0];
+    return { code: code ?? '', name: parts[2] || undefined };
+  }
+  if (parts.length === 2) {
+    const code = parts[0] || parts[1];
+    return { code: code ?? '', name: undefined };
+  }
+  return { code: parts[0] ?? '' };
 }
 
 /** "Doe^John^A" -> "Doe, John A". */

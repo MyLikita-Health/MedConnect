@@ -14,7 +14,7 @@ import type { DuplexLike } from './transport.js';
 export interface AstmClientOptions {
   timeoutMs?: number;
   maxRetries?: number;
-  /** 0..1 chance of sending a corrupted frame (triggers NAK + retry). */
+  /** 0..1 chance a frame is corrupted in transit once (triggers NAK; retry is clean). */
   corruptRate?: number;
   debug?: (line: string) => void;
 }
@@ -64,11 +64,13 @@ export class AstmClient {
     for (let i = 0; i < records.length; i++) {
       const record = records[i]!;
       const last = i === records.length - 1;
-      let frame = encodeFrame([serializeRecord(record)], { last });
-      if (Math.random() < this.corruptRate) frame = corruptChecksum(frame);
+      // Corruption models transient line noise: the pristine frame is built once
+      // and only the first attempt may be garbled; retries resend it cleanly.
+      const pristine = encodeFrame([serializeRecord(record)], { last });
 
       let attempt = 0;
       for (;;) {
+        const frame = attempt === 0 && Math.random() < this.corruptRate ? corruptChecksum(pristine) : pristine;
         this.debug?.(`frame ${i + 1}/${records.length} (${last ? 'ETX' : 'ETB'}) attempt ${attempt + 1}`);
         this.socket.write(frame);
         result.framesSent++;

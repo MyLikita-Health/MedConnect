@@ -10,10 +10,12 @@ export interface AstmRecord {
   fields: string[];
 }
 
+const KNOWN_TYPES: AstmRecordType[] = ['H', 'P', 'O', 'R', 'L', 'C', 'Q', 'M', 'S'];
+
 export function parseRecord(line: string): AstmRecord {
   const parts = line.split('|');
   const rawType = (parts[0] ?? '').trim();
-  const type = (rawType.length === 1 ? rawType : 'U') as AstmRecordType;
+  const type = KNOWN_TYPES.includes(rawType as AstmRecordType) ? (rawType as AstmRecordType) : 'U';
   return { type, fields: parts.slice(1) };
 }
 

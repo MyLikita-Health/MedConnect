@@ -18,7 +18,10 @@ async function startHost(handlers: { onMessage: (r: AstmRecord[]) => void; onErr
   port: number;
   close: () => Promise<void>;
 }> {
+  const connections = new Set<net.Socket>();
   const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
     const session = new AstmSession(socket, {
       onMessage: (records) => handlers.onMessage(records),
       onError: (err) => handlers.onError?.(err),
@@ -29,7 +32,10 @@ async function startHost(handlers: { onMessage: (r: AstmRecord[]) => void; onErr
   const port = (server.address() as net.AddressInfo).port;
   return {
     port,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () => {
+      for (const socket of connections) socket.destroy();
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
   };
 }
 

@@ -6,9 +6,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 
 const children: ChildProcess[] = [];
 
-function run(args: string[]): ChildProcess {
+function run(args: string[], env: Record<string, string> = {}): ChildProcess {
   const child = spawn(process.execPath, ['--import', 'tsx', ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...env },
   });
   child.stdout?.on('data', (d: Buffer) => process.stdout.write(d));
   child.stderr?.on('data', (d: Buffer) => process.stderr.write(d));
@@ -44,7 +45,7 @@ function exitCode(child: ChildProcess): Promise<number | null> {
 
 async function main(): Promise<void> {
   console.log('=== Integration Hub demo ===\n');
-  const server = run(['packages/server/src/cli.ts']);
+  const server = run(['packages/server/src/cli.ts'], { PORT: '3000', DEVICE_PORT: '5000', HOST: '127.0.0.1' });
   await waitForOutput(server, 'REST listening');
 
   const simulator = run([
