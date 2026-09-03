@@ -1,7 +1,7 @@
 # Integration Hub — Full Platform Implementation Plan
 
 > **Status:** Living document · v1.0 · September 2026
-> **Sources:** [`prd.txt`](../prd.txt) (product definition), the MVP scaffold in this
+> **Sources:** [`prd.txt`](./prd.txt) (product definition), the MVP scaffold in this
 > repository (`packages/*`, `README.md`), and the build-vs-buy architecture decision
 > documented in §3 (hub-as-orchestrator around Orthanc/HL7 engines).
 > **Working name:** Integration Hub. **Commercial line:** "Connect any medical device to

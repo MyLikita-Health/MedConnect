@@ -3,7 +3,7 @@
 > Full-platform roadmap: see [`docs/implementation-plan.md`](docs/implementation-plan.md) — architecture decisions, workstream plans, phased milestones M0–M5, risks, and the scaffold→production evolution map.
 
 A working skeleton of the healthcare interoperability platform described in
-[`prd.txt`](./prd.txt): a hub that connects laboratory analyzers to LIS/HIS
+[`docs/prd.txt`](docs/prd.txt): a hub that connects laboratory analyzers to LIS/HIS
 systems over **ASTM E1381/E1394**, translates messages into a **canonical
 internal model**, maps vendor test codes, validates, and exposes everything
 through a REST API and a web console.
