@@ -1,0 +1,26 @@
+{
+  "name": "integration-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Healthcare device integration & interoperability platform (MVP scaffold)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "tsx --test \"packages/**/*.test.ts\"",
+    "start": "tsx packages/server/src/cli.ts",
+    "simulate": "tsx packages/simulator/src/cli.ts",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

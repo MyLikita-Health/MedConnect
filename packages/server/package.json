@@ -1,0 +1,18 @@
+{
+  "name": "@integration-hub/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@integration-hub/api": "*",
+    "@integration-hub/gateway": "*",
+    "@integration-hub/shared": "*"
+  }
+}

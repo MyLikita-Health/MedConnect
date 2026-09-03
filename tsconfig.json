@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/astm" },
+    { "path": "./packages/gateway" },
+    { "path": "./packages/api" },
+    { "path": "./packages/simulator" },
+    { "path": "./packages/server" }
+  ]
+}
