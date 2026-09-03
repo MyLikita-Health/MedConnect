@@ -1,0 +1,44 @@
+# M0 dev environment (plan §13.1.1). Bring up the backing services, then run:
+#   npm run db:up        # start Postgres + Redis
+#   npm start            # hub without DB (in-memory)
+#   npm run demo:db      # or: end-to-end demo against Postgres
+#
+# PostgreSQL:        postgres://hub:hub@localhost:5434/hub
+# DATABASE_URL env:  DATABASE_URL=postgres://hub:hub@localhost:5434/hub
+#
+# Redis is provisioned now for the M0 queue/retry/DLQ workstream (plan §13.1.5);
+# nothing connects to it yet.
+#
+# Host ports 5434/6380 are used (not 5432/6379) so this env coexists with other
+# local projects that already bind the default ports.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_PASSWORD: hub
+      POSTGRES_DB: hub
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      # Host 6380: some dev machines already run a local Redis on 6379.
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

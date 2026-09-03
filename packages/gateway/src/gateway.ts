@@ -49,7 +49,7 @@ export class AstmGateway {
   }
 
   /** Re-run the pipeline over a stored message (PRD §23 replay). */
-  replay(message: CanonicalMessage): CanonicalMessage {
+  async replay(message: CanonicalMessage): Promise<CanonicalMessage> {
     const replayed = buildMessage(message.records ?? [], message.raw, {
       deviceId: message.deviceId,
       mappings: this.opts.mappings,
@@ -65,7 +65,7 @@ export class AstmGateway {
       replayed.status = 'ROUTED';
       replayed.timeline.push({ stage: 'ROUTED', at: new Date().toISOString(), note: 'replay delivered to sink' });
     }
-    this.opts.sink.record(replayed);
+    await this.persist(replayed);
     return replayed;
   }
 
@@ -88,7 +88,7 @@ export class AstmGateway {
     session.start();
   }
 
-  private handleMessage(socket: net.Socket, records: AstmRecord[]): void {
+  private async handleMessage(socket: net.Socket, records: AstmRecord[]): Promise<void> {
     const deviceId = deriveDeviceId(records) ?? 'unknown-device';
     this.deviceBySocket.set(socket, deviceId);
     this.opts.onDeviceState?.(deviceId, 'connected');
@@ -99,7 +99,20 @@ export class AstmGateway {
       message.status = 'ROUTED';
       message.timeline.push({ stage: 'ROUTED', at: new Date().toISOString(), note: 'delivered to sink' });
     }
-    this.opts.sink.record(message);
+    await this.persist(message);
+  }
+
+  /**
+   * Deliver to the sink, awaiting async (durable) sinks so persistence
+   * failures surface as session errors instead of silently dropping a message.
+   */
+  private async persist(message: CanonicalMessage): Promise<void> {
+    try {
+      const result = this.opts.sink.record(message);
+      if (result instanceof Promise) await result;
+    } catch (err) {
+      this.opts.onSessionError?.(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 }
 

@@ -32,7 +32,7 @@ test('gateway receives, parses, maps and sinks a full ASTM result message', asyn
   const states: string[] = [];
   const gateway = new AstmGateway({
     port: 0,
-    sink: { record: (m) => received.push(m) },
+    sink: { record: (m) => { received.push(m); } },
     mappings: DEFAULT_MAPPINGS,
     onDeviceState: (id, state) => states.push(`${id}:${state}`),
   });
@@ -67,7 +67,7 @@ test('gateway receives, parses, maps and sinks a full ASTM result message', asyn
 
 test('gateway records FAILED messages instead of dropping them', async (t) => {
   const received: CanonicalMessage[] = [];
-  const gateway = new AstmGateway({ port: 0, sink: { record: (m) => received.push(m) } });
+  const gateway = new AstmGateway({ port: 0, sink: { record: (m) => { received.push(m); } } });
   const { port } = await gateway.start();
   t.after(() => gateway.stop());
 
@@ -93,7 +93,7 @@ test('gateway.replay re-runs the pipeline and sinks a new message', async (t) =>
   const received: CanonicalMessage[] = [];
   const gateway = new AstmGateway({
     port: 0,
-    sink: { record: (m) => received.push(m) },
+    sink: { record: (m) => { received.push(m); } },
     mappings: DEFAULT_MAPPINGS,
   });
   await gateway.start();
@@ -103,7 +103,7 @@ test('gateway.replay re-runs the pipeline and sinks a new message', async (t) =>
     deviceId: 'SIM-BS430',
     mappings: DEFAULT_MAPPINGS,
   });
-  const replayed = gateway.replay(original);
+  const replayed = await gateway.replay(original);
 
   assert.notEqual(replayed.id, original.id);
   assert.equal(replayed.status, 'ROUTED');

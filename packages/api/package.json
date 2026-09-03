@@ -11,6 +11,9 @@
     }
   },
   "dependencies": {
-    "@integration-hub/shared": "*"
+    "@integration-hub/shared": "*",
+    "fastify": "^5.12.1",
+    "pg": "^8.23.0",
+    "zod": "^4.5.4"
   }
 }

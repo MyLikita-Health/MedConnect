@@ -21,6 +21,7 @@ export interface StoreStats {
 }
 
 export class MessageStore implements MessageSink {
+  readonly kind = 'memory' as const;
   private readonly messages: CanonicalMessage[] = [];
   private readonly emitter = new EventEmitter();
 

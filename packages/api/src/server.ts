@@ -1,191 +1,148 @@
 /**
  * REST API + management console (PRD §36 API, §31 Monitoring, §24 Message Viewer).
- * Zero-dependency HTTP server on Node's http module for the MVP scaffold.
+ *
+ * M0: moved from the hand-rolled node:http router onto Fastify with zod
+ * validation (plan §13.1.3). The v1 route surface is preserved as the contract
+ * baseline (plan §13): /api/v1/{health,stats,mappings,devices,messages,results}
+ * plus replay, and the console UI at /.
  */
-import http from 'node:http';
 import net from 'node:net';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
-import { DeviceRegistry } from './devices.js';
-import { MessageStore } from './store.js';
+import type { DeviceBackend, StoreBackend } from './backend.js';
 import { renderUi } from './ui.js';
 
 export interface ApiServerOptions {
   host?: string;
   port: number;
-  store: MessageStore;
-  devices: DeviceRegistry;
+  store: StoreBackend;
+  devices: DeviceBackend;
   /** Optional mapping table exposed read-only at /api/v1/mappings. */
   mappings?: MappingTable;
   /** Wired to the gateway so failed messages can be corrected + replayed. */
-  replayHandler?: (message: CanonicalMessage) => CanonicalMessage;
+  replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
 }
 
-type Handler = (req: http.IncomingMessage, res: http.ServerResponse, params: Record<string, string>, body?: unknown) => void | Promise<void>;
+const registerDeviceSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  manufacturer: z.string().optional(),
+  model: z.string().optional(),
+  protocol: z.enum(['ASTM', 'HL7', 'FHIR']).optional(),
+  transport: z.enum(['tcp', 'serial', 'api']).optional(),
+  host: z.string().optional(),
+  port: z.number().int().positive().optional(),
+});
 
-interface Route {
-  method: string;
-  pattern: RegExp;
-  handler: Handler;
-}
+const listMessagesSchema = z.object({
+  deviceId: z.string().optional(),
+  status: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
 
 export class ApiServer {
-  private server?: http.Server;
-  private readonly routes: Route[];
+  private app?: FastifyInstance;
 
   constructor(private readonly opts: ApiServerOptions) {
-    this.routes = [
-      { method: 'GET', pattern: /^\/api\/v1\/health$/, handler: (_req, res) => this.json(res, 200, this.health()) },
-      { method: 'GET', pattern: /^\/api\/v1\/stats$/, handler: (_req, res) => this.json(res, 200, this.opts.store.stats()) },
-      { method: 'GET', pattern: /^\/api\/v1\/mappings$/, handler: (_req, res) => this.json(res, 200, this.opts.mappings ?? {}) },
-      { method: 'GET', pattern: /^\/api\/v1\/devices$/, handler: (_req, res) => this.json(res, 200, this.opts.devices.list()) },
-      {
-        method: 'POST',
-        pattern: /^\/api\/v1\/devices$/,
-        handler: (_req, res, _p, body) => {
-          const record = this.opts.devices.register(body as any);
-          this.json(res, 201, record);
-        },
-      },
-      {
-        method: 'GET',
-        pattern: /^\/api\/v1\/messages$/,
-        handler: (req, res) => {
-          const url = new URL(req.url ?? '/', 'http://localhost');
-          const filter = {
-            deviceId: url.searchParams.get('deviceId') ?? undefined,
-            status: url.searchParams.get('status') ?? undefined,
-            limit: Number(url.searchParams.get('limit') ?? 100),
-          };
-          this.json(res, 200, this.opts.store.list(filter));
-        },
-      },
-      {
-        method: 'GET',
-        pattern: /^\/api\/v1\/messages\/([^/]+)$/,
-        handler: (_req, res, params) => {
-          const message = this.opts.store.get(params.id!);
-          if (!message) return this.json(res, 404, { error: 'message not found' });
-          this.json(res, 200, message);
-        },
-      },
-      {
-        method: 'POST',
-        pattern: /^\/api\/v1\/messages\/([^/]+)\/replay$/,
-        handler: (_req, res, params) => {
-          if (!this.opts.replayHandler) return this.json(res, 501, { error: 'replay not wired' });
-          const message = this.opts.store.get(params.id!);
-          if (!message) return this.json(res, 404, { error: 'message not found' });
-          this.json(res, 201, this.opts.replayHandler(message));
-        },
-      },
-      {
-        method: 'GET',
-        pattern: /^\/api\/v1\/results$/,
-        handler: (_req, res) => {
-          const rows = this.opts.store
-            .list({ limit: 500 })
-            .filter((m) => m.payload)
-            .flatMap((m) =>
-              (m.payload!.results ?? []).map((r) => ({
-                messageId: m.id,
-                deviceId: m.deviceId,
-                receivedAt: m.receivedAt,
-                patient: m.payload!.patient,
-                order: m.payload!.order,
-                ...r,
-              })),
-            );
-          this.json(res, 200, rows);
-        },
-      },
-      {
-        method: 'GET',
-        pattern: /^\/$/,
-        handler: (_req, res) => {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(renderUi());
-        },
-      },
-    ];
+    const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+    this.app = app;
+
+    // CORS for the console and integrations (same policy as the scaffold).
+    app.addHook('onSend', async (_req, reply) => {
+      reply.header('Access-Control-Allow-Origin', '*');
+      reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    });
+    app.addHook('onRequest', async (req, reply) => {
+      if (req.method === 'OPTIONS') {
+        reply.code(204).send();
+      }
+    });
+
+    app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'not found' }));
+    app.setErrorHandler((err, _req, reply) => {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({ error: 'validation error', issues: err.issues.map((i) => i.message) });
+      }
+      reqLogger(err);
+      return reply.code(500).send({ error: 'internal error' });
+    });
+
+    app.get('/api/v1/health', async () => this.health());
+    app.get('/api/v1/stats', async () => this.opts.store.stats());
+    app.get('/api/v1/mappings', async () => this.opts.mappings ?? {});
+    app.get('/api/v1/devices', async () => this.opts.devices.list());
+    app.post('/api/v1/devices', async (req, reply) => {
+      const input = registerDeviceSchema.parse(req.body);
+      const record = await this.opts.devices.register(input);
+      return reply.code(201).send(record);
+    });
+
+    app.get('/api/v1/messages', async (req) => {
+      const query = listMessagesSchema.parse(req.query);
+      return this.opts.store.list(query);
+    });
+
+    app.get('/api/v1/messages/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const message = await this.opts.store.get(id);
+      if (!message) return reply.code(404).send({ error: 'message not found' });
+      return message;
+    });
+
+    app.post('/api/v1/messages/:id/replay', async (req, reply) => {
+      if (!this.opts.replayHandler) return reply.code(501).send({ error: 'replay not wired' });
+      const { id } = req.params as { id: string };
+      const message = await this.opts.store.get(id);
+      if (!message) return reply.code(404).send({ error: 'message not found' });
+      return reply.code(201).send(await this.opts.replayHandler(message));
+    });
+
+    app.get('/api/v1/results', async () => {
+      const messages = await this.opts.store.list({ limit: 500 });
+      return messages
+        .filter((m) => m.payload)
+        .flatMap((m) =>
+          (m.payload!.results ?? []).map((r) => ({
+            messageId: m.id,
+            deviceId: m.deviceId,
+            receivedAt: m.receivedAt,
+            patient: m.payload!.patient,
+            order: m.payload!.order,
+            ...r,
+          })),
+        );
+    });
+
+    app.get('/', async (_req, reply) => reply.type('text/html; charset=utf-8').send(renderUi()));
   }
 
   async start(): Promise<{ port: number }> {
-    const server = http.createServer((req, res) => this.handle(req, res));
-    this.server = server;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(this.opts.port, this.opts.host ?? '0.0.0.0', () => resolve());
-    });
-    const port = (server.address() as net.AddressInfo).port;
+    const app = this.app!;
+    await app.listen({ port: this.opts.port, host: this.opts.host ?? '0.0.0.0' });
+    const port = (app.server.address() as net.AddressInfo).port;
     return { port };
   }
 
   async stop(): Promise<void> {
-    if (this.server) {
-      await new Promise<void>((resolve) => this.server!.close(() => resolve()));
-      this.server = undefined;
+    if (this.app) {
+      await this.app.close();
+      this.app = undefined;
     }
-  }
-
-  private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    this.cors(res);
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-    for (const route of this.routes) {
-      const match = route.pattern.exec(pathname);
-      if (!match || route.method !== req.method) continue;
-      const params: Record<string, string> = {};
-      for (let i = 1; i < match.length; i++) params[String(i - 1)] = match[i]!;
-      const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : undefined;
-      await route.handler(req, res, params, body);
-      return;
-    }
-    this.json(res, 404, { error: `no route for ${req.method} ${pathname}` });
   }
 
   private health() {
-    return { status: 'ok', uptime: process.uptime(), time: new Date().toISOString() };
-  }
-
-  private json(res: http.ServerResponse, status: number, data: unknown): void {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(data, null, 2));
-  }
-
-  private cors(res: http.ServerResponse): void {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return {
+      status: 'ok',
+      uptime: process.uptime(),
+      time: new Date().toISOString(),
+      storage: this.opts.store.kind,
+    };
   }
 }
 
-function readBody(req: http.IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > 1024 * 1024) {
-        reject(new Error('body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      const text = Buffer.concat(chunks).toString('utf8');
-      if (!text) return resolve(undefined);
-      try {
-        resolve(JSON.parse(text));
-      } catch {
-        reject(new Error('invalid JSON body'));
-      }
-    });
-    req.on('error', reject);
-  });
+function reqLogger(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[api] ${message}`);
 }

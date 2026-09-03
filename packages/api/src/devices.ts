@@ -33,7 +33,14 @@ export interface RegisterDeviceInput {
   port?: number;
 }
 
+export interface DeviceStats {
+  total: number;
+  connected: number;
+  offline: number;
+}
+
 export class DeviceRegistry {
+  readonly kind = 'memory' as const;
   private readonly devices = new Map<string, DeviceRecord>();
 
   register(input: RegisterDeviceInput): DeviceRecord {
@@ -91,7 +98,7 @@ export class DeviceRegistry {
     return [...this.devices.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  stats(): { total: number; connected: number; offline: number } {
+  stats(): DeviceStats {
     let connected = 0;
     let offline = 0;
     for (const d of this.devices.values()) {
@@ -102,7 +109,7 @@ export class DeviceRegistry {
   }
 }
 
-function slugify(name: string): string {
+export function slugify(name: string): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return slug || `device-${Date.now()}`;
 }

@@ -46,9 +46,13 @@ export interface CanonicalMessage {
   timeline: TimelineEntry[];
 }
 
-/** Where the gateway delivers processed messages (implemented by the API store). */
+/**
+ * Where the gateway delivers processed messages (implemented by the API store).
+ * Implementations may persist asynchronously (e.g. PostgreSQL); synchronous
+ * in-memory sinks may simply return void.
+ */
 export interface MessageSink {
-  record(message: CanonicalMessage): void;
+  record(message: CanonicalMessage): void | Promise<void>;
 }
 
 /** Vendor test-code mapping table: device code -> canonical code (PRD §17–18). */

@@ -24,8 +24,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[hub] ${signal} received — shutting down`);
-  await hub.api.stop();
-  await hub.gateway.stop();
+  await hub.stop();
   process.exit(0);
 }
 process.on('SIGINT', () => void shutdown('SIGINT'));
