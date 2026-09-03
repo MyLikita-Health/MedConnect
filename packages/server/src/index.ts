@@ -9,6 +9,7 @@
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, MessageStore, PostgresDeviceRegistry, PostgresMessageStore, type DeviceBackend, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
+import { Dispatcher, InMemoryDedupStore, InMemoryRouteStore, PostgresDedupStore, PostgresRouteStore, type DispatcherOptions, type RouteStore } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 export interface HubOptions {
@@ -25,6 +26,8 @@ export interface Hub {
   api: ApiServer;
   store: StoreBackend;
   devices: DeviceBackend;
+  dispatcher: Dispatcher;
+  routes: RouteStore;
   ports: { device: number; http: number };
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool };
@@ -37,6 +40,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
 
   let store: StoreBackend;
   let devices: DeviceBackend;
+  let routes: RouteStore;
+  let dedup: DispatcherOptions['dedup'];
   let mappings = opts.mappings ?? DEFAULT_MAPPINGS;
   let pool: Pool | undefined;
 
@@ -48,6 +53,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     const pgStore = new PostgresMessageStore(pool);
     store = pgStore;
     devices = new PostgresDeviceRegistry(pool);
+    routes = new PostgresRouteStore(pool);
+    dedup = new PostgresDedupStore(pool);
 
     // Seed the default mapping table once so DB mappings match scaffold defaults.
     if (!opts.mappings) await pgStore.setMappings(DEFAULT_MAPPINGS);
@@ -55,12 +62,23 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   } else {
     store = new MessageStore();
     devices = new DeviceRegistry();
+    routes = new InMemoryRouteStore();
+    dedup = new InMemoryDedupStore();
   }
+
+  // The dispatcher owns delivery: dedup → route → queue → retry → DLQ (plan §5.3).
+  const dispatcher = new Dispatcher({
+    store,
+    dedup,
+    routes,
+    log: (line) => console.log(line),
+  });
+  dispatcher.start();
 
   const gateway = new AstmGateway({
     host,
     port: opts.devicePort ?? 0,
-    sink: store,
+    sink: dispatcher,
     mappings,
     onDeviceState: (deviceId, state) => {
       try {
@@ -85,6 +103,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     port: opts.httpPort ?? 0,
     store,
     devices,
+    routes,
     mappings,
     replayHandler: (message) => gateway.replay(message),
   });
@@ -97,9 +116,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     api,
     store,
     devices,
+    dispatcher,
+    routes,
     ports: { device: devicePort, http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {
+      await dispatcher.stop();
       await api.stop();
       await gateway.stop();
       if (pool) await closeDbPool(pool);

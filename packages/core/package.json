@@ -1,5 +1,5 @@
 {
-  "name": "@integration-hub/api",
+  "name": "@integration-hub/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,10 +11,7 @@
     }
   },
   "dependencies": {
-    "@integration-hub/core": "*",
     "@integration-hub/shared": "*",
-    "fastify": "^5.12.1",
-    "pg": "^8.23.0",
-    "zod": "^4.5.4"
+    "pg": "^8.23.0"
   }
 }

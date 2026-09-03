@@ -61,10 +61,7 @@ export class AstmGateway {
       at: new Date().toISOString(),
       note: `source message ${message.id}`,
     });
-    if (replayed.status !== 'FAILED') {
-      replayed.status = 'ROUTED';
-      replayed.timeline.push({ stage: 'ROUTED', at: new Date().toISOString(), note: 'replay delivered to sink' });
-    }
+    // Delivery (ROUTED / FAILED + DLQ) is owned by the sink (the dispatcher).
     await this.persist(replayed);
     return replayed;
   }
@@ -95,10 +92,8 @@ export class AstmGateway {
 
     const raw = records.map(serializeRecord).join('\r\n');
     const message = buildMessage(records, raw, { deviceId, mappings: this.opts.mappings });
-    if (message.status !== 'FAILED') {
-      message.status = 'ROUTED';
-      message.timeline.push({ stage: 'ROUTED', at: new Date().toISOString(), note: 'delivered to sink' });
-    }
+    // The pipeline produces MAPPED (or FAILED); the sink owns delivery and the
+    // ROUTED/DLQ terminal transitions (plan §5.3).
     await this.persist(message);
   }
 

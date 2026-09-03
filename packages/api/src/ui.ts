@@ -34,7 +34,8 @@ export function renderUi(): string {
   .status { font-weight:600; }
   .status.ROUTED, .status.MAPPED { color:var(--ok); }
   .status.FAILED { color:var(--err); }
-  .status.RECEIVED, .status.PARSED, .status.VALIDATED { color:var(--warn); }
+  .status.RECEIVED, .status.PARSED, .status.VALIDATED, .status.QUEUED, .status.DELIVERING { color:var(--warn); }
+  .status.DUPLICATE, .status.DISCARDED { color:var(--muted); }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:280px; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all; }
   button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:12px; }
   .muted { color:var(--muted); }

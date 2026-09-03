@@ -58,6 +58,15 @@ async function main(): Promise<void> {
   if (code !== 0) throw new Error('simulator exited with non-zero code');
 
   const base = 'http://127.0.0.1:3000/api/v1';
+
+  // Delivery is asynchronous (dedup → queue → worker → ROUTED); wait for the
+  // queue to drain so the summary shows terminal states only.
+  for (let i = 0; i < 100; i++) {
+    const stats = (await (await fetch(`${base}/stats`)).json()) as { pending: number };
+    if (stats.pending === 0) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
   const stats = await (await fetch(`${base}/stats`)).json();
   const messages = await (await fetch(`${base}/messages`)).json();
   const results = await (await fetch(`${base}/results`)).json();

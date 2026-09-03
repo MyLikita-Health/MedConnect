@@ -102,6 +102,63 @@ test('device registration endpoint creates and lists devices', async (t) => {
   assert.equal(list.length, 1);
 });
 
+test('destination and route endpoints manage routing configuration', async (t) => {
+  const { base } = await startApi(t);
+  const res = await fetch(`${base}/api/v1/destinations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 'lis-webhook',
+      name: 'LIS webhook',
+      kind: 'http',
+      url: 'http://127.0.0.1:9999/hook',
+      retry: { maxAttempts: 5 },
+    }),
+  });
+  assert.equal(res.status, 201);
+  const destinations = (await (await fetch(`${base}/api/v1/destinations`)).json()) as Array<{ id: string; retry: { maxAttempts: number } }>;
+  assert.equal(destinations.length, 1);
+  assert.equal(destinations[0]!.retry.maxAttempts, 5);
+
+  const consoleBad = await fetch(`${base}/api/v1/destinations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'console', name: 'x' }),
+  });
+  assert.equal(consoleBad.status, 400);
+
+  const routeRes = await fetch(`${base}/api/v1/routes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'r1', destinationId: 'lis-webhook', deviceId: 'SIM-1' }),
+  });
+  assert.equal(routeRes.status, 201);
+  const rules = (await (await fetch(`${base}/api/v1/routes`)).json()) as unknown[];
+  assert.equal(rules.length, 1);
+
+  const deleted = await fetch(`${base}/api/v1/destinations/lis-webhook`, { method: 'DELETE' });
+  assert.equal(deleted.status, 204);
+  assert.equal(((await (await fetch(`${base}/api/v1/destinations`)).json()) as unknown[]).length, 0);
+});
+
+test('dlq endpoint lists failed messages and discard retires them', async (t) => {
+  const { base, store } = await startApi(t);
+  store.record(message({ id: 'm1', status: 'FAILED' }));
+  store.mark('m1', 'FAILED', 'DLQ: delivery failed', { dlqAt: new Date().toISOString() });
+  store.record(message({ id: 'm2', status: 'ROUTED' }));
+
+  const dlq = (await (await fetch(`${base}/api/v1/dlq`)).json()) as Array<{ id: string }>;
+  assert.equal(dlq.length, 1);
+  assert.equal(dlq[0]!.id, 'm1');
+
+  const discard = await fetch(`${base}/api/v1/messages/m1/discard`, { method: 'POST' });
+  assert.equal(discard.status, 200);
+  assert.equal(store.get('m1')?.status, 'DISCARDED');
+
+  const missing = await fetch(`${base}/api/v1/messages/ghost/discard`, { method: 'POST' });
+  assert.equal(missing.status, 404);
+});
+
 test('results endpoint flattens result rows across messages', async (t) => {
   const { base, store } = await startApi(t);
   store.record(

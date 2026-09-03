@@ -8,14 +8,16 @@ import type {
   CanonicalMessage,
   LabPayload,
   MappingTable,
+  MessageAttempt,
   MessageSink,
+  MessageStatus,
   ParsedRecord,
   TimelineEntry,
 } from '@integration-hub/shared';
-import type { StoreBackend } from '../backend.js';
+import type { MarkFields, StoreBackend } from '../backend.js';
 import type { MessageFilter, StoreStats } from '../store.js';
 
-const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline`;
+const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of`;
 
 interface MessageRow {
   id: string;
@@ -29,6 +31,8 @@ interface MessageRow {
   status: string;
   errors: unknown;
   timeline: unknown;
+  dlq_at: Date | string | null;
+  duplicate_of: string | null;
 }
 
 export class PostgresMessageStore implements MessageSink, StoreBackend {
@@ -42,7 +46,8 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO messages (${MESSAGE_COLUMNS})
+        `INSERT INTO messages (id, protocol, direction, device_id, received_at, raw,
+                              records, payload, status, errors, timeline)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
           message.id,
@@ -79,6 +84,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
       params.push(filter.status);
       clauses.push(`status = $${params.length}`);
     }
+    if (filter.dlq) clauses.push(`dlq_at IS NOT NULL`);
     const limit = Math.min(filter.limit ?? 100, 500);
     params.push(limit);
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -88,6 +94,28 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
       params,
     );
     return rows.map(rowToMessage);
+  }
+
+  /** Advance the lifecycle (plan §5.3): update status + markers, append a timeline entry. */
+  async mark(id: string, status: MessageStatus, note?: string, fields?: MarkFields): Promise<void> {
+    const entry = JSON.stringify([{ stage: status, at: new Date().toISOString(), note }]);
+    await this.pool.query(
+      `UPDATE messages
+       SET status = $2,
+           dlq_at = COALESCE($3, dlq_at),
+           duplicate_of = COALESCE($4, duplicate_of),
+           timeline = timeline || $5::jsonb
+       WHERE id = $1`,
+      [id, status, fields?.dlqAt ?? null, fields?.duplicateOf ?? null, entry],
+    );
+  }
+
+  async recordAttempt(attempt: MessageAttempt): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO message_attempts (message_id, destination_id, attempt, status, error)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [attempt.messageId, attempt.destinationId, attempt.attempt, attempt.status, attempt.error ?? null],
+    );
   }
 
   async get(id: string): Promise<CanonicalMessage | undefined> {
@@ -107,17 +135,19 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
     );
     let total = 0;
     let today = 0;
+    let pending = 0;
     const byStatus: Record<string, number> = {};
     for (const row of rows) {
       total += row.n;
       today += row.today;
       byStatus[row.status] = row.n;
+      if (row.status === 'RECEIVED' || row.status === 'QUEUED' || row.status === 'DELIVERING') pending += row.n;
     }
     return {
       total,
       today,
       failed: byStatus['FAILED'] ?? 0,
-      pending: byStatus['RECEIVED'] ?? 0,
+      pending,
       byStatus,
     };
   }
@@ -209,5 +239,7 @@ function rowToMessage(row: MessageRow): CanonicalMessage {
     status: row.status as CanonicalMessage['status'],
     errors: (row.errors as string[]) ?? [],
     timeline: (row.timeline as TimelineEntry[]) ?? [],
+    dlqAt: row.dlq_at ? new Date(row.dlq_at).toISOString() : undefined,
+    duplicateOf: row.duplicate_of ?? undefined,
   };
 }

@@ -5,12 +5,17 @@
  * stores stay synchronous while the durable Postgres stores are async — the
  * Fastify handlers `await` everything, which works for both.
  */
-import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
+import type { CanonicalMessage, MappingTable, MessageAttempt, MessageStatus } from '@integration-hub/shared';
 import type { DeviceRecord, RegisterDeviceInput } from './devices.js';
 import type { MessageFilter, StoreStats } from './store.js';
 
 export type StoreKind = 'memory' | 'postgres';
 export type DeviceKind = 'memory' | 'postgres';
+
+export interface MarkFields {
+  dlqAt?: string;
+  duplicateOf?: string;
+}
 
 export interface StoreBackend {
   readonly kind: StoreKind;
@@ -18,6 +23,10 @@ export interface StoreBackend {
   list(filter?: MessageFilter): CanonicalMessage[] | Promise<CanonicalMessage[]>;
   get(id: string): CanonicalMessage | undefined | Promise<CanonicalMessage | undefined>;
   stats(): StoreStats | Promise<StoreStats>;
+  /** Advance the message lifecycle (plan §5.3); appends a timeline entry. */
+  mark(id: string, status: MessageStatus, note?: string, fields?: MarkFields): void | Promise<void>;
+  /** Persist one delivery attempt (plan §5.1 MessageAttempt). */
+  recordAttempt(attempt: MessageAttempt): void | Promise<void>;
   /** DB-driven test-code mapping table (PRD §17–18); in-memory store returns its own table. */
   getMappings?(): MappingTable | Promise<MappingTable>;
 }

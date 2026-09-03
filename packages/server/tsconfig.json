@@ -5,5 +5,5 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../api" }, { "path": "../gateway" }, { "path": "../shared" }]
+  "references": [{ "path": "../api" }, { "path": "../gateway" }, { "path": "../core" }, { "path": "../shared" }]
 }

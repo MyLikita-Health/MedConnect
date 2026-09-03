@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/astm" },
+    { "path": "./packages/core" },
     { "path": "./packages/gateway" },
     { "path": "./packages/api" },
     { "path": "./packages/simulator" },

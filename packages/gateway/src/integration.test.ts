@@ -51,7 +51,8 @@ test('gateway receives, parses, maps and sinks a full ASTM result message', asyn
   const message = received[0]!;
 
   assert.equal(result.nakCount, 0);
-  assert.equal(message.status, 'ROUTED');
+  // The pipeline produces MAPPED; delivery (ROUTED) is the sink's job.
+  assert.equal(message.status, 'MAPPED');
   assert.equal(message.deviceId, 'SIM-BS430');
   assert.equal(message.payload?.patient.id, 'PID-9001');
   assert.equal(message.payload?.patient.name, 'Doe, John');
@@ -61,7 +62,7 @@ test('gateway receives, parses, maps and sinks a full ASTM result message', asyn
   assert.equal(message.payload?.results[0]!.originalTestCode, 'GLU');
   assert.equal(message.payload?.results[0]!.value, '95');
   assert.equal(message.raw.includes('H|'), true);
-  assert.ok(message.timeline.some((t) => t.stage === 'ROUTED'));
+  assert.ok(message.timeline.some((t) => t.stage === 'MAPPED'));
   assert.ok(states.includes('SIM-BS430:connected'));
 });
 
@@ -106,7 +107,7 @@ test('gateway.replay re-runs the pipeline and sinks a new message', async (t) =>
   const replayed = await gateway.replay(original);
 
   assert.notEqual(replayed.id, original.id);
-  assert.equal(replayed.status, 'ROUTED');
+  assert.equal(replayed.status, 'MAPPED'); // delivery is the sink's job
   assert.equal(replayed.payload?.results[0]!.value, '120');
   assert.equal(replayed.timeline[0]!.stage, 'REPLAYED');
   assert.equal(received.length, 1);

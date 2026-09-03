@@ -633,6 +633,7 @@ It is not thrown away; it evolves as follows:
 | `packages/shared` (canonical model) | **Keep + extend** | §6.2 additions; add Imaging metadata, telemetry later; `DEFAULT_MAPPINGS` moved here (seeded into the DB) |
 | `packages/api` MessageStore | **Done (M0)**: `PostgresMessageStore` behind `MessageSink` | in-memory `MessageStore` kept as fallback/default; both behind `StoreBackend` (§13.2) |
 | `packages/api` REST + UI | **Done (M0)**: API on Fastify + zod | keep routes/URLs as v1 contract baseline (PRD §36); UI still the zero-dep console — React shell is M0 item 6 |
+| `packages/core` (new, M1) | **Keep + grow** | durable delivery core: lifecycle §5.3, dedup (§29), routing (§5.1), dispatcher/retry/DLQ (E3); future: matching rules (E6), outbound HL7 delivery |
 | `packages/simulator` | **Keep + extend** | serial, host-query mode, golden-message library, HL7 sim (B4) |
 | `scripts/demo.ts`, tests | Keep as smoke/E2E harness | feed CI |
 
@@ -647,14 +648,20 @@ It is not thrown away; it evolves as follows:
 3. ✅ Fastify + zod API layer (`packages/api/src/server.ts`); existing endpoints moved
    onto it with the same v1 surface. Authn/RBAC skeleton — not yet.
 4. Config service + DeviceProfile model; profile conformance harness (simulator-driven).
-5. Queue/retry/DLQ over Redis+outbox; message lifecycle state machine (§5.3).
+   Partially done in M1 sprint 1: DB-driven routing (destinations + route rules, §5.1
+   Routing group) via `@integration-hub/core`. DeviceProfile model — still open.
+5. ⚠️ Durable delivery core shipped (M1 sprint 1): message lifecycle state machine
+   (§5.3 statuses incl. QUEUED/DELIVERING/DUPLICATE/DISCARDED), dedup (PRD §29),
+   per-destination retry/backoff with persisted `message_attempts`, and DLQ
+   (`dlq_at` + /api/v1/dlq + discard). The delivery worker is **in-process** (the
+   edge SQL-outbox shape, §4.2); Redis/BullMQ on the cloud side remains the swap.
 6. React console shell with dashboard, devices, message viewer wired to the new API.
 7. Decide D1, D2, D7; stand up observability base (pino + metrics).
 
 Exit: M0 gate (§8.1) — demo runs against Postgres (`npm run demo:db`), all scaffold
-        tests still green (`npm test` = 36; `npm run test:db` = 40).
+        tests still green (`npm test` = 58; `npm run test:db` = 58).
 
-### 13.2 M0 foundations build notes
+### 13.2 M0/M1 build notes
 
 - Backend selection is a wiring decision in `packages/server/src/index.ts`: set
   `DATABASE_URL` → Postgres (migrations auto-applied at startup, default mappings
@@ -664,7 +671,13 @@ Exit: M0 gate (§8.1) — demo runs against Postgres (`npm run demo:db`), all sc
   handlers and the gateway's `MessageSink` usage are backend-agnostic.
 - `MessageSink.record` now allows `void | Promise<void>`; the gateway awaits
   async sinks and surfaces persistence failures as session errors (never a
-  silent drop).
+  silent drop). The gateway no longer pre-marks `ROUTED` — delivery (and the
+  ROUTED/DLQ terminal states) belongs to the sink/dispatcher.
+- M1 delivery core lives in a new `@integration-hub/core` package (dedup,
+  routing, `Dispatcher`); migration `0002_m1_lifecycle.sql` adds `dlq_at` /
+  `duplicate_of`, `destinations`, `route_rules`, `message_attempts`, and
+  `dedup_keys`. In-process delivery is the edge-outbox shape; no queue recovery
+  on restart yet (Redis/BullMQ swap keeps the same `Dispatcher` seam).
 - RLS was deliberately NOT added with the tenant columns: default-deny policies
   would break single-tenant edge mode. Policies arrive with the tenancy
   mechanism in M4 (§5.2).

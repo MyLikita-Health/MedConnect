@@ -5,16 +5,27 @@ export type Protocol = 'ASTM' | 'HL7' | 'FHIR' | 'REST';
 export type Direction = 'device-to-host' | 'host-to-device';
 
 /**
- * Pipeline stages a message moves through (PRD §25, §28, §52).
- * Terminal statuses: ROUTED (success) or FAILED (never silently dropped).
+ * Message lifecycle (plan §5.3; PRD §25, §28, §52).
+ *
+ *   RECEIVED → PARSED → VALIDATED → MAPPED → QUEUED → DELIVERING → ROUTED
+ *                                              ↘ any failure → FAILED (+ DLQ)
+ *   Dedup hit           → DUPLICATE
+ *   Operator discard    → DISCARDED (from DLQ)
+ *
+ * Terminal statuses: ROUTED (success), FAILED (never silently dropped — goes
+ * to the dead-letter queue), DUPLICATE, DISCARDED.
  */
 export type MessageStatus =
   | 'RECEIVED'
   | 'PARSED'
   | 'VALIDATED'
   | 'MAPPED'
+  | 'QUEUED'
+  | 'DELIVERING'
   | 'ROUTED'
-  | 'FAILED';
+  | 'FAILED'
+  | 'DUPLICATE'
+  | 'DISCARDED';
 
 /** A protocol-agnostic parsed record (ASTM, HL7 segment, ...). */
 export interface ParsedRecord {
@@ -44,6 +55,20 @@ export interface CanonicalMessage {
   status: MessageStatus;
   errors: string[];
   timeline: TimelineEntry[];
+  /** Set when the message enters the dead-letter queue (plan §5.3 DLQ workflow). */
+  dlqAt?: string;
+  /** Set when the message was detected as a duplicate (PRD §29). */
+  duplicateOf?: string;
+}
+
+/** One delivery attempt against a destination (plan §5.1 Messages group). */
+export interface MessageAttempt {
+  messageId: string;
+  destinationId: string;
+  attempt: number;
+  status: 'OK' | 'FAILED';
+  error?: string;
+  at: string; // ISO timestamp
 }
 
 /**

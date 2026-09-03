@@ -10,6 +10,7 @@ import net from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
+import { DEFAULT_RETRY, InMemoryRouteStore, type RouteStore } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import { renderUi } from './ui.js';
 
@@ -20,6 +21,8 @@ export interface ApiServerOptions {
   devices: DeviceBackend;
   /** Optional mapping table exposed read-only at /api/v1/mappings. */
   mappings?: MappingTable;
+  /** Routing configuration (destinations + rules); defaults to an in-memory store. */
+  routes?: RouteStore;
   /** Wired to the gateway so failed messages can be corrected + replayed. */
   replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
 }
@@ -38,13 +41,41 @@ const registerDeviceSchema = z.object({
 const listMessagesSchema = z.object({
   deviceId: z.string().optional(),
   status: z.string().optional(),
+  dlq: z.coerce.boolean().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const retrySchema = z.object({
+  maxAttempts: z.number().int().min(1).max(10).default(DEFAULT_RETRY.maxAttempts),
+  backoffMs: z.number().int().min(0).max(60000).default(DEFAULT_RETRY.backoffMs),
+  backoffFactor: z.number().min(1).max(10).default(DEFAULT_RETRY.backoffFactor),
+  jitter: z.boolean().default(DEFAULT_RETRY.jitter),
+});
+
+const destinationSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(['console', 'http']).default('http'),
+  name: z.string().min(1),
+  url: z.string().url().optional(),
+  enabled: z.boolean().default(true),
+  retry: retrySchema.optional(),
+});
+
+const routeRuleSchema = z.object({
+  id: z.string().min(1),
+  destinationId: z.string().min(1),
+  deviceId: z.string().optional(),
+  status: z.string().optional(),
+  priority: z.number().int().default(100),
+  enabled: z.boolean().default(true),
 });
 
 export class ApiServer {
   private app?: FastifyInstance;
+  private readonly routes: RouteStore;
 
-  constructor(private readonly opts: ApiServerOptions) {
+  constructor(private opts: ApiServerOptions) {
+    this.routes = opts.routes ?? new InMemoryRouteStore();
     const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
     this.app = app;
 
@@ -97,6 +128,44 @@ export class ApiServer {
       const message = await this.opts.store.get(id);
       if (!message) return reply.code(404).send({ error: 'message not found' });
       return reply.code(201).send(await this.opts.replayHandler(message));
+    });
+
+    // Routing configuration (plan §5.1 Routing group, PRD §19).
+    app.get('/api/v1/destinations', async () => this.routes.listDestinations());
+    app.post('/api/v1/destinations', async (req, reply) => {
+      const input = destinationSchema.parse(req.body);
+      if (input.id === 'console') return reply.code(400).send({ error: 'the console destination is built-in' });
+      const destination = { ...input, retry: input.retry ?? DEFAULT_RETRY };
+      await this.routes.upsertDestination(destination);
+      return reply.code(201).send(destination);
+    });
+    app.delete('/api/v1/destinations/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (id === 'console') return reply.code(400).send({ error: 'the console destination is built-in' });
+      await this.routes.deleteDestination(id);
+      return reply.code(204).send();
+    });
+
+    app.get('/api/v1/routes', async () => this.routes.listRules());
+    app.post('/api/v1/routes', async (req, reply) => {
+      const rule = routeRuleSchema.parse(req.body);
+      await this.routes.upsertRule(rule);
+      return reply.code(201).send(rule);
+    });
+    app.delete('/api/v1/routes/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      await this.routes.deleteRule(id);
+      return reply.code(204).send();
+    });
+
+    // Dead-letter queue (plan §5.3 DLQ workflow, PRD §23).
+    app.get('/api/v1/dlq', async () => this.opts.store.list({ status: 'FAILED', dlq: true }));
+    app.post('/api/v1/messages/:id/discard', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const message = await this.opts.store.get(id);
+      if (!message) return reply.code(404).send({ error: 'message not found' });
+      await this.opts.store.mark(id, 'DISCARDED', 'discarded from DLQ');
+      return reply.code(200).send({ ok: true, id });
     });
 
     app.get('/api/v1/results', async () => {

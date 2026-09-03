@@ -18,7 +18,8 @@ Analyzer (simulator) ──ASTM/TCP──▶ Edge gateway ──pipeline──�
 
 It is built as an **npm-workspaces TypeScript monorepo**. The protocol layer
 (`astm`, `gateway`) stays zero-dependency; M0 added Fastify + zod + pg for the
-API and persistence. Tests use Node's built-in test runner.
+API and persistence; M1 added the durable delivery core (`@integration-hub/core`).
+Tests use Node's built-in test runner.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -87,8 +88,8 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 36 tests: codec, sessions over real TCP, pipeline, API
-npm run test:db    # 40 tests: same + 4 PostgreSQL integration tests (needs db:up)
+npm test           # 58 tests: codec, sessions, pipeline, dispatcher/DLQ, API (7 DB-gated skip)
+npm run test:db    # 58 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -108,6 +109,9 @@ packages/
   gateway/    @integration-hub/gateway  TCP listener, per-connection ASTM session,
                                         pipeline: parse → validate → map → route,
                                         default test-code mappings (PRD §17–18)
+  core/       @integration-hub/core     Integration core: message lifecycle (plan §5.3),
+                                        dedup (PRD §29), DB-driven routing, delivery
+                                        dispatcher with retry/backoff + DLQ (PRD §21–23)
   api/        @integration-hub/api      REST API on Fastify + zod (PRD §36), message store
                                         (in-memory or PostgreSQL behind the MessageSink
                                         contract), device registry, embedded web console
@@ -119,10 +123,11 @@ scripts/demo.ts      one-command end-to-end demo
 ```
 
 Layering (PRD §67): `shared` is the canonical model; `gateway` depends only on
-`astm` + `shared`; `api` depends only on `shared`; `server` wires gateway and
-API through interfaces (`MessageSink`, `replayHandler`, `onDeviceState`), so a
-durable store (Postgres/Redis/BullMQ per PRD §49) or an HL7 adapter can be
-dropped in without touching the protocol layer.
+`astm` + `shared`; `core` depends on `shared` (delivery, dedup, routing); `api`
+depends on `shared` + `core`; `server` wires gateway, core and API through
+interfaces (`MessageSink`, `replayHandler`, `onDeviceState`), so a durable
+store (Postgres/Redis/BullMQ per PRD §49) or an HL7 adapter can be dropped in
+without touching the protocol layer.
 
 ## How a message flows (PRD §52)
 
@@ -140,9 +145,14 @@ dropped in without touching the protocol layer.
 4. **Map** — analyzer test codes become canonical codes via the mapping table
    (e.g. `GLU`/`GLUC` → `GLUCOSE`), keeping `originalTestCode` for the viewer.
    Unmapped codes pass through unchanged.
-5. **Route** — the message lands in the store as `ROUTED`, is exposed via
-   `GET /api/v1/messages/:id`, and can be re-run with
-   `POST /api/v1/messages/:id/replay` (PRD §23 DLQ replay).
+5. **Deliver** (`packages/core/src/dispatcher.ts`) — the dispatcher owns the
+   rest of the lifecycle (plan §5.3): duplicates within the window are marked
+   `DUPLICATE`; route rules resolve destinations; delivery runs with
+   per-destination retry/backoff and every attempt is recorded. Success ends
+   `ROUTED`; exhausted retries (or pipeline-validation failures) go to the
+   **dead-letter queue** (`FAILED` + `dlqAt`) — never dropped. The viewer shows
+   the whole timeline; DLQ messages can be replayed with
+   `POST /api/v1/messages/:id/replay` or retired with `…/discard` (PRD §23).
 
 ## REST API (PRD §36)
 
@@ -153,9 +163,13 @@ dropped in without touching the protocol layer.
 | GET | `/api/v1/stats` | Totals by status (PRD §31) |
 | GET | `/api/v1/mappings` | Active test-code mapping table |
 | GET/POST | `/api/v1/devices` | List / register devices (PRD §11) |
-| GET | `/api/v1/messages?status=&deviceId=&limit=` | Messages, newest first (PRD §24) |
+| GET | `/api/v1/messages?status=&deviceId=&dlq=&limit=` | Messages, newest first (PRD §24) |
 | GET | `/api/v1/messages/:id` | Message detail incl. raw, parsed, canonical, timeline |
 | POST | `/api/v1/messages/:id/replay` | Re-run a message through the pipeline |
+| POST | `/api/v1/messages/:id/discard` | Retire a DLQ message (terminal `DISCARDED`) |
+| GET | `/api/v1/dlq` | Dead-letter queue (PRD §23) |
+| GET/POST/DELETE | `/api/v1/destinations` | Outbound destinations + retry policies (PRD §19) |
+| GET/POST/DELETE | `/api/v1/routes` | Route rules: device/status → destination |
 | GET | `/api/v1/results` | Flattened result rows |
 
 ## Protocol notes for real devices
@@ -200,12 +214,33 @@ queries; `device_id`/`status` indexes for the message viewer filters; nullable
 for the cloud platform (plan §5.2 — RLS policies arrive with multi-tenancy in
 M4, not before).
 
+## Durable delivery (M1)
+
+Messages flow through the plan §5.3 lifecycle:
+`RECEIVED → PARSED → VALIDATED → MAPPED → QUEUED → DELIVERING → ROUTED`, with
+`FAILED (+DLQ)` / `DUPLICATE` / `DISCARDED` as the other terminal states.
+
+- **Dedup (PRD §29)** — SHA-256 of protocol + device + raw wire text, retained
+  24 h (configurable). A device resending a result (e.g. reconnect that lost
+  the ACK) becomes `DUPLICATE` with a link to the original. Replays bypass it.
+- **Routing (PRD §19)** — DB-driven `destinations` (HTTP endpoints with
+  retry policies) and `route_rules` (device/status match + priority). With no
+  matching rule, the built-in `console` destination completes the lifecycle.
+- **Retry + DLQ (PRD §21–23)** — per-destination exponential backoff with
+  jitter; every attempt lands in `message_attempts`; exhaustion marks the
+  message `FAILED` with `dlqAt`. DLQ workflow: view → replay → discard.
+- **Delivery is processed in-process** (the edge-outbox pattern, plan §4.2);
+  the `Dispatcher` consumes the same `MessageSink` seam the store used, so the
+  Redis/BullMQ worker (cloud side) swaps in behind the same contract.
+
 ## Scaffold boundaries (what is intentionally not here)
 
-- No durable queue with retry/backoff or a dead-letter queue yet (PRD §21–23)
-  — that workstream runs over Redis (already provisioned in compose on host
-  port 6380) with the outbox pattern (plan §13.1.5).
+- The in-process delivery worker is not yet a durable external queue — if the
+  process dies mid-queue, queued jobs are re-visible as `QUEUED` but not
+  auto-resumed. Redis/BullMQ (compose: host port 6380) closes that for the
+  cloud deployment; the edge keeps the SQL-outbox shape (plan §4.2, §13.1.5).
 - No HL7 v2, DICOM, FHIR, webhooks, authn/RBAC, TLS, or multi-tenancy yet —
   those are the natural next layers (PRD §13–15, §34–37, §41).
 - No patient matching against an external LIS master (PRD §27) — validation is
-  structural for now.
+  structural for now; unresolved-identifier `HELD` review is part of workstream
+  E6.
