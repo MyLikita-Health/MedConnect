@@ -440,6 +440,18 @@ export function renderUi(): string {
     margin-left: 4px;
   }
   .alert-count.none { background: var(--panel-alt); color: var(--muted); border-color: var(--border); }
+
+  /* ── Radiology console blocks (M3.4) ─────────────────────────────── */
+  .rad-block h3 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 0 0 8px; font-weight: 600;
+  }
+  .rad-block + .rad-block {
+    margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .rad-block .section-sub { color: var(--text-dim); font-size: 11px; }
+  .rad-block .has-err { color: var(--err); }
 </style>
 </head>
 <body>
@@ -539,27 +551,31 @@ export function renderUi(): string {
       </div>
     </div>
 
-    <!-- Imaging studies (M3.4 — shown when Orthanc routing is configured) -->
-    <div class="panel" id="imaging-panel" style="display:none">
-      <h2>Imaging studies <span class="sub">performed-study routing (M3.3)</span></h2>
-      <div id="imaging-summary" class="muted" style="font-size:12px;margin-bottom:8px"></div>
-      <div class="tbl-wrap">
-        <table id="imaging">
-          <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
+    <!-- Radiology console (M3.4 — shown when Orthanc is configured) -->
+    <div class="panel" id="radiology-panel" style="display:none">
+      <h2>Radiology <span class="sub">MWL worklist + performed-study routing (M3.2–M3.4)</span></h2>
 
-    <!-- MWL worklist (M3.4 — shown when the Orthanc monitor is configured) -->
-    <div class="panel" id="mwl-panel" style="display:none">
-      <h2>Orthanc worklist <span class="sub">MWL sync + performed studies (M3.2)</span></h2>
-      <div id="mwl-status" class="muted" style="font-size:12px;margin-bottom:8px"></div>
-      <div class="tbl-wrap">
-        <table id="mwl">
-          <thead><tr><th>Accession</th><th>Patient</th><th>Modality</th><th>Scheduled</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <!-- MWL worklist: what modalities will C-FIND + the sync health -->
+      <div class="rad-block" id="rad-mwl-block" style="display:none">
+        <h3>Orthanc worklist <span class="section-sub" id="mwl-summary"></span></h3>
+        <div id="mwl-status" class="muted" style="font-size:12px;margin-bottom:8px"></div>
+        <div class="tbl-wrap">
+          <table id="mwl">
+            <thead><tr><th>Accession</th><th>Patient</th><th>Modality</th><th>Scheduled</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Imaging studies: performed-study events + how they routed -->
+      <div class="rad-block" id="rad-imaging-block" style="display:none">
+        <h3>Imaging studies <span class="section-sub" id="imaging-summary"></span></h3>
+        <div class="tbl-wrap">
+          <table id="imaging">
+            <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -733,8 +749,7 @@ async function refresh() {
     renderMessages(messages);
     renderProfiles(profiles);
     renderKeys(keys);
-    renderImaging(imagingView);
-    renderMwl(mwlView);
+    renderRadiology(mwlView, imagingView);
     if (selectedId) renderDetail(selectedId);
     renderUpdates();
   } catch {
@@ -801,19 +816,56 @@ function renderAlerts(alerts) {
     ).join('') || '<tr class="empty-row"><td colspan="4">No firing alerts.</td></tr>';
 }
 
-/* ── Imaging studies (M3.4 radiology console) ─────────────────────── */
+/* ── Radiology console (M3.4) ─────────────────────────────────────── */
+function renderRadiology(mwlView, imagingView) {
+  renderMwl(mwlView);
+  renderImaging(imagingView);
+  const panel = document.getElementById('radiology-panel');
+  panel.style.display = (mwlView && mwlView.on) || (imagingView && imagingView.on) ? 'block' : 'none';
+}
+
+function renderMwl(view) {
+  const block = document.getElementById('rad-mwl-block');
+  if (!view || !view.on) { block.style.display = 'none'; return; }
+  block.style.display = 'block';
+  const st = view.body.status || {};
+  const totals = st.totals || {};
+  const parts = [];
+  if (totals.created) parts.push('created ' + totals.created);
+  if (totals.queued)  parts.push('queued ' + totals.queued);
+  if (totals.failed)  parts.push('failed ' + totals.failed);
+  if (st.performed && st.performed.length) parts.push('performed ' + st.performed.length);
+  const summary = document.getElementById('mwl-summary');
+  summary.innerHTML = parts.length ? '<b>' + parts.join(' · ') + '</b>' : '';
+  summary.className = 'section-sub' + (st.lastError ? ' has-err' : '');
+  let status = 'poll every ' + (st.pollMs / 1000) + 's' + (st.lastRunAt ? ' · last ' + new Date(st.lastRunAt).toLocaleTimeString() : '');
+  const statusEl = document.getElementById('mwl-status');
+  statusEl.innerHTML = status;
+  statusEl.className = 'muted' + (st.lastError ? ' has-err' : '');
+  if (st.lastError) statusEl.innerHTML += ' — <span class="has-err">⚠ poll failed: ' + esc(st.lastError) + '</span>';
+  if (view.body.worklistError) statusEl.innerHTML += ' — <span class="has-err">⚠ worklist: ' + esc(view.body.worklistError) + '</span>';
+  document.getElementById('mwl').querySelector('tbody').innerHTML =
+    (view.body.worklist || []).map(w =>
+      '<tr>' +
+      '<td class="col-id mono">' + esc(w.accession || '—') + '</td>' +
+      '<td>' + esc(w.patientName || (w.patientId ? w.patientId + ' (id)' : '—')) + '</td>' +
+      '<td class="dim">' + esc(w.modality || '—') + '</td>' +
+      '<td class="dim mono">' + esc(w.scheduledDate || '—') + '</td></tr>'
+    ).join('') || '<tr class="empty-row"><td colspan="4">Worklist empty — the next poll pushes active orders here.</td></tr>';
+}
+
 function renderImaging(view) {
-  const panel = document.getElementById('imaging-panel');
-  if (!view || !view.on) { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
+  const block = document.getElementById('rad-imaging-block');
+  if (!view || !view.on) { block.style.display = 'none'; return; }
+  block.style.display = 'block';
   const body = view.body;
   const byStatus = body.byStatus || {};
   const order = ['ROUTED', 'DUPLICATE', 'HELD', 'FAILED'];
   const chips = order.filter(k => byStatus[k] > 0)
     .map(k => '<span class="pill ' + k + '" style="font-size:10px;padding:1px 6px">' + k + ' ' + byStatus[k] + '</span>').join(' ');
-  document.getElementById('imaging-summary').innerHTML =
-    '<b>' + (body.total || 0) + '</b> study event(s) ' + (chips ? '— ' + chips : '') +
-    (body.total && !chips ? '' : ' — no studies routed yet');
+  const summary = document.getElementById('imaging-summary');
+  summary.innerHTML = '<b>' + (body.total || 0) + '</b> event(s)' + (chips ? ' — ' + chips : '');
+  summary.className = 'section-sub';
   document.getElementById('imaging').querySelector('tbody').innerHTML =
     (body.messages || []).map(m => {
       const img = m.imaging || {};
@@ -826,36 +878,6 @@ function renderImaging(view) {
         '<td class="dim">' + esc((img.study && img.study.studyDescription) || (img.study && img.study.orthancId || '').slice(0, 12) || '—') + '</td>' +
         '<td style="white-space:nowrap">' + retry + '</td></tr>';
     }).join('') || '<tr class="empty-row"><td colspan="5">No imaging studies yet — perform a study and the monitor routes it here.</td></tr>';
-}
-
-/* ── Orthanc worklist (M3.4 radiology console) ────────────────────── */
-function renderMwl(view) {
-  const panel = document.getElementById('mwl-panel');
-  if (!view || !view.on) { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
-  const st = view.body.status || {};
-  const totals = st.totals || {};
-  const parts = [];
-  if (totals.created) parts.push('created ' + totals.created);
-  if (totals.queued)  parts.push('queued ' + totals.queued);
-  if (totals.failed)  parts.push('failed ' + totals.failed);
-  if (st.performed && st.performed.length) parts.push('performed ' + st.performed.length);
-  let status = parts.length ? '<b>' + parts.join(' · ') + '</b> syncs across polls' : 'no syncs yet';
-  status += ' — poll every ' + (st.pollMs / 1000) + 's';
-  if (st.lastRunAt) status += ' · last ' + new Date(st.lastRunAt).toLocaleTimeString();
-  const statusEl = document.getElementById('mwl-status');
-  statusEl.innerHTML = status;
-  statusEl.className = 'muted' + (st.lastError ? ' err' : '');
-  if (st.lastError) statusEl.innerHTML += ' — <span class="err">⚠ ' + esc(st.lastError) + '</span>';
-  if (view.body.worklistError) statusEl.innerHTML += ' — <span class="err">worklist: ' + esc(view.body.worklistError) + '</span>';
-  document.getElementById('mwl').querySelector('tbody').innerHTML =
-    (view.body.worklist || []).map(w =>
-      '<tr>' +
-      '<td class="col-id mono">' + esc(w.accession || '—') + '</td>' +
-      '<td>' + esc(w.patientName || (w.patientId ? w.patientId + ' (id)' : '—')) + '</td>' +
-      '<td class="dim">' + esc(w.modality || '—') + '</td>' +
-      '<td class="dim mono">' + esc(w.scheduledDate || '—') + '</td></tr>'
-    ).join('') || '<tr class="empty-row"><td colspan="4">Worklist empty — the next poll pushes active orders here.</td></tr>';
 }
 
 /* ── Messages ──────────────────────────────────────────────────────── */
