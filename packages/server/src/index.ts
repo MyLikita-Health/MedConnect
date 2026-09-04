@@ -8,8 +8,10 @@
  */
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
+import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
+import { ImagingRouter } from './imaging-router.js';
 import { MwlMonitor } from './mwl-monitor.js';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
@@ -56,12 +58,23 @@ export interface HubOptions {
   /** PEM update public key (env UPDATE_PUBLIC_KEY) that must sign manifests. */
   updatePublicKey?: string;
   /**
-   * Orthanc (workstream M3.2 — the MWL study monitor): when set the hub
-   * syncs active registry orders onto the Orthanc worklist and polls for
-   * performed studies (env ORTHANC_URL / ORTHANC_USER / ORTHANC_PASSWORD /
-   * MWL_POLL_MS). Present on hub as `hub.mwl`.
+   * Orthanc (workstream M3.2/M3.3): when set the hub runs the MWL study
+   * monitor + the imaging storage router (env ORTHANC_URL / ORTHANC_USER /
+   * ORTHANC_PASSWORD / MWL_POLL_MS). Present on hub as `hub.mwl`/`hub.imaging`.
    */
-  orthanc?: { baseUrl: string; username?: string; password?: string; pollMs?: number };
+  orthanc?: {
+    baseUrl: string;
+    username?: string;
+    password?: string;
+    pollMs?: number;
+    /**
+     * Forward performed studies to this Orthanc peer (M3.3 storage routing;
+     * env ORTHANC_FORWARD_PEER — the peer must be configured in Orthanc, e.g.
+     * via the adapter's configurePeer). Pixels move Orthanc→PACS; the hub
+     * only triggers + records the routing.
+     */
+    forwardPeer?: string;
+  };
 }
 
 export interface Hub {
@@ -80,6 +93,11 @@ export interface Hub {
   profileStore: ProfileStore;
   /** Present when Orthanc is configured: the M3.2 MWL study monitor. */
   mwl?: MwlMonitor;
+  /**
+   * Present when Orthanc is configured: routes performed studies through the
+   * dispatcher (M3.3 storage routing — dedup → DB-driven rules → delivery).
+   */
+  imaging?: ImagingRouter;
   /** API-key auth + audit (present unless authDisabled). */
   keys?: KeyStore;
   audit?: AuditStore;
@@ -197,6 +215,17 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
   // → queue → retry → DLQ (plan §5.3). Matching is the clinical safety gate:
   // results that don't uniquely match a registered order are HELD, not delivered.
+  // Delivery/alert wiring shared by the lab dispatcher and the imaging
+  // dispatcher (M3.3): a successful delivery clears the destination-down
+  // alert, a failure raises it, and DLQ growth re-checks the backlog alert.
+  const alertEvents = (): NonNullable<DispatcherOptions['events']> => ({
+    onDelivery: async (event) => {
+      if (event.ok) await alerts.deliverySucceeded(event.destinationId);
+      else await alerts.deliveryFailed(event.destinationId, event.error ?? 'delivery failed');
+    },
+    onDlq: async () => alerts.checkBacklog('dlq', (await store.list({ dlq: true, limit: 500 })).length),
+  });
+
   const dispatcher = new Dispatcher({
     store,
     dedup,
@@ -220,11 +249,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       });
     },
     events: {
-      onDelivery: async (event) => {
-        if (event.ok) await alerts.deliverySucceeded(event.destinationId);
-        else await alerts.deliveryFailed(event.destinationId, event.error ?? 'delivery failed');
-      },
-      onDlq: async () => alerts.checkBacklog('dlq', (await store.list({ dlq: true, limit: 500 })).length),
+      ...alertEvents(),
       onHold: async () => alerts.checkBacklog('held-backlog', (await store.list({ status: 'HELD', limit: 500 })).length),
       onRelease: async () => alerts.checkBacklog('held-backlog', (await store.list({ status: 'HELD', limit: 500 })).length),
     },
@@ -363,23 +388,56 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     releaseHandler: (id) => dispatcher.release(id),
   });
 
-  // Workstream M3.2 — the MWL study monitor (enabled by ORTHANC_URL / the
-  // opts.orthanc block): active registry orders are pushed onto the real
-  // Orthanc worklist and performed studies are polled + retired. Performed
-  // study metadata is surfaced on hub.mwl; routing it onward is M3.3.
+  // Workstream M3.2 + M3.3 — the MWL study monitor + imaging storage router
+  // (enabled by ORTHANC_URL / the opts.orthanc block). The monitor pushes
+  // active registry orders onto the real Orthanc worklist and polls performed
+  // studies; each performed study is then routed by the IMAGING dispatcher —
+  // a second, gate-free Dispatcher instance over the same store/dedup/routes:
+  // imaging events are not lab results (no patient matching, no E5 validation)
+  // but they dedup, follow the DB-driven route rules, retry and DLQ exactly
+  // like any message. The accession is retired only after routing succeeds.
   let mwl: MwlMonitor | undefined;
+  let imaging: ImagingRouter | undefined;
   if (orthancUrl) {
+    const orthancAdapter = new DicomOrthancAdapter({ baseUrl: orthancUrl, username: orthancUser, password: orthancPass });
+    const forwardPeer = opts.orthanc?.forwardPeer ?? process.env.ORTHANC_FORWARD_PEER;
+    const imagingDispatcher = new Dispatcher({
+      store,
+      dedup,
+      routes,
+      // No matching/validation — the imaging event pipeline (protocol-blind
+      // core: dedup → route → deliver → ROUTED/DLQ). An `hl7` destination
+      // throws here (no deliverer) → retry → DLQ, like any unhandled kind.
+      events: alertEvents(),
+      log: (line) => console.log(line),
+    });
+    imagingDispatcher.start();
+    imaging = new ImagingRouter(imagingDispatcher);
     mwl = new MwlMonitor({
       baseUrl: orthancUrl,
       username: orthancUser,
       password: orthancPass,
+      adapter: orthancAdapter,
       pollMs: orthancPollMs,
       orders,
       admissions,
+      // M3.3: route the study metadata through the dispatcher, then (when a
+      // PACS peer is configured) forward the pixels Orthanc→peer. Only when
+      // both succeed is the accession retired — a failure leaves it re-syncable
+      // so the next cycle re-routes (never a lost study event).
+      onPerformed: async (performed) => {
+        await imaging!.routePerformed(performed);
+        if (forwardPeer) {
+          for (const p of performed) {
+            await orthancAdapter.storeToPeer(forwardPeer, [{ id: p.study.orthancId, type: 'Study' }]);
+            console.log(`[mwl]   forwarded study ${p.study.orthancId.slice(0, 8)}… to Orthanc peer ${forwardPeer}`);
+          }
+        }
+      },
       log: (line) => console.log(line),
     });
     mwl.start();
-    console.log(`[mwl]    Orthanc study monitor enabled — ${orthancUrl} (sync+poll every ${orthancPollMs}ms)`);
+    console.log(`[mwl]    Orthanc study monitor enabled — ${orthancUrl} (sync+poll every ${orthancPollMs}ms; performed studies route through the dispatcher${forwardPeer ? ` and forward to peer ${forwardPeer}` : ''})`);
   }
 
   const { port: devicePort } = await gateway.start();
@@ -407,12 +465,14 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alertStore,
     profileStore,
     mwl,
+    imaging,
     keys,
     audit,
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {
       if (mwl) await mwl.stop();
+      if (imaging) await imaging.dispatcher.stop();
       await dispatcher.stop();
       await api.stop();
       await gateway.stop();

@@ -302,7 +302,7 @@ function renderMessages(messages) {
       '<td><span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span>' +
       (m.match ? '<br/><span class="match ' + esc(m.match.status) + '">' + esc(m.match.status) + '</span>' : '') +
       '</td>' +
-      '<td>' + (m.payload ? m.payload.results.length : 0) + '</td>' +
+      '<td>' + (m.imaging ? 'study' : (m.payload ? m.payload.results.length : 0)) + '</td>' +
       '<td class="col-id">' + esc(m.id.slice(0, 8)) + '</td></tr>'
     ).join('') || '<tr><td colspan="5" class="muted">No messages yet. Start the simulator.</td></tr>';
 }

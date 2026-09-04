@@ -1,5 +1,23 @@
 /** Message envelope and pipeline contracts shared across packages. */
+import type { ImagingStudy } from './imaging.js';
 import type { LabPayload } from './model.js';
+
+/**
+ * Hub-originated imaging event (workstream M3.3 storage routing). Imaging
+ * events are NOT lab exchanges: they carry study metadata (storage URLs only —
+ * pixels never enter the hub, plan §6.2), so they ride in the envelope's
+ * dedicated `imaging` field rather than the parse→map `payload`. `payload`
+ * stays the lab translation artifact, and `imaging` the performed-study event.
+ */
+export interface ImagingPayload {
+  kind: 'imaging';
+  /** The performed study's canonical metadata (storageUrl points at Orthanc). */
+  study: ImagingStudy;
+  /** Accession number (the RIS/registry order id) the study performed. */
+  accession: string;
+  /** When the hub's poll observed the study (ISO). */
+  performedAt: string;
+}
 
 export type Protocol = 'ASTM' | 'HL7' | 'FHIR' | 'REST';
 export type Direction = 'device-to-host' | 'host-to-device';
@@ -76,6 +94,11 @@ export interface CanonicalMessage {
   records?: ParsedRecord[];
   /** Canonical payload after parse -> validate -> map. */
   payload?: LabPayload;
+  /**
+   * Imaging study event (workstream M3.3): set when this message records a
+   * performed study routed by the hub (metadata + storage URLs only).
+   */
+  imaging?: ImagingPayload;
   status: MessageStatus;
   errors: string[];
   timeline: TimelineEntry[];

@@ -232,6 +232,20 @@ export class DicomOrthancAdapter {
     await this.request('PUT', `/modalities/${encodeURIComponent(name)}`, { AET: cfg.aet, Host: cfg.host, Port: cfg.port });
   }
 
+  /**
+   * Register/replace an Orthanc peer at runtime (PUT /peers/{name}) — the C3
+   * storage-routing primitive: the hub points Orthanc at the PACS/archive
+   * (another Orthanc's REST URL) so performed studies can be forwarded there
+   * with storeToPeer. Peer config keys are Orthanc's (Url + optional auth).
+   */
+  async configurePeer(name: string, cfg: { url: string; username?: string; password?: string }): Promise<void> {
+    await this.request('PUT', `/peers/${encodeURIComponent(name)}`, {
+      Url: cfg.url,
+      ...(cfg.username !== undefined ? { Username: cfg.username } : {}),
+      ...(cfg.password !== undefined ? { Password: cfg.password } : {}),
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Modality worklist (M3.2 / plan §7.C2) — the Orthanc **Worklists plugin**
   // REST API (github.com/orthanc-server/orthanc-worklists; the folder-based
@@ -282,9 +296,14 @@ export class DicomOrthancAdapter {
     await this.request('POST', `/modalities/${encodeURIComponent(modality)}/store`, { Resources: resources });
   }
 
-  /** Forward resources to a configured Orthanc peer (HTTP peering to PACS). */
+  /**
+   * Forward resources to a configured Orthanc peer (HTTP peering to PACS).
+   * Note the wire shape difference: the PEER endpoint takes plain resource ids
+   * ({ Resources: ["study-id"] }), unlike the modality C-STORE endpoint which
+   * takes { Resources: [{ Type, ID }] }. Both surface as storeToPeer/Modality.
+   */
   async storeToPeer(peer: string, resources: OrthancResourceRef[]): Promise<void> {
-    await this.request('POST', `/peers/${encodeURIComponent(peer)}/store`, { Resources: resources });
+    await this.request('POST', `/peers/${encodeURIComponent(peer)}/store`, { Resources: resources.map((r) => r.id) });
   }
 
   /** Delete a resource by kind + Orthanc id (DELETE /{kind}/{id}). */

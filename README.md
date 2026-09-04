@@ -44,9 +44,10 @@ for profile testing. **Goldens-in-CI are live**: the B4 vendor-variant
 transcripts are recorded in the shared golden library and executed under
 `npm test` by the HL7 conformance runner (real vendor field transcripts
 replace them under risk R2). Kickoff survey + status: plan §13.15. Next:
-**imaging/DICOM (M3)** — kickoff survey + the M3.1 Orthanc adapter scaffold
-and the M3.2 MWL worklist client are in (plan §13.16), storage routing is
-next — then FHIR/webhooks and multi-tenancy.
+**imaging/DICOM (M3)** — kickoff survey + the M3.1 Orthanc adapter scaffold,
+the M3.2 MWL worklist client, and M3.3 storage routing (performed studies
+through the dispatcher + Orthanc peer forwarding to a PACS archive) are in
+(plan §13.16) — then M3.4 console/failure, FHIR/webhooks, multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -248,7 +249,7 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 308 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 313 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
@@ -256,10 +257,12 @@ npm test           # 308 tests: codec, sessions, pipeline, matching/validation,
                    #   pool, HL7 segment profile layouts (B4) + vendor-
                    #   variant + ADT golden corpora, Orthanc REST adapter
                    #   (M3.1) + MWL worklist client + startHub study monitor
-                   #   (M3.2), dispatcher/DLQ, API, security (roles/scopes +
-                   #   authz + audit), signed updates + supervisor
-                   #   (apply/rollback/crash) (18 DB-gated skip)
-npm run test:db    # 308 tests: same + PostgreSQL integration (needs db:up)
+                   #   + storage routing (M3.2/M3.3: performed studies through
+                   #   the dispatcher, peer forwarding), dispatcher/DLQ, API,
+                   #   security (roles/scopes + authz + audit), signed
+                   #   updates + supervisor (apply/rollback/crash) (18
+                   #   DB-gated skip)
+npm run test:db    # 313 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -474,9 +477,17 @@ hub** with its M3.2 study monitor pointed at that Orthanc
 (`ORTHANC_URL`/`ORTHANC_USER`/`ORTHANC_PASSWORD`, default localhost:8042
 orthanc/orthanc): a registry order flows onto the live worklist, the
 modality performs the study, and the monitor's next poll retires it.
+`npm run demo:routing` proves **M3.3 storage routing** against TWO real
+Orthanc containers (compose `orthanc` + `pacs`, the archive): a performed
+study's metadata is routed through the dispatcher (a DB-driven rule delivers
+it to an http webhook → ROUTED) while the pixels are forwarded to the PACS
+peer — the archive Orthanc verifiably receives the study.
 
 Set `ORTHANC_URL` (+ user/password) when starting the hub and `hub.mwl` runs
-the same loop continuously (`MWL_POLL_MS` cadence, default 60s).
+the same loop continuously (`MWL_POLL_MS` cadence, default 60s). Each
+performed study is routed through the dispatcher (`hub.imaging`); set
+`ORTHANC_FORWARD_PEER` to a peer configured in Orthanc to also forward the
+pixels to PACS/archive.
 
 ## Alerting (M2 — PRD §33)
 
@@ -588,7 +599,7 @@ pipeline canonicalizes correctly for both it and the reference layout.
   library (`goldens/hl7-b4-vendor-variants.json`, `goldens/hl7-adt-admissions.json`)
   and run under `npm test` by the HL7 conformance runner; real vendor field
   transcripts replace the synthetic corpus under risk R2 (plan §13.15).
-  The **imaging side is scaffolded (M3.1 + M3.2)** — canonical imaging
+  The **imaging side is live (M3.1 + M3.2 + M3.3)** — canonical imaging
   metadata shapes in shared + the `@integration-hub/dicom` Orthanc REST
   adapter plus the **MWL worklist client** (`sync` registry orders into the
   worklist idempotently, `pollPerformed` finds performed studies by
@@ -597,11 +608,17 @@ pipeline canonicalizes correctly for both it and the reference layout.
   pushes active registry orders onto the Orthanc worklist each cycle, joins
   the patient name from the admission registry, retires performed studies,
   and surfaces them on `hub.mwl` (serialized polls — never a duplicate
-  create). The compose `orthanc` service is a derived image that bundles the
-  REST-based **Worklists plugin** (pinned 0.9.2), so the whole loop runs live:
-  `npm run demo:dicom` (adapter) and `npm run demo:mwl` (the real hub's
-  monitor) against real Orthanc (`docker compose up -d --build orthanc` —
-  plan §13.16).
+  create). **M3.3 storage routing**: each performed study is routed through
+  a second, gate-free dispatcher (`hub.imaging` — dedup → DB-driven route
+  rules → console/http delivery → ROUTED/DLQ, in the same message viewer as
+  lab results) and, with `ORTHANC_FORWARD_PEER` set, forwarded to an Orthanc
+  PACS/archive peer (configurePeer + storeToPeer). The compose `orthanc`
+  service is a derived image that bundles the REST-based **Worklists plugin**
+  (pinned 0.9.2), and a second `pacs` archive Orthanc backs the routing demo:
+  `npm run demo:dicom` (adapter), `npm run demo:mwl` (the real hub's monitor)
+  and `npm run demo:routing` (metadata routed + pixels archived against two
+  real containers) — `docker compose up -d --build orthanc && docker compose
+  up -d pacs` (plan §13.16).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry

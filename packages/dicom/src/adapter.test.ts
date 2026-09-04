@@ -135,7 +135,10 @@ test('store/echo/delete hit the forwarding + lifecycle routes', async (t) => {
 
   const store = log.find((l) => l.path === '/peers/pacs/store');
   assert.ok(store);
-  assert.deepEqual(store.body, { Resources: refs });
+  // Peer export takes plain resource ids; the modality C-STORE takes objects.
+  assert.deepEqual(store.body, { Resources: ['stu-1'] });
+  const modalityStore = log.find((l) => l.path === '/modalities/CT1/store');
+  assert.deepEqual(modalityStore?.body, { Resources: refs });
   assert.ok(log.some((l) => l.method === 'POST' && l.path === '/modalities/CT1/echo'));
   assert.ok(log.some((l) => l.method === 'DELETE' && l.path === '/studies/stu-1'));
 });
@@ -171,6 +174,16 @@ test('configureModality registers a DICOM peer via PUT /modalities/{name}', asyn
   const call = log.find((l) => l.method === 'PUT' && l.path === '/modalities/self-echo');
   assert.ok(call);
   assert.deepEqual(call.body, { AET: 'ORTHANC', Host: '127.0.0.1', Port: 4242 });
+});
+
+test('configurePeer registers an Orthanc forwarding peer via PUT /peers/{name}', async (t) => {
+  const { base, log } = await startMockOrthanc(t, (req, res) => json(res, 200, {}));
+  const adapter = new DicomOrthancAdapter({ baseUrl: base });
+
+  await adapter.configurePeer('pacs', { url: 'http://pacs:8042/', username: 'hub', password: 'secret' });
+  const call = log.find((l) => l.method === 'PUT' && l.path === '/peers/pacs');
+  assert.ok(call);
+  assert.deepEqual(call.body, { Url: 'http://pacs:8042/', Username: 'hub', Password: 'secret' });
 });
 
 test('modality/peer listing normalizes map and list responses', async (t) => {

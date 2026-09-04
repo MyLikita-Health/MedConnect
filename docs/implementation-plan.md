@@ -1237,8 +1237,8 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    (`goldens/hl7-adt-admissions.json`, kind `adt` → the `hl7ToAdmission`
    oracle) records the B2c feed contract the same way. Real vendor field
    transcripts replace the synthetic corpus under risk R2.
-10. Test status: `npm test` = 308 (290 pass / 18 DB-gated skip); `npm run
-    test:db` = 308/308.
+10. Test status: `npm test` = 313 (295 pass / 18 DB-gated skip); `npm run
+    test:db` = 313/313.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
 profiles arrive with field access (risk R2); the ADT patient-admission feed
@@ -1442,10 +1442,33 @@ of C1–C6 is composition, not new protocol work):
    resilience) and `npm run demo:mwl` proves the loop through the real hub
    against the live container. Remaining C5 packaging (still M3.5):
    source-built plugin for ARM64 hosts and version pinning/upgrade of the
-   derived image; routing performed-study metadata onward is M3.3.
-3. **M3.3 — Storage routing (C3)**: hub registers as an Orthanc forwarding
-   peer to PACS/archive; study metadata + status flow through the dispatcher
-   with DB-driven routing rules.
+   derived image.
+3. ✅ **M3.3 — Storage routing (C3)**: performed-study metadata + status
+   flow through the dispatcher with DB-driven routing rules, and the hub
+   drives Orthanc peer forwarding to PACS/archive. Two legs:
+   - **Metadata leg** — `hub.mwl` gains an `onPerformed` seam (the monitor
+     retires an accession only after routing succeeds, so a failure leaves it
+     re-syncable and re-routable — never a lost study event). Each performed
+     study becomes a hub message (envelope `imaging` field: canonical study
+     metadata + storage URLs; pixels never enter the hub) recorded by a
+     SECOND gate-free `Dispatcher` over the same store/dedup/routes — imaging
+     events are not lab results (no E6 matching, no E5 validation) but they
+     dedup (stable per-study raw → a re-observation is DUPLICATE), follow the
+     DB-driven `RouteStore` rules (console/http built-ins; an `hl7`
+     destination throws → retry → DLQ, since imaging has no HL7 v2 form),
+     and land ROUTED/FAILED in the same viewer as lab messages. Wired as
+     `hub.imaging` in startHub.
+   - **Pixels leg** — the adapter rounds out the C1 forwarding primitives
+     with `configurePeer` (PUT /peers/{name}); `storeToPeer` is corrected to
+     the peer endpoint's wire shape (plain resource-id array, vs the modality
+     C-STORE object array). With `ORTHANC_FORWARD_PEER` set, the monitor's
+     onPerformed also forwards each performed study Orthanc→peer.
+   - **Proof**: 5 server tests (console ROUTED, dedup on re-observation,
+     http-rule delivery to a webhook, hl7 → DLQ, gateway absence) + the live
+     `npm run demo:routing` against TWO real Orthanc containers — the compose
+     stack gains a `pacs` archive service — order → worklist → performed →
+     webhook receives the study event (ROUTED) AND the archive Orthanc
+     receives the study. Cleanup leaves both empty.
 4. **M3.4 — Failure handling + radiology console (C4/C6)**: failed studies in
    the exception queue with replay; modality/Orthanc health as devices;
    console views (modality list, worklist status, failed studies, routing).
@@ -1461,10 +1484,10 @@ fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
 route with failure injection — the M3 exit drill.
 
 **Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL
-(✅ shipped) → M3.3 storage routing → M3.4 console+failure → M3.5
-packaging; every slice keeps `npm test` / `npm run test:db` green; the §8.1
-radiology-pilot gate closes M3. **Status: kickoff survey + M3.1 + M3.2
-done**; storage routing (M3.3) is next.
+(✅ shipped) → M3.3 storage routing (✅ shipped) → M3.4 console+failure →
+M3.5 packaging; every slice keeps `npm test` / `npm run test:db` green; the
+§8.1 radiology-pilot gate closes M3. **Status: kickoff survey + M3.1 + M3.2 +
+M3.3 done**; failure handling + radiology console (M3.4) is next.
 
 ---
 

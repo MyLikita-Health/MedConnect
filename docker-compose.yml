@@ -76,6 +76,20 @@ services:
     volumes:
       - orthancdata:/var/lib/orthanc/db
 
+  # M3.3 storage routing: the PACS/archive leg of the demo — a SECOND Orthanc
+  # (adjacent AGPL process, same §3.2 boundary) acting as the facility archive.
+  # The hub points the main orthanc service at it as a forwarding peer
+  # (http://pacs:8042 inside the compose network) and storeToPeer forwards
+  # performed studies there. REST on host 8043 for the demo/verification.
+  pacs:
+    image: jodogne/orthanc:latest
+    ports:
+      - "8043:8042"  # REST (the main Orthanc reaches it as http://pacs:8042)
+      - "4243:4242"  # DICOM port (free for a modality later)
+    volumes:
+      - pacsdata:/var/lib/orthanc/db
+
 volumes:
   pgdata:
   orthancdata:
+  pacsdata:

@@ -18,6 +18,11 @@ export interface MwlMonitorOptions {
   baseUrl: string;
   username?: string;
   password?: string;
+  /**
+   * Pre-built adapter (startHub shares one with the storage-router forwarding
+   * leg). Defaults to a fresh adapter over baseUrl/username/password.
+   */
+  adapter?: DicomOrthancAdapter;
   /** Sync+poll cadence in ms (env MWL_POLL_MS). Default 60s. */
   pollMs?: number;
   /** Orders destined for the modality worklist (the LIS seam). */
@@ -26,6 +31,13 @@ export interface MwlMonitorOptions {
   admissions?: AdmissionRegistry;
   /** Scheduled modality for registry orders that carry none (default CT). */
   defaultModality?: string;
+  /**
+   * M3.3 storage routing seam: invoked with each poll's performed studies
+   * AFTER the worklist item was retired but BEFORE they count as done — when
+   * it throws, the poll fails and the accession is NOT marked retired, so the
+   * next cycle re-syncs the item and routes again (never a lost study event).
+   */
+  onPerformed?: (performed: MwlPerformedStudy[]) => void | Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -63,7 +75,7 @@ export class MwlMonitor {
 
   constructor(private readonly opts: MwlMonitorOptions) {
     this.service = new WorklistService(
-      new DicomOrthancAdapter({ baseUrl: opts.baseUrl, username: opts.username, password: opts.password }),
+      opts.adapter ?? new DicomOrthancAdapter({ baseUrl: opts.baseUrl, username: opts.username, password: opts.password }),
       { defaultModality: opts.defaultModality ?? 'CT' },
     );
     this.log = opts.log ?? ((line) => console.log(line));
@@ -130,9 +142,18 @@ export class MwlMonitor {
       this.totals.failed += result.failed.length;
       for (const p of result.performed) {
         this.performed.unshift({ ...p, at: new Date().toISOString() });
-        this.retired.add(p.order.accession);
       }
       if (this.performed.length > 100) this.performed.length = 100;
+
+      // Route performed studies onward (M3.3 seam). Only when routing succeeds
+      // are the accessions retired — a throw leaves them re-syncable so the
+      // next poll re-creates the item and routes again (no lost event).
+      if (result.performed.length > 0 && this.opts.onPerformed) {
+        await this.opts.onPerformed(result.performed);
+      }
+      for (const p of result.performed) {
+        this.retired.add(p.order.accession);
+      }
 
       const ms = Date.now() - started;
       const summary = `[mwl] sync+poll: ${result.created.length} created, ${result.queued.length} queued, ${result.failed.length} failed · ${result.performed.length} performed (${ms}ms)`;
