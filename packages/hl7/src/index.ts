@@ -23,6 +23,7 @@ export type { DuplexLike } from './transport.js';
 export { hl7ToCanonical, type Hl7CanonicalizationResult, type Hl7ToCanonicalOptions } from './translate.js';
 export { hl7ToOrder, type Hl7OrderResult, type Hl7ToOrderOptions, type OrderRegistration, type OrderStatus } from './order.js';
 export { hl7ToAdmission, type AdmissionRegistration, type AdmissionStatus, type Hl7AdmissionResult, type Hl7ToAdmissionOptions } from './admission.js';
+export { hl7GoldensDir, loadHl7Goldens, runHl7Conformance, type Hl7ConformanceCaseResult, type Hl7ConformanceRunResult, type Hl7GoldenCase, type Hl7GoldenExpectation, type Hl7GoldenFile } from './conformance.js';
 export { canonicalToOru, canonicalToOrm, type OutboundOptions } from './serialize.js';
 export { deliverHl7, type Hl7DeliverOptions, type MllpEndpointConfig } from './deliver.js';
 export { MllpConnectionPool, type MllpConnectionPoolOptions } from './connection-pool.js';

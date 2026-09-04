@@ -107,6 +107,10 @@ export function renderUi(): string {
       </div>
     </div>
     <div class="panel">
+      <h2>Admissions <span class="muted">ADT^A01 patient feed (B2c)</span></h2>
+      <table id="admissions"><thead><tr><th>Patient</th><th>Status</th><th>Visit</th><th>Received</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="panel">
       <h2>Alerts <span class="muted" id="alert-count"></span></h2>
       <table id="alerts"><thead><tr><th>Kind</th><th>State</th><th>Message</th><th>Fired</th></tr></thead><tbody></tbody></table>
     </div>
@@ -218,10 +222,11 @@ async function refresh() {
     const keysReq = meRole === 'admin'
       ? api('/api/v1/keys').then(r => r.json())
       : Promise.resolve(null);
-    const [health, stats, devices, alerts, messages, profiles, keys] = await Promise.all([
+    const [health, stats, devices, admissions, alerts, messages, profiles, keys] = await Promise.all([
       api('/api/v1/health').then(r => r.json()),
       api('/api/v1/stats').then(r => r.json()),
       api('/api/v1/devices').then(r => r.json()),
+      api('/api/v1/admissions').then(r => r.json()),
       api('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
       api('/api/v1/messages?limit=100').then(r => r.json()),
       api('/api/v1/profiles').then(r => r.json()),
@@ -234,6 +239,7 @@ async function refresh() {
     if (health.version) { vEl.textContent = 'v' + health.version; vEl.style.display = 'inline-block'; }
     renderStats(stats);
     renderDevices(devices);
+    renderAdmissions(admissions);
     renderAlerts(alerts);
     renderMessages(messages);
     renderProfiles(profiles);
@@ -245,6 +251,16 @@ async function refresh() {
     h.textContent = 'offline';
     h.className = 'badge off';
   }
+}
+
+function renderAdmissions(admissions) {
+  document.getElementById('admissions').querySelector('tbody').innerHTML =
+    admissions.map(a =>
+      '<tr><td>' + esc(a.patientId) + (a.name ? '<br/><span class="muted">' + esc(a.name) + '</span>' : '') + '</td>' +
+      '<td><span class="status ' + esc(a.status === 'admitted' ? 'ROUTED' : 'DISCARDED') + '">' + esc(a.status) + '</span></td>' +
+      '<td class="muted">' + esc(a.visitId ?? '—') + '</td>' +
+      '<td class="muted">' + (a.receivedAt ? new Date(a.receivedAt).toLocaleTimeString() : '—') + '</td></tr>'
+    ).join('') || '<tr><td colspan="4" class="muted">No patient admissions yet. Send an ADT^A01 over MLLP.</td></tr>';
 }
 
 function renderAlerts(alerts) {

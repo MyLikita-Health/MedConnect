@@ -90,8 +90,17 @@ export async function loadGoldenForProfile(
 ): Promise<{ file: string; golden: GoldenFile } | undefined> {
   const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
   for (const file of files.sort()) {
-    const golden = JSON.parse(await readFile(join(dir, file), 'utf8')) as GoldenFile;
-    if (golden.profile.id === profileId) return { file, golden };
+    // The golden library is protocol-mixed (ASTM golden files embed the
+    // profile; HL7/DICOM golden files live alongside with their own shape) —
+    // a file that is not an ASTM golden must be skipped, never crash the scan.
+    let golden: GoldenFile | undefined;
+    try {
+      const parsed = JSON.parse(await readFile(join(dir, file), 'utf8')) as { profile?: { id?: unknown } };
+      if (parsed.profile && typeof parsed.profile.id === 'string') golden = parsed as GoldenFile;
+    } catch {
+      // unparseable or non-ASTM file: skip
+    }
+    if (golden?.profile.id === profileId) return { file, golden };
   }
   return undefined;
 }

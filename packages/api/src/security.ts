@@ -80,6 +80,7 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/alert-rules': 'api:read',
   'GET /api/v1/alerts': 'api:read',
   'GET /api/v1/orders': 'api:read',
+  'GET /api/v1/admissions': 'api:read',
   'GET /api/v1/me': 'api:read',
   // Management reads (admin)
   'GET /api/v1/keys': 'keys:manage',
@@ -100,6 +101,7 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'DELETE /api/v1/alert-rules/:id': 'config:write',
   'POST /api/v1/orders': 'config:write',
   'DELETE /api/v1/orders/:id': 'config:write',
+  'POST /api/v1/admissions': 'config:write',
   // Key management (admin)
   'POST /api/v1/keys': 'keys:manage',
   'PATCH /api/v1/keys/:id': 'keys:manage',

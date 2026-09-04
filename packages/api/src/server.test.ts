@@ -216,6 +216,51 @@ test('order registry endpoints register, list and remove expected orders', async
   assert.equal(((await (await fetch(`${base}/api/v1/orders`)).json()) as unknown[]).length, 0);
 });
 
+test('admission endpoints list and register patient admissions (the ADT feed view)', async (t) => {
+  const { base } = await startApi(t);
+
+  // Empty until an ADT^A01 registers (or manual entry without the HL7 port).
+  assert.equal(((await (await fetch(`${base}/api/v1/admissions`)).json()) as unknown[]).length, 0);
+
+  const res = await fetch(`${base}/api/v1/admissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      patientId: 'PID-1001',
+      name: 'Adeyemi, Tunde',
+      dateOfBirth: '19850312',
+      gender: 'M',
+      visitId: 'VIS-77',
+    }),
+  });
+  assert.equal(res.status, 201);
+
+  const list = (await (await fetch(`${base}/api/v1/admissions`)).json()) as Array<{ patientId: string; status: string; visitId?: string }>;
+  assert.equal(list.length, 1);
+  assert.equal(list[0]!.patientId, 'PID-1001');
+  assert.equal(list[0]!.status, 'admitted');
+  assert.equal(list[0]!.visitId, 'VIS-77');
+
+  // A discharge flips the same patient's current admission.
+  const discharge = await fetch(`${base}/api/v1/admissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ patientId: 'PID-1001', status: 'discharged' }),
+  });
+  assert.equal(discharge.status, 201);
+  const after = (await (await fetch(`${base}/api/v1/admissions`)).json()) as Array<{ status: string }>;
+  assert.equal(after.length, 1);
+  assert.equal(after[0]!.status, 'discharged');
+
+  // Bad input (no patient id) is a validation error.
+  const bad = await fetch(`${base}/api/v1/admissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'admitted' }),
+  });
+  assert.equal(bad.status, 400);
+});
+
 test('held endpoint lists the exception queue and release re-enters delivery', async (t) => {
   const store = new MessageStore();
   const devices = new DeviceRegistry();

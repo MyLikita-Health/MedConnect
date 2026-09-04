@@ -337,6 +337,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     devices,
     routes,
     orders,
+    admissions,
     alerts: alertStore,
     profiles: profileStore,
     mappings,

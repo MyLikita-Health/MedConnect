@@ -21,9 +21,12 @@ test('every golden file passes conformance for its profile (certification gate)'
   assert.ok(files.length >= 1, 'goldens directory must not be empty');
 
   for (const file of files.sort()) {
-    const raw = JSON.parse(await readFile(join(goldensDir, file), 'utf8')) as GoldenFile;
-    const profile: DeviceProfile = parseDeviceProfile(raw.profile);
-    const run = runConformance(profile, raw.goldens);
+    const parsed = JSON.parse(await readFile(join(goldensDir, file), 'utf8')) as { profile?: unknown };
+    // The library is protocol-mixed: HL7 golden files (protocol: "HL7") carry
+    // no ASTM profile and run through the HL7 conformance suite instead.
+    if (!parsed.profile) continue;
+    const profile: DeviceProfile = parseDeviceProfile(parsed.profile);
+    const run = runConformance(profile, (parsed as GoldenFile).goldens);
     assert.equal(run.failed, 0, `${file}: ${describeFailures(run)}`);
     // A file with goldens must claim at least draft; certified is the goal.
     assert.ok(['draft', 'certified'].includes(profile.status), `${file}: invalid status`);

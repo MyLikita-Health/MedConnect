@@ -1184,7 +1184,9 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    gateway's `admissions` seam, wired in `startHub` (`hub.admissions`) — the
    patient-side LIS master feed. E2E (`packages/server/src/hl7-adt-feed.test.ts`)
    against the real `startHub`: ADT → AA → registered (A03 flips status;
-   garbage → AR).
+   garbage → AR). The registry is visible in the API + console:
+   `GET/POST /api/v1/admissions` (api:read / config:write scopes) and an
+   "Admissions" console panel.
 7. ✅ **B3.3 — outbound delivery (first real outbound beyond HTTP)**: the
    Dispatcher gains an injected `deliver` seam (`DispatcherOptions.deliver`;
    core stays protocol-blind — the built-in handles console/http, anything
@@ -1225,10 +1227,16 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    deterministic B4-deviant ORU/ORM transcripts; each variant ships the
    `Hl7RecordLayout` that decodes it, and the conformance-oracle tests pin
    that the generic parse fails/misreads while the layout yields the exact
-   canonical payload — the same oracle goldens-in-CI will run against real
-   vendor transcripts when field access (risk R2) provides them.
-10. Test status: `npm test` = 281 (263 pass / 18 DB-gated skip); `npm run
-    test:db` = 281/281.
+   canonical payload. **Goldens-in-CI are live**: the six transcripts are
+   recorded as `goldens/hl7-b4-vendor-variants.json` (the shared golden
+   library, marked `protocol: HL7`; the core ASTM loader skips non-ASTM
+   files), executed under `npm test` by the HL7 conformance runner
+   (`packages/hl7/src/conformance.ts` + `goldens.test.ts`), with a
+   simulator↔golden lockstep test (`hl7-goldens.test.ts`) that fails when
+   the recorder drifts. Real vendor field transcripts replace the synthetic
+   corpus under risk R2.
+10. Test status: `npm test` = 297 (279 pass / 18 DB-gated skip); `npm run
+    test:db` = 297/297.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
 profiles arrive with field access (risk R2); the ADT patient-admission feed
@@ -1336,9 +1344,11 @@ forward to an MLLP LIS, `demo:outbound`) + the connection-manager
 refinement (`MllpConnectionPool`: held-open sessions, reuse, replace-on-
 death); (5) ✅ **B4 done** — generalized HL7 segment-level profile layouts
 (`hl7` config in the profile schema, layout-aware translators, `resolveLayout`
-gateway seam) with vendor-variant tests; goldens-in-CI stays deferred until a
-real vendor's transcripts exist. Each step keeps both suites green (`npm
-test` / `npm run test:db`) and demo-able in memory and Postgres.
+gateway seam) with vendor-variant tests + a **recorded golden corpus in CI**
+(the synthetic B4 transcripts above; real vendor transcripts replace them
+under risk R2); (6) ✅ **ADT feed + API** — patient admissions registered from
+ADT^A01 and visible at `/api/v1/admissions`. Each step keeps both suites
+green (`npm test` / `npm run test:db`) and demo-able in memory and Postgres.
 
 ---
 
@@ -1378,12 +1388,18 @@ of C1–C6 is composition, not new protocol work):
 
 **Build list (new), mapped to slices:**
 
-1. **M3.1 — `@integration-hub/dicom` module + canonical imaging shapes**: a
-   `DicomOrthancAdapter` REST client (create patient/study, worklist items,
-   query/delete studies, list modalities/peers) and the §6.2 phase-2 canonical
-   additions in shared (`ImagingRequest` accession/modality/requested
-   procedure; Study/Series/Instance **metadata** + storage URLs — pixels never
-   in the hub DB).
+1. ✅ **M3.1 — `@integration-hub/dicom` module + canonical imaging shapes**
+   (shipped): §6.2 phase-2 canonical additions in shared
+   (`packages/shared/src/imaging.ts` — `ImagingPatient`, `ImagingStudy`/
+   `Series`/`Instance` **metadata** + storage URLs, `ImagingRequest`, `ImagingPeer`;
+   pixels never in the hub DB) and `DicomOrthancAdapter`
+   (`packages/dicom/src/adapter.ts`, new workspace package): an Orthanc REST
+   client — system/ping, list + canonical reads of patients/studies/series/
+   instances, `POST /tools/find` study queries, modality/peer listing +
+   C-ECHO health, store-to-peer/modality forwarding, delete — typed
+   `OrthancError` on failures, Basic-auth + timeout options. Tested against a
+   mock Orthanc HTTP server (`adapter.test.ts`, 9 cases). MWL worklist
+   creation (C2) is the next slice on the same substrate.
 2. **M3.2 — MWL workflow (C2)**: order registry → Orthanc worklist;
    hub monitors whether the study was performed (poll v1; MPPS is an M5
    refinement per §8.1).
@@ -1404,11 +1420,10 @@ stays M5 (§8.1). Simulators (workstream K): a DICOM simulator = Orthanc + a
 fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
 route with failure injection — the M3 exit drill.
 
-**Sequencing & gates**: M3.1 adapter+shapes → M3.2 MWL → M3.3 storage
-routing → M3.4 console+failure → M3.5 packaging; every slice keeps `npm test`
-/ `npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
-**Status: kickoff survey only — not started** (M2/B just closed; sequencing
-per §8.2).
+**Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL → M3.3
+storage routing → M3.4 console+failure → M3.5 packaging; every slice keeps
+`npm test` / `npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
+**Status: kickoff survey + M3.1 scaffold done**; MWL (M3.2) is next.
 
 ---
 

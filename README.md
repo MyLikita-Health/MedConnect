@@ -40,10 +40,12 @@ HL7 segment-level profile layouts** (B4 — per-vendor PID/OBR/OBX position +
 delimiter overrides wired through `resolveLayout`), all with the parser buy
 resolved as D7. A **vendor-variant simulator mode** (`npm run simulate:hl7 --
 --variant <name> [--kind oru|orm]`) emits B4-deviant ORU/ORM transcripts
-for profile testing. Kickoff survey + status: plan §13.15. Goldens-in-CI
-for real vendor profiles arrive with field access (risk R2). After B:
-**imaging/DICOM (M3)** — kickoff survey: plan §13.16 — then FHIR/webhooks
-and multi-tenancy.
+for profile testing. **Goldens-in-CI are live**: the B4 vendor-variant
+transcripts are recorded in the shared golden library and executed under
+`npm test` by the HL7 conformance runner (real vendor field transcripts
+replace them under risk R2). Kickoff survey + status: plan §13.15. Next:
+**imaging/DICOM (M3)** — kickoff survey + the M3.1 Orthanc adapter scaffold
+are in (plan §13.16), MWL is next — then FHIR/webhooks and multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -245,16 +247,17 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 281 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 297 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
                    #   ORU/ORM serializer + outbound deliverHl7 + connection
                    #   pool, HL7 segment profile layouts (B4) + vendor-
-                   #   variant simulator oracle, dispatcher/DLQ, API, security
+                   #   variant simulator oracle + recorded HL7 golden corpus,
+                   #   Orthanc REST adapter (M3.1), dispatcher/DLQ, API, security
                    #   (roles/scopes + authz + audit), signed updates +
                    #   supervisor (apply/rollback/crash) (18 DB-gated skip)
-npm run test:db    # 281 tests: same + PostgreSQL integration (needs db:up)
+npm run test:db    # 297 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -271,10 +274,14 @@ packages/
                                         envelope, statuses, MessageSink contract
   astm/       @integration-hub/astm     ASTM E1381 framing + checksums, E1394
                                         records, session (host) + client (device)
+  dicom/      @integration-hub/dicom    Orthanc REST client (M3.1): canonical
+                                        study/series/instance metadata reads,
+                                        tools/find, peer/modality store + echo
   hl7/        @integration-hub/hl7      HL7 v2 (workstream B): MLLP framing +
                                         sessions/ACK, ORU translator + ORM order
-                                        feed, ORU/ORM serializer, inbound
-                                        Hl7Gateway + outbound deliverHl7
+                                        feed + ADT admission feed, ORU/ORM
+                                        serializer, inbound Hl7Gateway + outbound
+                                        deliverHl7, golden conformance runner
   gateway/    @integration-hub/gateway  TCP listener, per-connection ASTM session,
                                         pipeline: parse → validate → map → route,
                                         default test-code mappings (PRD §17–18)
@@ -282,7 +289,8 @@ packages/
                                         dedup (PRD §29), patient/order matching (PRD §27,
                                         E6) + result validation (PRD §28, E5), DB-driven
                                         routing, delivery dispatcher with retry/backoff +
-                                        DLQ (PRD §21–23), order registry (LIS seam)
+                                        DLQ (PRD §21–23), order registry (LIS seam),
+                                        admission registry (ADT feed, B2c)
   api/        @integration-hub/api      REST API on Fastify + zod (PRD §36), message store
                                         (in-memory or PostgreSQL behind the MessageSink
                                         contract), device registry, embedded web console
@@ -556,8 +564,13 @@ pipeline canonicalizes correctly for both it and the reference layout.
   `Hl7Gateway.resolveLayout` applies them from the MSH sender identity, and
   both translators read against them. Outbound MLLP delivery now runs over a
   held-open connection pool (`MllpConnectionPool` — reuse, replace-on-dead-
-  peer, idle close). Goldens-in-CI for real vendor profiles are deferred
-  until a real vendor's variant requirements exist (plan §13.15).
+  peer, idle close). **HL7 goldens-in-CI are live** — the B4 vendor-variant
+  transcripts are recorded in `goldens/hl7-b4-vendor-variants.json` and run
+  under `npm test` by the HL7 conformance runner; real vendor field
+  transcripts replace the synthetic corpus under risk R2 (plan §13.15).
+  The **imaging side is scaffolded (M3.1)** — canonical imaging metadata
+  shapes in shared + the `@integration-hub/dicom` Orthanc REST adapter
+  (plan §13.16).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry

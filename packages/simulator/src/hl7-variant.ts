@@ -73,16 +73,18 @@ export interface TransmittedVariant {
 
 /**
  * Deterministic vendor-variant transcript (the fixture the conformance oracle
- * asserts against): patient PID-1001 / order ACC-424242 / GLU + CREA.
+ * asserts against): patient PID-1001 / order ACC-424242 / GLU + CREA. Pass a
+ * frozen `timestamp` + `controlId` to reproduce a recorded golden byte-for-
+ * byte; defaults stay time-random for live simulation.
  */
 export function buildVariantMessage(
   kind: VariantKind,
   variant: VariantName,
-  opts: { deviceName?: string; controlId?: string } = {},
+  opts: { deviceName?: string; controlId?: string; timestamp?: string } = {},
 ): string {
   const device = opts.deviceName ?? 'SIM-HL7';
   const controlId = opts.controlId ?? `HL7-${randInt(100000, 999999)}`;
-  const ts = formatTimestamp(new Date());
+  const ts = opts.timestamp ?? formatTimestamp(new Date());
   const component = variant === 'delimiters' ? '&' : '^';
   const msh9 = kind === 'oru' ? 'ORU^R01' : 'ORM^O01';
 

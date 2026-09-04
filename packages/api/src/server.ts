@@ -12,12 +12,14 @@ import { z } from 'zod';
 import { hubVersionInfo, type CanonicalMessage, type MappingTable } from '@integration-hub/shared';
 import {
   DEFAULT_RETRY,
+  InMemoryAdmissionRegistry,
   InMemoryAlertStore,
   InMemoryOrderRegistry,
   InMemoryProfileStore,
   InMemoryRouteStore,
   parseDeviceProfile,
   runStoredConformance,
+  type AdmissionRegistry,
   type AlertStore,
   type OrderRegistry,
   type ProfileStore,
@@ -48,6 +50,11 @@ export interface ApiServerOptions {
   routes?: RouteStore;
   /** Expected-order registry behind patient/order matching (PRD §27). */
   orders?: OrderRegistry;
+  /**
+   * Patient-admission registry behind the ADT^A01 feed (B2c extension);
+   * read at GET /api/v1/admissions. Defaults to an in-memory registry.
+   */
+  admissions?: AdmissionRegistry;
   /** Alert rules + derived alerts (PRD §33); defaults to in-memory. */
   alerts?: AlertStore;
   /** Config-first device profiles (PRD §39–40); defaults to in-memory. */
@@ -122,6 +129,16 @@ const orderSchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled']).default('active'),
 });
 
+const admissionSchema = z.object({
+  patientId: z.string().min(1),
+  name: z.string().optional(),
+  dateOfBirth: z.string().optional(),
+  gender: z.string().optional(),
+  /** Visit / encounter number (PV1-19 on the wire). */
+  visitId: z.string().optional(),
+  status: z.enum(['admitted', 'discharged']).default('admitted'),
+});
+
 const alertRuleSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(['device-offline', 'destination-down', 'dlq', 'held-backlog', 'profile-drift']),
@@ -181,6 +198,7 @@ export class ApiServer {
   private app?: FastifyInstance;
   private readonly routes: RouteStore;
   private readonly orders: OrderRegistry;
+  private readonly admissions: AdmissionRegistry;
   private readonly alerts: AlertStore;
   private readonly profiles: ProfileStore;
   private readonly keys: KeyStore | undefined;
@@ -189,6 +207,7 @@ export class ApiServer {
   constructor(private opts: ApiServerOptions) {
     this.routes = opts.routes ?? new InMemoryRouteStore();
     this.orders = opts.orders ?? new InMemoryOrderRegistry();
+    this.admissions = opts.admissions ?? new InMemoryAdmissionRegistry();
     this.alerts = opts.alerts ?? new InMemoryAlertStore();
     this.profiles = opts.profiles ?? new InMemoryProfileStore();
     this.keys = opts.keys;
@@ -441,6 +460,16 @@ export class ApiServer {
       const { id } = req.params as { id: string };
       await this.orders.remove(id);
       return reply.code(204).send();
+    });
+
+    // Patient-admission registry (the ADT feed, B2c extension). The wire
+    // (ADT^A01 over MLLP) is the primary source; POST exists for hubs without
+    // the HL7 port, exactly like POST /api/v1/orders.
+    app.get('/api/v1/admissions', async () => this.admissions.list());
+    app.post('/api/v1/admissions', async (req, reply) => {
+      const admission = admissionSchema.parse(req.body);
+      await this.admissions.register({ ...admission, receivedAt: new Date().toISOString() });
+      return reply.code(201).send(admission);
     });
 
     // Release identity (M2 installer/update: version is the update axis).

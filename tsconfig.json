@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/astm" },
+    { "path": "./packages/dicom" },
     { "path": "./packages/hl7" },
     { "path": "./packages/core" },
     { "path": "./packages/gateway" },
