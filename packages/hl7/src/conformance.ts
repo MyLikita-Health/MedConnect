@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import type { Hl7RecordLayout, LabPayload } from '@integration-hub/shared';
 import { hl7ToCanonical } from './translate.js';
 import { hl7ToOrder, type OrderRegistration } from './order.js';
+import { hl7ToAdmission } from './admission.js';
 
 /** Expected canonical content for an HL7 golden; partial comparison. */
 export interface Hl7GoldenExpectation {
@@ -50,13 +51,22 @@ export interface Hl7GoldenExpectation {
     tests?: string[];
     status?: OrderRegistration['status'];
   };
+  /** kind 'adt' — the expected patient-admission shape. */
+  admission?: {
+    patientId?: string;
+    name?: string;
+    dateOfBirth?: string;
+    gender?: string;
+    visitId?: string;
+    status?: string;
+  };
   /** Golden must FAIL with at least these issues. */
   expectIssues?: string[];
 }
 
 export interface Hl7GoldenCase {
   name: string;
-  kind: 'oru' | 'orm';
+  kind: 'oru' | 'orm' | 'adt';
   /**
    * B4 vendor segment-level layout override. Absent = the generic parse must
    * yield `expected` (records the reference behavior).
@@ -139,7 +149,7 @@ function checkGolden(golden: Hl7GoldenCase): string[] {
   const expected = golden.expected;
   const opts = golden.layout ? { layout: golden.layout } : {};
 
-  // Translate; `value` is true when a payload/order came out of the oracle.
+  // Translate; `value` is true when a payload/order/admission came out.
   let value: boolean;
   let issues: string[];
   if (golden.kind === 'orm') {
@@ -147,6 +157,17 @@ function checkGolden(golden: Hl7GoldenCase): string[] {
     issues = is;
     value = order !== null;
     if (order && expected.registration) checkRegistration(failures, order, expected.registration);
+  } else if (golden.kind === 'adt') {
+    const { admission, issues: is } = hl7ToAdmission(wire, opts);
+    issues = is;
+    value = admission !== null;
+    if (admission && expected.admission) {
+      for (const [key, want] of Object.entries(expected.admission)) {
+        if (want === undefined) continue;
+        const got = admission[key as keyof typeof admission];
+        if (got !== want) failures.push(`admission.${key}: expected "${want}", got "${got ?? ''}"`);
+      }
+    }
   } else {
     const { payload, issues: is } = hl7ToCanonical(wire, opts);
     issues = is;

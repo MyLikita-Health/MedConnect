@@ -204,6 +204,35 @@ export class DicomOrthancAdapter {
   }
 
   // -------------------------------------------------------------------------
+  // Synthetic creation + runtime config (C1 — MWL-ready resources, no modality
+  // required: the hub can create patients/studies for worklists from JSON)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a DICOM instance from JSON tags (POST /tools/create-dicom). The
+   * parent patient/study/series materialize with it — the C1 primitive for
+   * building worklist-ready resources without a real modality. Keys are DICOM
+   * keyword long names (PatientName, PatientID, AccessionNumber, …).
+   */
+  async createDicom(tags: Record<string, string | number>): Promise<{ instanceId: string; patientOrthancId?: string; studyOrthancId?: string }> {
+    const raw = await this.request<{ ID: string; ParentPatient?: string; ParentStudy?: string }>('POST', '/tools/create-dicom', tags);
+    return {
+      instanceId: raw.ID,
+      ...(raw.ParentPatient ? { patientOrthancId: raw.ParentPatient } : {}),
+      ...(raw.ParentStudy ? { studyOrthancId: raw.ParentStudy } : {}),
+    };
+  }
+
+  /**
+   * Register/replace a DICOM modality at runtime (PUT /modalities/{name}) —
+   * lets the demo/installer wire a PACS or a self-echo target without an
+   * Orthanc config file edit (C3/C5).
+   */
+  async configureModality(name: string, cfg: { aet: string; host: string; port: number }): Promise<void> {
+    await this.request('PUT', `/modalities/${encodeURIComponent(name)}`, { AET: cfg.aet, Host: cfg.host, Port: cfg.port });
+  }
+
+  // -------------------------------------------------------------------------
   // Forwarding + lifecycle (C3 storage routing primitives)
   // -------------------------------------------------------------------------
 

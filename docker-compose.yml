@@ -59,5 +59,18 @@ services:
       # Device port: macOS AirPlay owns the wildcard 5000, so map to host 5001.
       - "5001:5000"
 
+  # Imaging (workstream M3): Orthanc is the DICOM engine — an ADJACENT, SEPARATE
+  # process (AGPLv3) the hub drives over its REST API; never embedded or linked
+  # (plan §3.2 decision matrix, §7.5.5 boundary). The hub's @integration-hub/dicom
+  # adapter talks REST only — no Node DICOM stack. REST: http://127.0.0.1:8042
+  orthanc:
+    image: jodogne/orthanc:latest
+    ports:
+      - "8042:8042"  # Orthanc REST API + Explorer
+      - "4242:4242"  # DICOM C-STORE/C-FIND port (modalities arrive here)
+    volumes:
+      - orthancdata:/var/lib/orthanc/db
+
 volumes:
   pgdata:
+  orthancdata:

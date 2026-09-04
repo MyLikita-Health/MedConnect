@@ -182,6 +182,39 @@ test('store/echo/delete hit the forwarding + lifecycle routes', async (t) => {
   assert.ok(log.some((l) => l.method === 'DELETE' && l.path === '/studies/stu-1'));
 });
 
+test('createDicom posts DICOM tags to /tools/create-dicom and maps the parents', async (t) => {
+  const { base, log } = await startMockOrthanc(t, (req, res) => {
+    json(res, 200, {
+      ID: 'ins-new',
+      ParentPatient: 'pat-new',
+      ParentStudy: 'stu-new',
+      ParentSeries: 'ser-new',
+      Status: 'Success',
+    });
+  });
+  const adapter = new DicomOrthancAdapter({ baseUrl: base });
+
+  const created = await adapter.createDicom({ PatientName: 'Adeyemi^Tunde', PatientID: 'PID-1001', AccessionNumber: 'ACC-1', Modality: 'CT' });
+  assert.equal(created.instanceId, 'ins-new');
+  assert.equal(created.patientOrthancId, 'pat-new');
+  assert.equal(created.studyOrthancId, 'stu-new');
+
+  const call = log.find((l) => l.path === '/tools/create-dicom');
+  assert.ok(call);
+  assert.equal(call.method, 'POST');
+  assert.deepEqual(call.body, { PatientName: 'Adeyemi^Tunde', PatientID: 'PID-1001', AccessionNumber: 'ACC-1', Modality: 'CT' });
+});
+
+test('configureModality registers a DICOM peer via PUT /modalities/{name}', async (t) => {
+  const { base, log } = await startMockOrthanc(t, (req, res) => json(res, 200, {}));
+  const adapter = new DicomOrthancAdapter({ baseUrl: base });
+
+  await adapter.configureModality('self-echo', { aet: 'ORTHANC', host: '127.0.0.1', port: 4242 });
+  const call = log.find((l) => l.method === 'PUT' && l.path === '/modalities/self-echo');
+  assert.ok(call);
+  assert.deepEqual(call.body, { AET: 'ORTHANC', Host: '127.0.0.1', Port: 4242 });
+});
+
 test('modality/peer listing normalizes map and list responses', async (t) => {
   const { base } = await startMockOrthanc(t, (req, res) => {
     if (req.url === '/modalities') return json(res, 200, { CT1: { AET: 'CT1' }, MR1: { AET: 'MR1' } });

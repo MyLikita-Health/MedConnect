@@ -247,17 +247,17 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 297 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 299 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
                    #   ORU/ORM serializer + outbound deliverHl7 + connection
                    #   pool, HL7 segment profile layouts (B4) + vendor-
-                   #   variant simulator oracle + recorded HL7 golden corpus,
-                   #   Orthanc REST adapter (M3.1), dispatcher/DLQ, API, security
+                   #   variant + ADT golden corpora, Orthanc REST adapter
+                   #   (M3.1), dispatcher/DLQ, API, security
                    #   (roles/scopes + authz + audit), signed updates +
                    #   supervisor (apply/rollback/crash) (18 DB-gated skip)
-npm run test:db    # 297 tests: same + PostgreSQL integration (needs db:up)
+npm run test:db    # 299 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -457,7 +457,11 @@ order (LIS seam), sends two matched results and one stray unmatched sample,
 releases the held one, and prints the summary. The HL7 variants:
 `npm run demo:hl7` (inbound ORU over MLLP, same HELD→release loop) and
 `npm run demo:outbound` (results store-and-forward to a mock LIS over MLLP
-via an `hl7` destination + route rule).
+via an `hl7` destination + route rule). The imaging variant:
+`docker compose up -d orthanc && npm run demo:dicom` exercises the
+`@integration-hub/dicom` adapter against a **real Orthanc container**
+(create a CT study from DICOM tags → canonical metadata reads → live
+C-ECHO → cleanup).
 
 ## Alerting (M2 — PRD §33)
 
@@ -565,12 +569,14 @@ pipeline canonicalizes correctly for both it and the reference layout.
   both translators read against them. Outbound MLLP delivery now runs over a
   held-open connection pool (`MllpConnectionPool` — reuse, replace-on-dead-
   peer, idle close). **HL7 goldens-in-CI are live** — the B4 vendor-variant
-  transcripts are recorded in `goldens/hl7-b4-vendor-variants.json` and run
-  under `npm test` by the HL7 conformance runner; real vendor field
+  and ADT patient-admission transcripts are recorded in the shared golden
+  library (`goldens/hl7-b4-vendor-variants.json`, `goldens/hl7-adt-admissions.json`)
+  and run under `npm test` by the HL7 conformance runner; real vendor field
   transcripts replace the synthetic corpus under risk R2 (plan §13.15).
   The **imaging side is scaffolded (M3.1)** — canonical imaging metadata
-  shapes in shared + the `@integration-hub/dicom` Orthanc REST adapter
-  (plan §13.16).
+  shapes in shared + the `@integration-hub/dicom` Orthanc REST adapter,
+  with a real Orthanc container in the compose stack (`docker compose up -d
+  orthanc && npm run demo:dicom` — plan §13.16).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry

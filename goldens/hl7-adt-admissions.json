@@ -1,0 +1,67 @@
+{
+  "protocol": "HL7",
+  "name": "ADT^A01 patient-admission corpus",
+  "source": "Frozen ADT^A01/A03 admission transcripts (workstream B2c — the patient-side LIS seam). The hub parses each into an AdmissionRegistration via the gateway `admissions` feed; recorded here so the translation contract is pinned under npm test (the same conformance gate as the B4 vendor variants).",
+  "goldens": [
+    {
+      "name": "ADT^A01 admit — demographics + PV1-19 visit number",
+      "kind": "adt",
+      "wire": [
+        "MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-1|P|2.3.1",
+        "PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M",
+        "PV1|1|I|WARD-A^BED-3||||||||||||||||VIS-77"
+      ],
+      "expected": {
+        "admission": {
+          "patientId": "PID-1001",
+          "name": "Adeyemi, Tunde",
+          "dateOfBirth": "19850312",
+          "gender": "M",
+          "visitId": "VIS-77",
+          "status": "admitted"
+        }
+      }
+    },
+    {
+      "name": "ADT^A03 discharge flips the admission status",
+      "kind": "adt",
+      "wire": [
+        "MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A03|ADT-2|P|2.3.1",
+        "PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M"
+      ],
+      "expected": { "admission": { "patientId": "PID-1001", "status": "discharged" } }
+    },
+    {
+      "name": "ADT^A01 admit without PV1 still registers (visit is best-effort)",
+      "kind": "adt",
+      "wire": [
+        "MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-3|P|2.3.1",
+        "PID|1||PID-1002^^^FAC1^PI||Okafor^Chioma||19921107|F"
+      ],
+      "expected": {
+        "admission": { "patientId": "PID-1002", "name": "Okafor, Chioma", "dateOfBirth": "19921107", "gender": "F", "status": "admitted" }
+      }
+    },
+    {
+      "name": "B4-layout ADT^A01 — patient name at PID-6 (PID-5 empty)",
+      "kind": "adt",
+      "layout": { "patient": { "name": { "field": 6 } } },
+      "wire": [
+        "MSH|^~\\&|VENDOR_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-4|P|2.5.1",
+        "PID|1||PID-1001^^^FAC1^PI|||Adeyemi^Tunde|19850312|M"
+      ],
+      "expected": {
+        "admission": { "patientId": "PID-1001", "name": "Adeyemi, Tunde", "status": "admitted" }
+      }
+    },
+    {
+      "name": "unsupported ADT trigger fails loudly with the reason",
+      "kind": "adt",
+      "wire": [
+        "MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A02|ADT-5|P|2.3.1",
+        "PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M"
+      ],
+      "expected": { "expectIssues": ["unsupported ADT trigger A02"] }
+    }
+  ]
+}

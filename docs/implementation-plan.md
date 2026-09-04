@@ -1233,10 +1233,12 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    files), executed under `npm test` by the HL7 conformance runner
    (`packages/hl7/src/conformance.ts` + `goldens.test.ts`), with a
    simulator↔golden lockstep test (`hl7-goldens.test.ts`) that fails when
-   the recorder drifts. Real vendor field transcripts replace the synthetic
-   corpus under risk R2.
-10. Test status: `npm test` = 297 (279 pass / 18 DB-gated skip); `npm run
-    test:db` = 297/297.
+   the recorder drifts. The ADT patient-admission corpus
+   (`goldens/hl7-adt-admissions.json`, kind `adt` → the `hl7ToAdmission`
+   oracle) records the B2c feed contract the same way. Real vendor field
+   transcripts replace the synthetic corpus under risk R2.
+10. Test status: `npm test` = 299 (281 pass / 18 DB-gated skip); `npm run
+    test:db` = 299/299.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
 profiles arrive with field access (risk R2); the ADT patient-admission feed
@@ -1397,9 +1399,16 @@ of C1–C6 is composition, not new protocol work):
    client — system/ping, list + canonical reads of patients/studies/series/
    instances, `POST /tools/find` study queries, modality/peer listing +
    C-ECHO health, store-to-peer/modality forwarding, delete — typed
-   `OrthancError` on failures, Basic-auth + timeout options. Tested against a
-   mock Orthanc HTTP server (`adapter.test.ts`, 9 cases). MWL worklist
-   creation (C2) is the next slice on the same substrate.
+   `OrthancError` on failures, Basic-auth + timeout options — plus the C1
+   creation/runtime primitives `createDicom` (POST /tools/create-dicom) and
+   `configureModality` (PUT /modalities/{name}). Tested against a mock
+   Orthanc HTTP server (11 cases) and **live against a real Orthanc
+   container**: compose gains an `orthanc` service (adjacent AGPL process,
+   REST at host 8042) and `npm run demo:dicom` drives the full adapter
+   round-trip — create a CT study from DICOM tags → find/get canonical
+   metadata → walk to instances → live C-ECHO via a self-registered
+   modality → cleanup. MWL worklist sync (C2) is the next slice on the same
+   substrate.
 2. **M3.2 — MWL workflow (C2)**: order registry → Orthanc worklist;
    hub monitors whether the study was performed (poll v1; MPPS is an M5
    refinement per §8.1).
