@@ -9,7 +9,7 @@
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -193,12 +193,35 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   // A4 AdapterRegistry seam: registered device → DeviceProfile binding. The
   // gateway canonicalizes that device's stream with the profile's layout +
   // code mappings instead of the generic reference layout.
+  //
+  // Profile version stamping: the binding carries the profile's identity, and
+  // `certifiedVersion` is read from the profile's golden file (the version
+  // its transcripts were recorded under). Golden files are static per deploy,
+  // so the lookup is cached per hub process; the gateway compares it against
+  // the STORED version on every message and flags drift when an edit after
+  // certification bumped (or rolled back) the version.
+  const certifiedByProfile = new Map<string, Promise<number | undefined>>();
+  const certifiedVersionFor = (id: string): Promise<number | undefined> => {
+    let cached = certifiedByProfile.get(id);
+    if (!cached) {
+      cached = loadGoldenForProfile(id)
+        .then((found) => found?.golden.profile.version)
+        .catch(() => undefined);
+      certifiedByProfile.set(id, cached);
+    }
+    return cached;
+  };
   const resolveProfile = async (deviceId: string) => {
     const device = await devices.get(deviceId);
     if (!device?.profileId) return undefined;
     const profile = await profileStore.get(device.profileId);
     if (!profile) return undefined;
-    return { layout: defaultLayoutFor(profile), mappings: profile.mappings };
+    return {
+      layout: defaultLayoutFor(profile),
+      mappings: profile.mappings,
+      profile: { id: profile.id, version: profile.version },
+      certifiedVersion: await certifiedVersionFor(profile.id),
+    };
   };
 
   const gateway = new AstmGateway({

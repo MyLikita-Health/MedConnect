@@ -476,6 +476,16 @@ pipeline canonicalizes correctly for both it and the reference layout.
   (validated against the profile store; migration `0008` adds the FK, and
   deleting a profile detaches devices rather than deleting them). Unbound
   devices and the simulator keep the generic reference behavior.
+- **Version stamping + drift enforcement** — every message parsed through a
+  binding carries `profile: {id, version, certifiedVersion?, drift?}`
+  (provenance: exactly which config produced it, preserved on replay). The
+  hub reads `certifiedVersion` from the profile's golden file (cached per
+  process); when the stored version differs — the profile was edited after
+  its certification, or rolled back — messages are stamped `drift: true` with
+  a `FLAGGED` timeline entry naming both versions. Drift is an annotation:
+  results still flow, and the console marks them (a red *⚠ drift* marker in
+  the message list; the detail view shows the parsing profile badge vs its
+  certified version).
 - **Console Device profiles section** — the console lists profiles with
   certified (green) vs draft (amber) badges and a per-profile **conformance
   view**: `GET /api/v1/profiles/:id/conformance` re-runs a stored profile's

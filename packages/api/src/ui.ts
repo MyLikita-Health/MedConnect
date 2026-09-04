@@ -282,7 +282,7 @@ function renderMessages(messages) {
     messages.map(m =>
       '<tr class="msg" onclick="openDetail(\\'' + m.id + '\\')">' +
       '<td class="muted">' + new Date(m.receivedAt).toLocaleTimeString() + '</td>' +
-      '<td>' + esc(m.deviceId ?? '—') + '</td>' +
+      '<td>' + esc(m.deviceId ?? '—') + (m.profile && m.profile.drift ? '<br/><span class="err" title="profile edited after certification">⚠ drift</span>' : '') + '</td>' +
       '<td><span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span>' +
       (m.match ? '<br/><span class="match ' + esc(m.match.status) + '">' + esc(m.match.status) + '</span>' : '') +
       '</td>' +
@@ -311,6 +311,15 @@ async function renderDetail(id) {
     (m.match.strategy ? ' via ' + esc(m.match.strategy) : '') +
     (m.match.matchedOrderId ? ' → order ' + esc(m.match.matchedOrderId) : '') +
     (m.match.reason ? ' — ' + esc(m.match.reason) : '') + '</p>' : '';
+  // A4 version stamp: which profile config parsed this message, with a red
+  // drift marker when it no longer matches the version its goldens certified.
+  const profile = m.profile
+    ? '<p>parsed by profile <span class="badge role">' + esc(m.profile.id) + ' v' + esc(m.profile.version) + '</span>' +
+      (m.profile.certifiedVersion !== undefined && !m.profile.drift
+        ? ' <span class="conf ok">matches certified v' + esc(m.profile.certifiedVersion) + '</span>'
+        : '') +
+      (m.profile.drift ? ' <span class="err">⚠ drifted from certified v' + esc(m.profile.certifiedVersion) + ' — verify config</span>' : '') +
+      '</p>' : '';
   const actions = (canAct()
     ? (m.status === 'HELD'
       ? '<button onclick="releaseMessage(\\'' + m.id + '\\')">Review &amp; release</button> '
@@ -320,6 +329,7 @@ async function renderDetail(id) {
     '<h2>Message ' + esc(m.id.slice(0, 8)) + ' <span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span></h2>' +
     errors +
     match +
+    profile +
     '<p class="muted">' + esc(m.protocol) + ' · ' + esc(m.direction) + ' · device ' + esc(m.deviceId ?? '—') + ' · ' + new Date(m.receivedAt).toLocaleString() + '</p>' +
     actions +
     '<div class="grid2" style="margin-top:12px">' +

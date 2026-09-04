@@ -19,10 +19,16 @@ export interface TlsCredentials {
  * What a device's binding contributes to canonicalization (A4 seam): the
  * DeviceProfile's record layout plus its test-code mappings. `layout` may be
  * partial — missing groups fall back to the reference layout in the pipeline.
+ * `profile` carries the binding's identity so every message is stamped with
+ * the exact config (id + version) that parsed it; `certifiedVersion` is the
+ * profile's golden-recorded version (certification baseline) — when the
+ * stored version differs, messages are flagged as drifting.
  */
 export interface ProfileBinding {
   layout?: DeviceRecordLayout;
   mappings?: MappingTable;
+  profile?: { id: string; version: number };
+  certifiedVersion?: number;
 }
 
 /**
@@ -93,6 +99,10 @@ export class AstmGateway {
       protocol: message.protocol,
       direction: message.direction,
     });
+    // Replay re-parses with the global config (no device binding at this
+    // point) — keep the original message's profile provenance so a replayed
+    // copy stays attributable to the config that first parsed it.
+    replayed.profile = message.profile;
     replayed.timeline.unshift({
       stage: 'REPLAYED',
       at: new Date().toISOString(),
@@ -132,8 +142,9 @@ export class AstmGateway {
     // mapping table per-device); everything else uses the reference defaults.
     let layout: DeviceRecordLayout | undefined;
     let mappings = this.opts.mappings;
+    let binding: ProfileBinding | undefined;
     if (this.opts.resolveProfile) {
-      const binding = await this.opts.resolveProfile(deviceId);
+      binding = await this.opts.resolveProfile(deviceId);
       if (binding) {
         layout = binding.layout;
         mappings = { ...(this.opts.mappings ?? {}), ...(binding.mappings ?? {}) };
@@ -142,6 +153,23 @@ export class AstmGateway {
 
     const raw = records.map(serializeRecord).join('\r\n');
     const message = buildMessage(records, raw, { deviceId, mappings, layout });
+    // A4 version stamp: record the exact profile config that parsed this
+    // message, and flag drift when its version no longer matches the version
+    // its goldens were recorded under (profile edited post-certification). The
+    // flag is an annotation — the message is still delivered; the console and
+    // operators see the provenance and the drift.
+    if (binding?.profile) {
+      const { id, version } = binding.profile;
+      const drift = binding.certifiedVersion !== undefined && version !== binding.certifiedVersion;
+      message.profile = { id, version, ...(binding.certifiedVersion !== undefined ? { certifiedVersion: binding.certifiedVersion, drift } : {}) };
+      if (drift) {
+        message.timeline.push({
+          stage: 'FLAGGED',
+          at: new Date().toISOString(),
+          note: `profile ${id} v${version} drifted from its certified v${binding.certifiedVersion} (goldens) — verify config before trusting results`,
+        });
+      }
+    }
     // The pipeline produces MAPPED (or FAILED); the sink owns delivery and the
     // ROUTED/DLQ terminal transitions (plan §5.3).
     await this.persist(message);

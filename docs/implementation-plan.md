@@ -784,10 +784,10 @@ the "goldens in CI" M2 gate item is now concrete.
 
 Remaining M2 gate items (§8.1): **security review** — shipped (§13.6);
 **installer + remote update** — shipped (§13.7); **device → profile
-binding** — shipped (§13.9); certified profiles for 3–5 **real** analyzers
-via the field/vendor conformance program (workstream A6/K, gated on field
-access — risk R2); profile **versioning** enforcement at runtime remains
-modeled-but-unenforced.
+binding** — shipped (§13.9); profile **versioning** enforcement — shipped
+(§13.12); certified profiles for 3–5 **real** analyzers via the
+field/vendor conformance program (workstream A6/K, gated on field access —
+risk R2) remain.
 
 ### 13.6 M2 security review — API-key authn, per-role scopes, audit log: status
 
@@ -829,9 +829,9 @@ route, and every mutating action lands in an **audit log** (PRD §30, §34).
    `npm run test:db` = 123/123; both demos authenticated and clean.
 
 Remaining M2 gate items (§8.1): **installer + remote update** — shipped
-(§13.7); **device → profile binding** — shipped (§13.9); certified profiles
-for 3–5 **real** analyzers (gated on field access — risk R2); profile
-**versioning** enforcement remains modeled-but-unenforced.
+(§13.7); **device → profile binding** — shipped (§13.9); profile
+**versioning** enforcement — shipped (§13.12); certified profiles for 3–5
+**real** analyzers remain (gated on field access — risk R2).
 
 ### 13.7 M2 installer + remote update — Docker image, signed manifests, supervisor: status
 
@@ -946,10 +946,9 @@ layout + code mappings.
    158/158.
 
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
-gated on field access (risk R2); profile **versioning** on change is modeled
-(`version`, goldens per version) but not yet enforced at runtime — binding
-*configuration* (A4) is shipped; adapter *packaging/ecosystem* (install -
-adapter flow, workstream L, Phase 4) is out of M2 scope.
+gated on field access (risk R2); profile **versioning** enforcement — shipped
+(§13.12); adapter *packaging/ecosystem* (install - adapter flow, workstream L,
+Phase 4) is out of M2 scope.
 
 ### 13.10 Console Device profiles section + stored conformance: status
 
@@ -1023,6 +1022,42 @@ flow with a never-seen warning — in the console (Access keys panel) and a
    (the in-place-mutation bug — `before` read after `rotateSecret` — was
    caught and fixed). Both suites green: `npm test` = 173 (157 pass / 16
    DB-gated skip); `npm run test:db` = 173/173.
+
+### 13.12 Profile version stamping + runtime drift enforcement: status
+
+Shipped as runtime version enforcement on top of the A4 binding (§13.9): the
+version axis the model always carried (`version`, goldens per version) is now
+enforced — every message is stamped with the exact profile config that parsed
+it, and messages parsed under a profile edited after its certification are
+flagged instead of silently trusted.
+
+1. ✅ Stamp (`CanonicalMessage.profile`, shared): `{id, version,
+   certifiedVersion?, drift?}` — provenance for every parsed message,
+   persisted with the message and preserved across replay.
+2. ✅ Enforcement (gateway): `ProfileBinding` carries the profile identity;
+   the resolver supplies `certifiedVersion` (the version the profile's golden
+   transcripts were recorded under). When the stored version ≠ the certified
+   version — an edit after certification, or a rollback — the message gets
+   `drift: true` and a `FLAGGED` timeline entry naming both versions. Drift is
+   an annotation, never a drop: results still flow, operators see it.
+3. ✅ Wiring (`startHub`): the resolver now reads the golden file per profile
+   (`loadGoldenForProfile`, cached per hub process — goldens are static per
+   deploy) and returns id/version/certifiedVersion together.
+4. ✅ Console: message list shows a red *⚠ drift* marker; the detail view
+   shows the parsing profile badge with *matches certified vN* or the drift
+   warning.
+5. Tests: gateway matrix — clean stamp at the certified version, drift flagged
+   when edited-away (v2 vs certified v1) and on rollback (v1 vs certified v2),
+   no-drift-claim for profiles without recorded goldens, no stamp for unbound
+   devices, replay preserves provenance. Both suites green: `npm test` = 179
+   (163 pass / 16 DB-gated skip); `npm run test:db` = 179/179. Live e2e: a
+   device bound to the seeded acme-chem-200 sent its wire bytes under stored
+   v1 (clean stamp, GLU→GLUCOSE) and, after a POST upsert bumped the stored
+   profile to v2, the same bytes arrived stamped `drift: true` with the
+   FLAGGED timeline note.
+
+Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
+gated on field access (risk R2) only.
 
 ---
 

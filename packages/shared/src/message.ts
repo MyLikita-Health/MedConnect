@@ -85,6 +85,28 @@ export interface CanonicalMessage {
   duplicateOf?: string;
   /** Patient/order matching outcome (PRD §27); set by the matching engine. */
   match?: MessageMatch;
+  /**
+   * A4 profile stamp: the DeviceProfile config that parsed this message (id +
+   * version) and, when the hub knows the profile's certification baseline
+   * (its goldens record version `certifiedVersion`), whether the current
+   * stored profile has drifted from that baseline (edited after
+   * certification). Stamping makes every message auditable back to the exact
+   * config that produced it — version enforcement surfaces a drifted profile
+   * instead of silently parsing results with unverified offsets.
+   */
+  profile?: ProfileStamp;
+}
+
+/** Profile provenance of a parsed message (see CanonicalMessage.profile). */
+export interface ProfileStamp {
+  /** Profile id (device registry binding), e.g. 'acme-chem-200'. */
+  id: string;
+  /** Stored profile version at parse time. */
+  version: number;
+  /** Version the profile's goldens were recorded under (certification baseline). */
+  certifiedVersion?: number;
+  /** true when version ≠ certifiedVersion: the config drifted from its certification. */
+  drift?: boolean;
 }
 
 /** One delivery attempt against a destination (plan §5.1 Messages group). */
