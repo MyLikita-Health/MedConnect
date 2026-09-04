@@ -1463,7 +1463,13 @@ of C1–C6 is composition, not new protocol work):
      DB-driven `RouteStore` rules (console/http built-ins; an `hl7`
      destination throws → retry → DLQ, since imaging has no HL7 v2 form),
      and land ROUTED/FAILED in the same viewer as lab messages. Wired as
-     `hub.imaging` in startHub.
+     `hub.imaging` in startHub. **PG persistence**: the `imaging` field rides
+     in its own jsonb column on `messages` (migration `0012_imaging_messages`,
+     parallel to `payload`) — without it the PG store silently dropped the
+     study event on write/read. Pinned by a DB-gated pg-store round-trip test
+     and a live drive of the full chain against Postgres (ORM over MLLP →
+     order registry → worklist → performed study → ROUTED message read back
+     with `imaging` intact, visible at GET /api/v1/imaging).
    - **Pixels leg** — the adapter rounds out the C1 forwarding primitives
      with `configurePeer` (PUT /peers/{name}); `storeToPeer` is corrected to
      the peer endpoint's wire shape (plain resource-id array, vs the modality

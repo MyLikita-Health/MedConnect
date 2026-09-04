@@ -6,6 +6,7 @@
 import type { Pool, PoolClient } from 'pg';
 import type {
   CanonicalMessage,
+  ImagingPayload,
   LabPayload,
   MappingTable,
   MessageAttempt,
@@ -18,7 +19,7 @@ import type {
 import type { MarkFields, StoreBackend } from '../backend.js';
 import type { MessageFilter, StoreStats } from '../store.js';
 
-const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at, match_reason`;
+const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, imaging, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at, match_reason`;
 
 interface MessageRow {
   id: string;
@@ -29,6 +30,7 @@ interface MessageRow {
   raw: string;
   records: unknown;
   payload: unknown;
+  imaging: unknown;
   status: string;
   errors: unknown;
   timeline: unknown;
@@ -54,8 +56,8 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
       await client.query('BEGIN');
       await client.query(
         `INSERT INTO messages (id, protocol, direction, device_id, received_at, raw,
-                              records, payload, status, errors, timeline)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                              records, payload, imaging, status, errors, timeline)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           message.id,
           message.protocol,
@@ -65,6 +67,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
           message.raw,
           JSON.stringify(message.records ?? null),
           JSON.stringify(message.payload ?? null),
+          JSON.stringify(message.imaging ?? null),
           message.status,
           JSON.stringify(message.errors),
           JSON.stringify(message.timeline),
@@ -262,6 +265,7 @@ function rowToMessage(row: MessageRow): CanonicalMessage {
     raw: row.raw,
     records: (row.records as ParsedRecord[] | null) ?? undefined,
     payload: (row.payload as LabPayload | null) ?? undefined,
+    imaging: (row.imaging as ImagingPayload | null) ?? undefined,
     status: row.status as CanonicalMessage['status'],
     errors: (row.errors as string[]) ?? [],
     timeline: (row.timeline as TimelineEntry[]) ?? [],

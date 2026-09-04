@@ -93,6 +93,45 @@ test('Postgres stores round-trip a full message with canonical payload', { skip:
   await pool.query('DELETE FROM messages WHERE id = $1', [id]);
 });
 
+test('Postgres store round-trips an imaging study event (M3.3 performed study)', { skip: skipReason }, async () => {
+  if (!pool || !store) return skipTest('no pool');
+  const id = '00000000-0000-4000-8000-000000000002';
+  const msg = message(id, '2026-09-04T09:00:00.000Z', {
+    protocol: 'REST',
+    deviceId: 'orthanc',
+    raw: 'ORTHANC study 1.2.840.10008 accession ACC-PG-IMG performed',
+    imaging: {
+      kind: 'imaging',
+      accession: 'ACC-PG-IMG',
+      performedAt: '2026-09-04T09:00:01.000Z',
+      study: {
+        orthancId: 'study-pg-1',
+        patientOrthancId: 'pat-pg-1',
+        studyInstanceUid: '1.2.840.10008.1',
+        accessionNumber: 'ACC-PG-IMG',
+        studyDescription: 'CT CHEST',
+        series: [],
+        storageUrl: 'http://orthanc:8042/studies/study-pg-1',
+      },
+    },
+  });
+  await store.record(msg);
+
+  const got = await store.get(id);
+  assert.ok(got);
+  assert.ok(got.imaging, 'imaging field survives the PG round-trip');
+  assert.equal(got.imaging!.kind, 'imaging');
+  assert.equal(got.imaging!.accession, 'ACC-PG-IMG');
+  assert.equal(got.imaging!.study.orthancId, 'study-pg-1');
+  assert.equal(got.imaging!.study.storageUrl, 'http://orthanc:8042/studies/study-pg-1');
+  assert.equal(got.payload, undefined, 'imaging events carry no lab payload');
+  assert.equal(got.protocol, 'REST');
+  assert.equal(got.deviceId, 'orthanc');
+
+  // Clean up so sibling tests see a clean database.
+  await pool.query('DELETE FROM messages WHERE id = $1', [id]);
+});
+
 test('Postgres store lists newest-first with device/status filters and stats', { skip: skipReason }, async () => {
   if (!pool || !store) return skipTest('no pool');
   const ids = [
