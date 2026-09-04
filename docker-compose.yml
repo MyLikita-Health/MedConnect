@@ -63,8 +63,13 @@ services:
   # process (AGPLv3) the hub drives over its REST API; never embedded or linked
   # (plan §3.2 decision matrix, §7.5.5 boundary). The hub's @integration-hub/dicom
   # adapter talks REST only — no Node DICOM stack. REST: http://127.0.0.1:8042
+  #
+  # The derived image (docker/orthanc/Dockerfile) adds the REST-based Worklists
+  # plugin so the M3.2 MWL client works live: docker compose up -d --build orthanc
   orthanc:
-    image: jodogne/orthanc:latest
+    build:
+      context: ./docker/orthanc
+    image: medconnect-orthanc:0.1.0
     ports:
       - "8042:8042"  # Orthanc REST API + Explorer
       - "4242:4242"  # DICOM C-STORE/C-FIND port (modalities arrive here)

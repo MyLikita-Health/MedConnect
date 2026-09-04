@@ -1,0 +1,15 @@
+{
+  // Orthanc Worklists plugin config (github.com/orthanc-server/orthanc-worklists).
+  // Loaded because the container starts Orthanc in folder mode (Orthanc
+  // /etc/orthanc/ — all *.json merge, per the config docs' split-file pattern).
+  // "Worklists": {
+  //   "Enable": true                      -> serve DICOM MWL C-FIND + the REST API
+  //   "SaveInOrthancDatabase": true       -> REST-created items live in the Orthanc
+  //                                          DB (SQLite here), survive restarts,
+  //                                          and DELETE /worklists/{id} removes them
+  // }
+  "Worklists": {
+    "Enable": true,
+    "SaveInOrthancDatabase": true
+  }
+}

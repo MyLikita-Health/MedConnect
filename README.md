@@ -462,10 +462,14 @@ releases the held one, and prints the summary. The HL7 variants:
 `npm run demo:hl7` (inbound ORU over MLLP, same HELD→release loop) and
 `npm run demo:outbound` (results store-and-forward to a mock LIS over MLLP
 via an `hl7` destination + route rule). The imaging variant:
-`docker compose up -d orthanc && npm run demo:dicom` exercises the
-`@integration-hub/dicom` adapter against a **real Orthanc container**
-(create a CT study from DICOM tags → canonical metadata reads → live
-C-ECHO → cleanup).
+`docker compose up -d --build orthanc && npm run demo:dicom` exercises the
+`@integration-hub/dicom` adapter + MWL worklist client against a **real
+Orthanc container** (create a CT study from DICOM tags → canonical metadata
+reads → live C-ECHO → full M3.2 worklist loop: sync an order into the
+worklist idempotently, modality stores the performed study, poll retires the
+item → cleanup). The compose image is derived (`docker/orthanc/Dockerfile`)
+so it bundles the REST-based **Worklists plugin** (pinned 0.9.2, AGPLv3+,
+enabled DB-backed via merged config).
 
 ## Alerting (M2 — PRD §33)
 
@@ -581,10 +585,10 @@ pipeline canonicalizes correctly for both it and the reference layout.
   metadata shapes in shared + the `@integration-hub/dicom` Orthanc REST
   adapter plus the **MWL worklist client** (`sync` registry orders into the
   worklist idempotently, `pollPerformed` finds performed studies by
-  accession), with a real Orthanc container in the compose stack
-  (`docker compose up -d orthanc && npm run demo:dicom` — plan §13.16).
-  Live worklist sync needs the REST-based Worklists plugin, tracked under
-  M3.5 packaging.
+  accession). The compose `orthanc` service is a derived image that bundles
+  the REST-based **Worklists plugin** (pinned 0.9.2), so `npm run demo:dicom`
+  drives the whole MWL loop live against real Orthanc
+  (`docker compose up -d --build orthanc` — plan §13.16).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry

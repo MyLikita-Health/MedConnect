@@ -1421,11 +1421,17 @@ of C1–C6 is composition, not new protocol work):
    accession matched the synced set, and cleanup deletes the item once
    performed. Tested against a shared mock Orthanc HTTP server (create,
    idempotent re-sync, performed → item deleted, error paths).
-   ⚠️ **Live MWL needs the new REST-based Worklists plugin**: the compose
-   image ships the legacy folder-based sample (`libModalityWorklists`) with
-   no REST surface, and the new plugin (AGPL, Nov 2025) is packaged
-   independently — building it into the compose `orthanc` service is
-   tracked under M3.5 packaging (C5).
+   **Live MWL runs against real Orthanc**: the compose `orthanc` service is
+   now a derived image (`docker/orthanc/Dockerfile`) that adds the new
+   REST-based Worklists plugin (orthanc-server/orthanc-worklists, AGPLv3+,
+   prebuilt release pinned to 0.9.2 — the stock image ships only the legacy
+   folder-based sample, which is removed here since both plugins read the
+   same `Worklists` config section). The plugin is enabled DB-backed via a
+   merged config file (`worklists.json`, folder-mode startup) and
+   `npm run demo:dicom` drives the whole M3.2 loop live: sync → idempotent
+   re-sync → modality stores the performed study → poll retires the item.
+   Remaining C5 packaging (still M3.5): source-built plugin for ARM64 hosts
+   and version pinning/upgrade of the derived image.
 3. **M3.3 — Storage routing (C3)**: hub registers as an Orthanc forwarding
    peer to PACS/archive; study metadata + status flow through the dispatcher
    with DB-driven routing rules.
