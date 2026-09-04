@@ -9,6 +9,7 @@ import type {
   LabPayload,
   MappingTable,
   MessageAttempt,
+  MessageMatch,
   MessageSink,
   MessageStatus,
   ParsedRecord,
@@ -17,7 +18,7 @@ import type {
 import type { MarkFields, StoreBackend } from '../backend.js';
 import type { MessageFilter, StoreStats } from '../store.js';
 
-const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of`;
+const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at`;
 
 interface MessageRow {
   id: string;
@@ -33,6 +34,11 @@ interface MessageRow {
   timeline: unknown;
   dlq_at: Date | string | null;
   duplicate_of: string | null;
+  match_status: string | null;
+  matched_order_id: string | null;
+  matched_patient_id: string | null;
+  match_strategy: string | null;
+  match_at: Date | string | null;
 }
 
 export class PostgresMessageStore implements MessageSink, StoreBackend {
@@ -85,6 +91,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
       clauses.push(`status = $${params.length}`);
     }
     if (filter.dlq) clauses.push(`dlq_at IS NOT NULL`);
+    if (filter.held) clauses.push(`status = 'HELD'`);
     const limit = Math.min(filter.limit ?? 100, 500);
     params.push(limit);
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -104,9 +111,25 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
        SET status = $2,
            dlq_at = COALESCE($3, dlq_at),
            duplicate_of = COALESCE($4, duplicate_of),
+           match_status = COALESCE($6, match_status),
+           matched_order_id = COALESCE($7, matched_order_id),
+           matched_patient_id = COALESCE($8, matched_patient_id),
+           match_strategy = COALESCE($9, match_strategy),
+           match_at = COALESCE($10, match_at),
            timeline = timeline || $5::jsonb
        WHERE id = $1`,
-      [id, status, fields?.dlqAt ?? null, fields?.duplicateOf ?? null, entry],
+      [
+        id,
+        status,
+        fields?.dlqAt ?? null,
+        fields?.duplicateOf ?? null,
+        entry,
+        fields?.match?.status ?? null,
+        fields?.match?.matchedOrderId ?? null,
+        fields?.match?.matchedPatientId ?? null,
+        fields?.match?.strategy ?? null,
+        fields?.match?.at ?? null,
+      ],
     );
   }
 
@@ -241,5 +264,14 @@ function rowToMessage(row: MessageRow): CanonicalMessage {
     timeline: (row.timeline as TimelineEntry[]) ?? [],
     dlqAt: row.dlq_at ? new Date(row.dlq_at).toISOString() : undefined,
     duplicateOf: row.duplicate_of ?? undefined,
+    match: row.match_status
+      ? {
+          status: row.match_status as MessageMatch['status'],
+          matchedOrderId: row.matched_order_id ?? undefined,
+          matchedPatientId: row.matched_patient_id ?? undefined,
+          strategy: row.match_strategy ?? undefined,
+          at: new Date(row.match_at ?? new Date()).toISOString(),
+        }
+      : undefined,
   };
 }

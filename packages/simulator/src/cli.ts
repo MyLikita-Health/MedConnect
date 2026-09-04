@@ -10,6 +10,7 @@ const { values } = parseArgs({
     corruptRate: { type: 'string', default: '0' },
     device: { type: 'string', default: 'SIM-BS430' },
     id: { type: 'string', default: 'SIM-001' },
+    fixed: { type: 'boolean', default: false },
     debug: { type: 'boolean', default: false },
   },
 });
@@ -28,11 +29,13 @@ const simulator = new AnalyzerSimulator({
   count,
   intervalMs,
   corruptRate,
+  fixed: values.fixed,
   debug: values.debug ? (line) => console.log(`  ${line}`) : undefined,
 });
 
 console.log(`[simulator] ${values.device} (${values.id}) -> tcp://${host}:${port} · ${count} message(s)`);
 if (corruptRate > 0) console.log(`[simulator] corruptRate=${corruptRate} (exercising NAK/retry)`);
+if (values.fixed) console.log('[simulator] fixed fixture: patient PID-1001, order ACC-424242, sample S-4242');
 
 try {
   const transmitted = await simulator.run();

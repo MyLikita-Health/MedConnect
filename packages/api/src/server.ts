@@ -10,7 +10,7 @@ import net from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
-import { DEFAULT_RETRY, InMemoryRouteStore, type RouteStore } from '@integration-hub/core';
+import { DEFAULT_RETRY, InMemoryOrderRegistry, InMemoryRouteStore, type OrderRegistry, type RouteStore } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import { renderUi } from './ui.js';
 
@@ -23,8 +23,12 @@ export interface ApiServerOptions {
   mappings?: MappingTable;
   /** Routing configuration (destinations + rules); defaults to an in-memory store. */
   routes?: RouteStore;
+  /** Expected-order registry behind patient/order matching (PRD §27). */
+  orders?: OrderRegistry;
   /** Wired to the gateway so failed messages can be corrected + replayed. */
   replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
+  /** Wired to the dispatcher so held messages can be released into delivery. */
+  releaseHandler?: (id: string) => boolean | Promise<boolean>;
 }
 
 const registerDeviceSchema = z.object({
@@ -42,7 +46,16 @@ const listMessagesSchema = z.object({
   deviceId: z.string().optional(),
   status: z.string().optional(),
   dlq: z.coerce.boolean().optional(),
+  held: z.coerce.boolean().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const orderSchema = z.object({
+  id: z.string().min(1),
+  patientId: z.string().min(1),
+  sampleId: z.string().optional(),
+  tests: z.array(z.string()).default([]),
+  status: z.enum(['active', 'completed', 'cancelled']).default('active'),
 });
 
 const retrySchema = z.object({
@@ -73,9 +86,11 @@ const routeRuleSchema = z.object({
 export class ApiServer {
   private app?: FastifyInstance;
   private readonly routes: RouteStore;
+  private readonly orders: OrderRegistry;
 
   constructor(private opts: ApiServerOptions) {
     this.routes = opts.routes ?? new InMemoryRouteStore();
+    this.orders = opts.orders ?? new InMemoryOrderRegistry();
     const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
     this.app = app;
 
@@ -166,6 +181,32 @@ export class ApiServer {
       if (!message) return reply.code(404).send({ error: 'message not found' });
       await this.opts.store.mark(id, 'DISCARDED', 'discarded from DLQ');
       return reply.code(200).send({ ok: true, id });
+    });
+
+    // Exception queue (PRD §27–28): messages held for review that failed
+    // patient/order matching or validation. Release re-enters delivery.
+    app.get('/api/v1/held', async () => this.opts.store.list({ status: 'HELD' }));
+    app.post('/api/v1/messages/:id/release', async (req, reply) => {
+      if (!this.opts.releaseHandler) return reply.code(501).send({ error: 'release not wired' });
+      const { id } = req.params as { id: string };
+      const message = await this.opts.store.get(id);
+      if (!message) return reply.code(404).send({ error: 'message not found' });
+      const released = await this.opts.releaseHandler(id);
+      if (!released) return reply.code(409).send({ error: 'message is not in the HELD queue' });
+      return reply.code(200).send({ ok: true, id });
+    });
+
+    // Expected-order registry (the LIS interface seam, PRD §27).
+    app.get('/api/v1/orders', async () => this.orders.list());
+    app.post('/api/v1/orders', async (req, reply) => {
+      const order = orderSchema.parse(req.body);
+      await this.orders.register({ ...order, receivedAt: new Date().toISOString() });
+      return reply.code(201).send(order);
+    });
+    app.delete('/api/v1/orders/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      await this.orders.remove(id);
+      return reply.code(204).send();
     });
 
     app.get('/api/v1/results', async () => {

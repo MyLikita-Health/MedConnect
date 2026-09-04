@@ -5,7 +5,7 @@
  * stores stay synchronous while the durable Postgres stores are async — the
  * Fastify handlers `await` everything, which works for both.
  */
-import type { CanonicalMessage, MappingTable, MessageAttempt, MessageStatus } from '@integration-hub/shared';
+import type { CanonicalMessage, MappingTable, MessageAttempt, MessageMatch, MessageStatus } from '@integration-hub/shared';
 import type { DeviceRecord, RegisterDeviceInput } from './devices.js';
 import type { MessageFilter, StoreStats } from './store.js';
 
@@ -15,6 +15,8 @@ export type DeviceKind = 'memory' | 'postgres';
 export interface MarkFields {
   dlqAt?: string;
   duplicateOf?: string;
+  /** Patient/order matching outcome (PRD §27, E6). */
+  match?: MessageMatch;
 }
 
 export interface StoreBackend {

@@ -682,6 +682,44 @@ Exit: M0 gate (§8.1) — demo runs against Postgres (`npm run demo:db`), all sc
   would break single-tenant edge mode. Policies arrive with the tenancy
   mechanism in M4 (§5.2).
 
+### 13.3 M2 sprint 1 — clinical correctness (E5 + E6): status
+
+Shipped as `M2 sprint 1: clinical correctness` (matching, validation, HELD
+queue). M2 gate items patient/order matching (E6) and validation rules (E5)
+are implemented end-to-end; alerting (I), DeviceProfile model + goldens
+(A2/K) are the next M2 sprints.
+
+1. ✅ Matching engine (`packages/core/src/matching.ts`, PRD §27): configurable
+   key strategies (default: patientId+orderId → patientId+sampleId); outcomes
+   MATCHED / UNMATCHED / AMBIGUOUS / REJECTED; never silently auto-assigns —
+   everything but a unique hit is HELD. Registry = the **LIS seam**:
+   expected orders (`/api/v1/orders` CRUD; `order_registry` table in
+   migration `0003`; `InMemoryOrderRegistry` + `PostgresOrderRegistry`).
+2. ✅ Validation engine (`packages/core/src/validate.ts`, PRD §28): per-rule
+   config + severity for patientMatched / orderExists / testKnown /
+   unitRecognized / resultPlausible / deviceAuthorized; error-severity
+   findings hold, warnings are recorded on the timeline. Server seeds
+   catalog + numeric bounds (unit-convention note: seeds are mg/dL-style to
+   match the reference simulator).
+3. ✅ Lifecycle: `HELD` status + `MessageMatch` metadata on the message;
+   `messages.match_*` columns; dispatcher runs match → validate → dedup →
+   route (clinical gate before delivery); `release()` re-enters a HELD
+   message into delivery. API: `GET /api/v1/held`, `POST
+   /api/v1/messages/:id/release`; console shows HELD (color, match badge,
+   Review & release action).
+4. ✅ Simulator `--fixed` fixture mode (deterministic patient/order/sample for
+   matching fixtures); `npm run demo` now registers the expected order,
+   sends matched + stray samples, releases the HELD one, prints the summary.
+5. Test status: in-memory suite green (`npm test` = 85: 76 pass / 9
+   DB-gated skip). DB suite (`npm run test:db`, +9 integration cases incl.
+   Postgres matching → HELD → release round-trip) written but **not yet
+   executed** — Docker Desktop was wedged during the sprint (daemon socket
+   unresponsive; `docker compose ps` hangs). Re-run after Docker recovers:
+   `npm run db:up && npm run test:db`.
+
+Exit criteria from §8.1 not yet met: alerting live, security review,
+installer/remote update, certified profiles + goldens, GA release.
+
 ---
 
 ## 14. Plan maintenance

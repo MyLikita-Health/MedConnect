@@ -9,7 +9,7 @@
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, MessageStore, PostgresDeviceRegistry, PostgresMessageStore, type DeviceBackend, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
-import { Dispatcher, InMemoryDedupStore, InMemoryRouteStore, PostgresDedupStore, PostgresRouteStore, type DispatcherOptions, type RouteStore } from '@integration-hub/core';
+import { DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryRouteStore, PostgresDedupStore, PostgresOrderRegistry, PostgresRouteStore, type DispatcherOptions, type OrderRegistry, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 export interface HubOptions {
@@ -19,6 +19,8 @@ export interface HubOptions {
   mappings?: Record<string, string>;
   /** PostgreSQL connection string; falls back to the DATABASE_URL env var. */
   databaseUrl?: string;
+  /** Disable the patient/order matching hold (safety bypass; tests only). */
+  matchOnUnmatched?: 'hold' | 'deliver';
 }
 
 export interface Hub {
@@ -42,6 +44,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let devices: DeviceBackend;
   let routes: RouteStore;
   let dedup: DispatcherOptions['dedup'];
+  let orders: OrderRegistry;
   let mappings = opts.mappings ?? DEFAULT_MAPPINGS;
   let pool: Pool | undefined;
 
@@ -55,6 +58,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     devices = new PostgresDeviceRegistry(pool);
     routes = new PostgresRouteStore(pool);
     dedup = new PostgresDedupStore(pool);
+    orders = new PostgresOrderRegistry(pool);
 
     // Seed the default mapping table once so DB mappings match scaffold defaults.
     if (!opts.mappings) await pgStore.setMappings(DEFAULT_MAPPINGS);
@@ -64,13 +68,21 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     devices = new DeviceRegistry();
     routes = new InMemoryRouteStore();
     dedup = new InMemoryDedupStore();
+    orders = new InMemoryOrderRegistry();
   }
 
-  // The dispatcher owns delivery: dedup → route → queue → retry → DLQ (plan §5.3).
+  // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
+  // → queue → retry → DLQ (plan §5.3). Matching is the clinical safety gate:
+  // results that don't uniquely match a registered order are HELD, not delivered.
   const dispatcher = new Dispatcher({
     store,
     dedup,
     routes,
+    matching: {
+      registry: orders,
+      config: { strategies: [['patientId', 'orderId'], ['patientId', 'sampleId']], onUnmatched: opts.matchOnUnmatched ?? 'hold' },
+    },
+    validation: { config: defaultValidationConfig(mappings) },
     log: (line) => console.log(line),
   });
   dispatcher.start();
@@ -104,8 +116,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     store,
     devices,
     routes,
+    orders,
     mappings,
     replayHandler: (message) => gateway.replay(message),
+    releaseHandler: (id) => dispatcher.release(id),
   });
 
   const { port: devicePort } = await gateway.start();
@@ -125,6 +139,52 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       await api.stop();
       await gateway.stop();
       if (pool) await closeDbPool(pool);
+    },
+  };
+}
+
+/**
+ * Default validation configuration (PRD §28). The test catalog derives from
+ * the active mapping table (canonical codes); unit and plausibility rules are
+ * conservative (warn-level) so the safe matching hold stays the main gate.
+ */
+function defaultValidationConfig(mappings: Record<string, string>): ValidationConfig {
+  const testCatalog = [...new Set(Object.values(mappings))];
+  return {
+    rules: {
+      patientMatched: { enabled: true, severity: 'error' },
+      orderExists: { enabled: true, severity: 'error' },
+      testKnown: { enabled: true, severity: 'warn' },
+      unitRecognized: { enabled: true, severity: 'warn' },
+      resultPlausible: { enabled: true, severity: 'error' },
+      deviceAuthorized: { enabled: false, severity: 'error' },
+    },
+    testCatalog,
+    unitCatalog: DEFAULT_UNIT_CATALOG,
+    // Plausibility seeds. Bounds are unit-dependent: these assume the
+    // US-style conventions the reference simulator emits (mg/dL for
+    // metabolites, g/dL for hemoglobin). Per-site config replaces them
+    // for the facility's unit convention — a mismatch shows up as HELD
+    // messages, which is exactly the safety gate working.
+    numericBounds: {
+      GLUCOSE: { min: 10, max: 600 },          // mg/dL
+      CREATININE: { min: 0.1, max: 25 },       // mg/dL
+      UREA: { min: 2, max: 200 },              // mg/dL
+      SODIUM: { min: 90, max: 180 },           // mmol/L
+      POTASSIUM: { min: 1, max: 10 },          // mmol/L
+      CHLORIDE: { min: 60, max: 140 },         // mmol/L
+      CALCIUM: { min: 5, max: 15 },            // mg/dL
+      ALT: { min: 1, max: 1000 },              // U/L
+      AST: { min: 1, max: 1000 },              // U/L
+      GGT: { min: 1, max: 1000 },              // U/L
+      ALKALINE_PHOSPHATASE: { min: 1, max: 2000 }, // U/L
+      WBC: { min: 0.1, max: 300 },             // 10^3/uL
+      RBC: { min: 0.5, max: 10 },              // 10^6/uL
+      HEMOGLOBIN: { min: 3, max: 25 },         // g/dL
+      HEMATOCRIT: { min: 5, max: 70 },         // %
+      PLATELET_COUNT: { min: 10, max: 1500 },  // 10^3/uL
+      NEUTROPHILS: { min: 0.1, max: 30 },      // 10^3/uL
+      LYMPHOCYTES: { min: 0.1, max: 30 },      // 10^3/uL
     },
   };
 }

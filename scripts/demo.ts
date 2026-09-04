@@ -48,24 +48,41 @@ async function main(): Promise<void> {
   const server = run(['packages/server/src/cli.ts'], { PORT: '3000', DEVICE_PORT: '5000', HOST: '127.0.0.1' });
   await waitForOutput(server, 'REST listening');
 
-  const simulator = run([
-    'packages/simulator/src/cli.ts',
-    '--count', '3',
-    '--interval', '500',
-    '--debug',
-  ]);
-  const code = await exitCode(simulator);
-  if (code !== 0) throw new Error('simulator exited with non-zero code');
-
   const base = 'http://127.0.0.1:3000/api/v1';
 
-  // Delivery is asynchronous (dedup → queue → worker → ROUTED); wait for the
+  // 1. The LIS seam: register the expected order so incoming results can be
+  //    matched (PRD §27). PID-1001 / ACC-424242 / S-4242 is the simulator's
+  //    fixed fixture.
+  console.log('[demo] registering expected order ACC-424242 (LIS seam)');
+  const orderRes = await fetch(`${base}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'ACC-424242', patientId: 'PID-1001', sampleId: 'S-4242', tests: ['GLUCOSE', 'CREATININE'] }),
+  });
+  if (orderRes.status !== 201) throw new Error(`order registration failed: ${orderRes.status}`);
+
+  // 2. Two matched results (fixed fixture) + one stray result from an unknown
+  //    patient (random fixture) that cannot be matched → held for review.
+  const matched = run(['packages/simulator/src/cli.ts', '--count', '2', '--interval', '500', '--fixed']);
+  if ((await exitCode(matched)) !== 0) throw new Error('simulator (fixed) exited with non-zero code');
+  const stray = run(['packages/simulator/src/cli.ts', '--count', '1']);
+  if ((await exitCode(stray)) !== 0) throw new Error('simulator (random) exited with non-zero code');
+
+  // Delivery is asynchronous (match → queue → worker → ROUTED); wait for the
   // queue to drain so the summary shows terminal states only.
-  for (let i = 0; i < 100; i++) {
-    const stats = (await (await fetch(`${base}/stats`)).json()) as { pending: number };
-    if (stats.pending === 0) break;
-    await new Promise((r) => setTimeout(r, 100));
+  await waitForPending(base, 0);
+
+  // 3. The stray result should sit in the HELD exception queue (never silently
+  //    auto-assigned, never dropped). The operator reviews and releases it.
+  const held = (await (await fetch(`${base}/held`)).json()) as Array<{ id: string; status: string; match: { status: string } }>;
+  console.log(`\n[held] ${held.length} message(s) in the exception queue`);
+  for (const m of held) {
+    console.log(`  ${m.id.slice(0, 8)}  ${m.status}  match=${m.match?.status}`);
+    const release = await fetch(`${base}/messages/${m.id}/release`, { method: 'POST' });
+    if (release.status !== 200) throw new Error(`release failed: ${release.status}`);
+    console.log(`  → released by operator, re-entering delivery`);
   }
+  await waitForPending(base, 0);
 
   const stats = await (await fetch(`${base}/stats`)).json();
   const messages = await (await fetch(`${base}/messages`)).json();
@@ -74,11 +91,22 @@ async function main(): Promise<void> {
   console.log('\n=== Demo summary ===');
   console.log(JSON.stringify(stats, null, 2));
   console.log(`messages: ${messages.length}`);
-  for (const m of messages.slice(0, 3)) {
-    console.log(`  ${m.id.slice(0, 8)}  ${m.status.padEnd(7)} ${m.deviceId}  patient=${m.payload?.patient.name}  results=${m.payload?.results.length}`);
+  for (const m of messages.slice(0, 4)) {
+    console.log(
+      `  ${m.id.slice(0, 8)}  ${m.status.padEnd(7)} match=${(m.match?.status ?? '—').padEnd(9)} ${m.deviceId}  patient=${m.payload?.patient.name}  results=${m.payload?.results.length}`,
+    );
   }
   console.log(`results: ${results.length}`);
   console.log('\nOpen the console UI: http://127.0.0.1:3000/');
+}
+
+async function waitForPending(base: string, target: number): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    const stats = (await (await fetch(`${base}/stats`)).json()) as { pending: number };
+    if (stats.pending === target) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('timed out waiting for delivery to drain');
 }
 
 main()

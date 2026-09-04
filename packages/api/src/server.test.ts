@@ -159,6 +159,77 @@ test('dlq endpoint lists failed messages and discard retires them', async (t) =>
   assert.equal(missing.status, 404);
 });
 
+test('order registry endpoints register, list and remove expected orders', async (t) => {
+  const { base } = await startApi(t);
+  const res = await fetch(`${base}/api/v1/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 'ACC-424242',
+      patientId: 'PID-1001',
+      sampleId: 'S-4242',
+      tests: ['GLUCOSE', 'CREATININE'],
+    }),
+  });
+  assert.equal(res.status, 201);
+
+  const list = (await (await fetch(`${base}/api/v1/orders`)).json()) as Array<{ id: string; patientId: string }>;
+  assert.equal(list.length, 1);
+  assert.equal(list[0]!.id, 'ACC-424242');
+  assert.equal(list[0]!.patientId, 'PID-1001');
+
+  const deleted = await fetch(`${base}/api/v1/orders/ACC-424242`, { method: 'DELETE' });
+  assert.equal(deleted.status, 204);
+  assert.equal(((await (await fetch(`${base}/api/v1/orders`)).json()) as unknown[]).length, 0);
+});
+
+test('held endpoint lists the exception queue and release re-enters delivery', async (t) => {
+  const store = new MessageStore();
+  const devices = new DeviceRegistry();
+  const released: string[] = [];
+  const api = new ApiServer({
+    port: 0,
+    host: '127.0.0.1',
+    store,
+    devices,
+    releaseHandler: (id) => {
+      released.push(id);
+      if (store.get(id)?.status === 'HELD') {
+        store.mark(id, 'QUEUED', 'released by operator after review');
+        return true;
+      }
+      return false;
+    },
+  });
+  const { port } = await api.start();
+  t.after(() => api.stop());
+  const base = `http://127.0.0.1:${port}`;
+
+  store.record(message({ id: 'm1', status: 'HELD', match: { status: 'UNMATCHED', at: new Date().toISOString() } }));
+  store.record(message({ id: 'm2', status: 'ROUTED' }));
+
+  const held = (await (await fetch(`${base}/api/v1/held`)).json()) as Array<{ id: string }>;
+  assert.equal(held.length, 1);
+  assert.equal(held[0]!.id, 'm1');
+
+  const release = await fetch(`${base}/api/v1/messages/m1/release`, { method: 'POST' });
+  assert.equal(release.status, 200);
+  assert.deepEqual(released, ['m1']);
+  assert.equal(store.get('m1')?.status, 'QUEUED');
+
+  const notHeld = await fetch(`${base}/api/v1/messages/m2/release`, { method: 'POST' });
+  assert.equal(notHeld.status, 409);
+  const missing = await fetch(`${base}/api/v1/messages/ghost/release`, { method: 'POST' });
+  assert.equal(missing.status, 404);
+});
+
+test('release endpoint returns 501 when no handler is wired', async (t) => {
+  const { base, store } = await startApi(t);
+  store.record(message({ id: 'm1', status: 'HELD' }));
+  const res = await fetch(`${base}/api/v1/messages/m1/release`, { method: 'POST' });
+  assert.equal(res.status, 501);
+});
+
 test('results endpoint flattens result rows across messages', async (t) => {
   const { base, store } = await startApi(t);
   store.record(

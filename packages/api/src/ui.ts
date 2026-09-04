@@ -34,8 +34,12 @@ export function renderUi(): string {
   .status { font-weight:600; }
   .status.ROUTED, .status.MAPPED { color:var(--ok); }
   .status.FAILED { color:var(--err); }
+  .status.HELD { color:#c084fc; }
   .status.RECEIVED, .status.PARSED, .status.VALIDATED, .status.QUEUED, .status.DELIVERING { color:var(--warn); }
   .status.DUPLICATE, .status.DISCARDED { color:var(--muted); }
+  .match { font-size:11px; color:var(--muted); }
+  .match.MATCHED { color:var(--ok); }
+  .match.AMBIGUOUS, .match.UNMATCHED, .match.REJECTED { color:#c084fc; }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:280px; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all; }
   button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:12px; }
   .muted { color:var(--muted); }
@@ -98,8 +102,10 @@ async function refresh() {
 }
 
 function renderStats(s) {
+  const held = s.byStatus && (s.byStatus.HELD || 0);
   document.getElementById('stats').innerHTML = [
     ['Messages', s.total], ['Today', s.today], ['Failed', s.failed], ['Pending', s.pending],
+    ['Held', held], ['DLQ', s.byStatus.FAILED || 0],
   ].map(([k, v]) => '<div class="stat"><b>' + v + '</b><span>' + k + '</span></div>').join('');
 }
 
@@ -119,7 +125,9 @@ function renderMessages(messages) {
       '<tr class="msg" onclick="openDetail(\\'' + m.id + '\\')">' +
       '<td class="muted">' + new Date(m.receivedAt).toLocaleTimeString() + '</td>' +
       '<td>' + esc(m.deviceId ?? '—') + '</td>' +
-      '<td><span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span></td>' +
+      '<td><span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span>' +
+      (m.match ? '<br/><span class="match ' + esc(m.match.status) + '">' + esc(m.match.status) + '</span>' : '') +
+      '</td>' +
       '<td>' + (m.payload ? m.payload.results.length : 0) + '</td>' +
       '<td class="col-id">' + esc(m.id.slice(0, 8)) + '</td></tr>'
     ).join('') || '<tr><td colspan="5" class="muted">No messages yet. Start the simulator.</td></tr>';
@@ -140,11 +148,20 @@ async function renderDetail(id) {
     '<tr><td>' + esc(r.type) + '</td><td>' + esc(r.fields.join(' | ')) + '</td></tr>').join('');
   const timeline = (m.timeline || []).map(t =>
     '<li><b>' + esc(t.stage) + '</b> ' + new Date(t.at).toLocaleTimeString() + (t.note ? ' — ' + esc(t.note) : '') + '</li>').join('');
+  const match = m.match ?
+    '<p><span class="match ' + esc(m.match.status) + '">' + esc(m.match.status) + '</span>' +
+    (m.match.strategy ? ' via ' + esc(m.match.strategy) : '') +
+    (m.match.matchedOrderId ? ' → order ' + esc(m.match.matchedOrderId) : '') +
+    (m.match.reason ? ' — ' + esc(m.match.reason) : '') + '</p>' : '';
+  const actions = (m.status === 'HELD'
+    ? '<button onclick="releaseMessage(\\'' + m.id + '\\')">Review &amp; release</button> '
+    : '') + '<button onclick="replayMessage(\\'' + m.id + '\\')">Replay</button>';
   panel.innerHTML =
     '<h2>Message ' + esc(m.id.slice(0, 8)) + ' <span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span></h2>' +
     errors +
+    match +
     '<p class="muted">' + esc(m.protocol) + ' · ' + esc(m.direction) + ' · device ' + esc(m.deviceId ?? '—') + ' · ' + new Date(m.receivedAt).toLocaleString() + '</p>' +
-    '<button onclick="replayMessage(\\'' + m.id + '\\')">Replay</button>' +
+    actions +
     '<div class="grid2" style="margin-top:12px">' +
       '<div><h2>Raw message</h2><pre>' + esc(m.raw) + '</pre></div>' +
       '<div><h2>Parsed records</h2><table><thead><tr><th>T</th><th>Fields</th></tr></thead><tbody>' + records + '</tbody></table></div>' +
@@ -157,6 +174,12 @@ async function renderDetail(id) {
 
 async function replayMessage(id) {
   await fetch('/api/v1/messages/' + id + '/replay', { method: 'POST' });
+  selectedId = null;
+  await refresh();
+}
+
+async function releaseMessage(id) {
+  await fetch('/api/v1/messages/' + id + '/release', { method: 'POST' });
   selectedId = null;
   await refresh();
 }

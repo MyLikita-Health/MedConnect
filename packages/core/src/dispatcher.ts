@@ -7,21 +7,33 @@
  *   1. persists the message (viewer sees it immediately),
  *   2. rejects duplicates within the dedup window (PRD §29 → DUPLICATE),
  *   3. sends pipeline-validation failures straight to the DLQ (never dropped),
- *   4. resolves destinations from DB-driven route rules (§5.1 Routing),
- *   5. delivers with per-destination retry/backoff, recording every attempt,
+ *   4. runs patient/order matching (E6, PRD §27) and result validation
+ *      (E5, PRD §28); failures are HELD in the exception queue for review —
+ *      never silently auto-assigned, never delivered,
+ *   5. resolves destinations from DB-driven route rules (§5.1 Routing),
+ *   6. delivers with per-destination retry/backoff, recording every attempt,
  *      then ROUTED on success or FAILED + DLQ once attempts are exhausted.
  *
  * Delivery is processed in-process (the edge-outbox pattern, plan §4.2); the
  * worker is swappable for Redis/BullMQ on the cloud side via the same seam.
  */
-import type { CanonicalMessage, MessageAttempt, MessageSink, MessageStatus } from '@integration-hub/shared';
+import type { CanonicalMessage, MessageAttempt, MessageMatch, MessageSink, MessageStatus } from '@integration-hub/shared';
 import { dedupKey, type DedupStore } from './dedup.js';
+import { matchMessage, matchToMessageMatch, DEFAULT_MATCHING_CONFIG, type MatchingConfig, type OrderRegistry } from './matching.js';
 import { resolveDestinations, type Destination, type RetryPolicy, type RouteStore } from './routing.js';
+import { validateMessage, type ValidationConfig } from './validate.js';
 
 export interface DeliveryStore {
   record(message: CanonicalMessage): void | Promise<void>;
-  mark(id: string, status: MessageStatus, note?: string, fields?: { dlqAt?: string; duplicateOf?: string }): void | Promise<void>;
+  mark(
+    id: string,
+    status: MessageStatus,
+    note?: string,
+    fields?: { dlqAt?: string; duplicateOf?: string; match?: MessageMatch },
+  ): void | Promise<void>;
   recordAttempt(attempt: MessageAttempt): void | Promise<void>;
+  /** Used by `release()` to re-enter a held message into delivery. */
+  get?(id: string): CanonicalMessage | undefined | Promise<CanonicalMessage | undefined>;
 }
 
 export interface DispatcherOptions {
@@ -31,6 +43,14 @@ export interface DispatcherOptions {
   /** Default true; disable to allow identical re-deliveries. */
   dedupEnabled?: boolean;
   dedupTtlMs?: number;
+  /**
+   * Patient/order matching (PRD §27). Omit to skip matching (protocol-level
+   * delivery only). When set with `onUnmatched: 'hold'` (the default), any
+   * message that does not uniquely match a registered order is HELD.
+   */
+  matching?: { registry: OrderRegistry; config?: MatchingConfig };
+  /** Result validation (PRD §28); runs after matching when configured. */
+  validation?: { config: Partial<ValidationConfig> };
   /** Worker poll interval when the queue is empty. */
   pollMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -73,9 +93,60 @@ export class Dispatcher implements MessageSink {
       await this.opts.dedup.add(key, message.id, this.opts.dedupTtlMs ?? DEFAULT_DEDUP_TTL_MS);
     }
 
+    // Patient/order matching (E6) then validation (E5). Hold outcomes park the
+    // message in the exception queue; the operator reviews and releases it.
+    let match: MessageMatch | undefined;
+    if (this.opts.matching) {
+      const outcome = await matchMessage(
+        message,
+        this.opts.matching.registry,
+        this.opts.matching.config ?? DEFAULT_MATCHING_CONFIG,
+      );
+      match = matchToMessageMatch(outcome);
+      message.match = match;
+      await this.opts.store.mark(message.id, message.status, `match: ${outcome.status}${outcome.strategy ? ` (${outcome.strategy})` : ''}`, { match });
+      const hold = outcome.status !== 'MATCHED' && (this.opts.matching.config ?? DEFAULT_MATCHING_CONFIG).onUnmatched === 'hold';
+      if (hold) {
+        await this.hold(message, outcome.status === 'REJECTED' ? outcome.reason ?? 'rejected' : `not matched: ${outcome.status}`);
+        return;
+      }
+    }
+
+    if (this.opts.validation) {
+      const result = validateMessage(message, match, this.opts.validation.config);
+      if (result.errors.length > 0) {
+        await this.hold(message, `validation failed: ${result.errors.join('; ')}`);
+        return;
+      }
+      if (result.warnings.length > 0) {
+        await this.opts.store.mark(message.id, message.status, `validation: ${result.warnings.length} warning(s) — ${result.warnings.join('; ')}`);
+      }
+    }
+
     const destinations = await resolveDestinations(this.opts.routes, message);
     await this.opts.store.mark(message.id, 'QUEUED', `${destinations.length} destination(s): ${destinations.map((d) => d.id).join(', ')}`);
     this.queue.push({ message, destinations });
+  }
+
+  /**
+   * Operator action on the exception queue (PRD §27/§28): re-enters a HELD
+   * message into delivery. Returns false when the message is not held.
+   */
+  async release(id: string): Promise<boolean> {
+    if (!this.opts.store.get) return false;
+    const message = await this.opts.store.get(id);
+    if (!message || message.status !== 'HELD') return false;
+    await this.opts.store.mark(id, 'QUEUED', 'released by operator after review');
+    message.status = 'QUEUED';
+    const destinations = await resolveDestinations(this.opts.routes, message);
+    this.queue.push({ message, destinations });
+    this.opts.log?.(`[dispatcher] ${id} released into delivery`);
+    return true;
+  }
+
+  private async hold(message: CanonicalMessage, reason: string): Promise<void> {
+    await this.opts.store.mark(message.id, 'HELD', `HELD: ${reason}`);
+    this.opts.log?.(`[dispatcher] ${message.id} → HELD (${reason})`);
   }
 
   start(): void {

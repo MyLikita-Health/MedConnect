@@ -2,10 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { CanonicalMessage, MessageAttempt, MessageStatus } from '@integration-hub/shared';
+import type { CanonicalMessage, MessageAttempt, MessageMatch, MessageStatus } from '@integration-hub/shared';
 import { InMemoryDedupStore } from './dedup.js';
 import { Dispatcher, type DeliveryStore } from './dispatcher.js';
+import { InMemoryOrderRegistry } from './matching.js';
 import { InMemoryRouteStore, type Destination } from './routing.js';
+import { DEFAULT_VALIDATION_RULES, type ValidationConfig } from './validate.js';
 
 class FakeStore implements DeliveryStore {
   readonly messages = new Map<string, CanonicalMessage>();
@@ -15,17 +17,22 @@ class FakeStore implements DeliveryStore {
     this.messages.set(message.id, structuredClone(message));
   }
 
-  async mark(id: string, status: MessageStatus, note?: string, fields?: { dlqAt?: string; duplicateOf?: string }): Promise<void> {
+  async mark(id: string, status: MessageStatus, note?: string, fields?: { dlqAt?: string; duplicateOf?: string; match?: MessageMatch }): Promise<void> {
     const message = this.messages.get(id);
     if (!message) throw new Error(`mark: unknown message ${id}`);
     message.status = status;
     if (fields?.dlqAt) message.dlqAt = fields.dlqAt;
     if (fields?.duplicateOf) message.duplicateOf = fields.duplicateOf;
+    if (fields?.match) message.match = fields.match;
     message.timeline.push({ stage: status, at: new Date().toISOString(), note });
   }
 
   async recordAttempt(attempt: MessageAttempt): Promise<void> {
     this.attempts.push(attempt);
+  }
+
+  async get(id: string): Promise<CanonicalMessage | undefined> {
+    return this.messages.get(id);
   }
 }
 
@@ -209,4 +216,123 @@ test('dedup can be disabled', async (t) => {
   await waitFor(() => store.messages.get('m2')?.status === 'ROUTED');
 
   assert.equal(store.messages.get('m2')!.status, 'ROUTED');
+});
+
+test('unmatched messages are HELD, not delivered (no silent auto-assign)', async (t) => {
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    matching: { registry: new InMemoryOrderRegistry() }, // no registered orders
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'HELD');
+
+  const got = store.messages.get('m1')!;
+  assert.equal(got.status, 'HELD');
+  assert.equal(got.match?.status, 'UNMATCHED');
+  assert.ok(got.timeline.some((e) => e.stage === 'HELD'));
+  assert.equal(store.attempts.length, 0);
+});
+
+test('matching registers the outcome and routes on a unique hit', async (t) => {
+  const store = new FakeStore();
+  const registry = new InMemoryOrderRegistry();
+  await registry.register({ id: 'O1', patientId: 'P1', sampleId: 'S1', tests: ['GLUCOSE'], status: 'active', receivedAt: new Date().toISOString() });
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    matching: { registry },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  const msg = message('m1');
+  msg.payload!.order = { id: 'O1', sampleId: 'S1', tests: [] };
+  await dispatcher.record(msg);
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+
+  const got = store.messages.get('m1')!;
+  assert.equal(got.match?.status, 'MATCHED');
+  assert.equal(got.match?.matchedOrderId, 'O1');
+  assert.equal(got.match?.strategy, 'patientId+orderId');
+});
+
+test('release() re-enters a held message into delivery', async (t) => {
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    matching: { registry: new InMemoryOrderRegistry() },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'HELD');
+  assert.equal(await dispatcher.release('m1'), true);
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+  assert.ok(store.messages.get('m1')!.timeline.some((e) => e.note?.includes('released by operator')));
+});
+
+test('release() refuses messages that are not held', async (t) => {
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+  assert.equal(await dispatcher.release('m1'), false);
+  assert.equal(await dispatcher.release('nope'), false);
+});
+
+test('validation errors hold the message in the exception queue', async (t) => {
+  const store = new FakeStore();
+  const registry = new InMemoryOrderRegistry();
+  await registry.register({ id: 'O1', patientId: 'P1', sampleId: 'S1', tests: ['GLUCOSE'], status: 'active', receivedAt: new Date().toISOString() });
+  const validation: Partial<ValidationConfig> = {
+    rules: { ...DEFAULT_VALIDATION_RULES, resultPlausible: { enabled: true, severity: 'error' } },
+    numericBounds: { GLUCOSE: { min: 0.5, max: 40 } },
+  };
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    matching: { registry },
+    validation: { config: validation },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  const msg = message('m1');
+  msg.payload!.order = { id: 'O1', sampleId: 'S1', tests: [] };
+  msg.payload!.results = [{ testCode: 'GLUCOSE', value: '999', unit: 'mmol/L' }];
+  await dispatcher.record(msg);
+  await waitFor(() => store.messages.get('m1')?.status === 'HELD');
+
+  const got = store.messages.get('m1')!;
+  assert.equal(got.match?.status, 'MATCHED');
+  assert.ok(got.timeline.some((e) => e.note?.includes('outside plausible range')));
+  assert.equal(store.attempts.length, 0);
 });

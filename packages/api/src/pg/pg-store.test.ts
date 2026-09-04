@@ -149,3 +149,29 @@ test('Postgres device registry registers, upserts and stats', { skip: skipReason
   const stats = await devices.stats();
   assert.equal(stats.total, 2);
 });
+
+test('Postgres store persists match metadata and filters the held queue', { skip: skipReason }, async () => {
+  if (!pool || !store) return skipTest('no pool');
+  const id = '00000000-0000-4000-8000-000000000021';
+  const msg = message(id, '2026-09-04T11:00:00.000Z', { status: 'HELD' });
+  await store.record(msg);
+  await store.mark(id, 'HELD', 'HELD: not matched: UNMATCHED', {
+    match: { status: 'UNMATCHED', at: '2026-09-04T11:00:01.000Z', reason: 'no registered order matched' },
+  });
+
+  const heldList = await store.list({ held: true });
+  assert.deepEqual(heldList.map((m) => m.id), [id]);
+  const got = await store.get(id);
+  assert.equal(got?.status, 'HELD');
+  assert.equal(got?.match?.status, 'UNMATCHED');
+  assert.equal(got?.match?.reason, 'no registered order matched');
+  assert.equal(got?.match?.at, '2026-09-04T11:00:01.000Z');
+
+  // Operator release moves it out of the held queue.
+  await store.mark(id, 'QUEUED', 'released by operator after review');
+  assert.equal((await store.list({ held: true })).length, 0);
+  assert.equal((await store.get(id))?.status, 'QUEUED');
+
+  // Clean up so sibling tests see a clean database.
+  await pool.query('DELETE FROM messages WHERE id = $1', [id]);
+});

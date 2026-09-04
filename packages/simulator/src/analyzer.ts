@@ -17,6 +17,8 @@ export interface AnalyzerSimulatorOptions {
   intervalMs?: number;
   /** 0..1 chance of corrupting a frame (exercises NAK/retry). */
   corruptRate?: number;
+  /** Deterministic patient/order/sample (for demos and matching fixtures). */
+  fixed?: boolean;
   debug?: (line: string) => void;
 }
 
@@ -61,6 +63,7 @@ export class AnalyzerSimulator {
   private readonly count: number;
   private readonly intervalMs: number;
   private readonly corruptRate: number;
+  private readonly fixed: boolean;
   private readonly debug?: (line: string) => void;
 
   constructor(private readonly opts: AnalyzerSimulatorOptions) {
@@ -69,6 +72,7 @@ export class AnalyzerSimulator {
     this.count = opts.count ?? 3;
     this.intervalMs = opts.intervalMs ?? 1000;
     this.corruptRate = opts.corruptRate ?? 0;
+    this.fixed = opts.fixed ?? false;
     this.debug = opts.debug;
   }
 
@@ -103,10 +107,12 @@ export class AnalyzerSimulator {
 
   private buildResultMessage(): AstmRecord[] {
     const now = new Date();
-    const patient = pick(PATIENTS);
-    const orderId = `ACC-${randInt(100000, 999999)}`;
-    const sampleId = `S-${randInt(10000, 99999)}`;
-    const tests = pickN(TEST_POOL, 2 + randInt(0, 2));
+    // Fixed fixture (demo/certification): deterministic patient, order and tests
+    // so the hub can match against a pre-registered expected order.
+    const patient = this.fixed ? PATIENTS[0]! : pick(PATIENTS);
+    const orderId = this.fixed ? 'ACC-424242' : `ACC-${randInt(100000, 999999)}`;
+    const sampleId = this.fixed ? 'S-4242' : `S-${randInt(10000, 99999)}`;
+    const tests = this.fixed ? [TEST_POOL[0]!, TEST_POOL[1]!] : pickN(TEST_POOL, 2 + randInt(0, 2));
 
     const records: AstmRecord[] = [
       {

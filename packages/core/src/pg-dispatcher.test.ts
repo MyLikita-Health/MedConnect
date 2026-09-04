@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import type { Pool } from 'pg';
 import type { CanonicalMessage } from '@integration-hub/shared';
 import { PostgresMessageStore, closeDbPool, createDbPool, runMigrations } from '@integration-hub/api';
-import { Dispatcher, PostgresDedupStore, PostgresRouteStore } from './index.js';
+import { Dispatcher, PostgresDedupStore, PostgresOrderRegistry, PostgresRouteStore } from './index.js';
 
 const DB_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const skipReason = DB_URL ? false : 'TEST_DATABASE_URL/DATABASE_URL not set (npm run db:up && npm run test:db)';
@@ -20,6 +20,7 @@ const M1 = '11111111-1111-4111-8111-111111111111';
 const D1 = '22222222-2222-4222-8222-222222222222';
 const D2 = '33333333-3333-4333-8333-333333333333';
 const DLQ1 = '44444444-4444-4444-8444-444444444444';
+const HELD1 = '55555555-5555-4555-8555-555555555555';
 
 let pool: Pool | undefined;
 let store: PostgresMessageStore | undefined;
@@ -155,4 +156,52 @@ test('Postgres dispatcher exhausts retries into the DLQ with attempt history', {
 
   // Cleanup so sibling suites stay isolated.
   await r.deleteDestination('down-lis');
+});
+
+test('Postgres dispatcher matches the registry, holds unmatched, and releases into delivery', { skip: skipReason }, async (t) => {
+  if (!pool || !store || !routes) return skipTest('no pool');
+  const s = store;
+  const registry = new PostgresOrderRegistry(pool);
+  const dispatcher = new Dispatcher({
+    store: s,
+    dedup: new PostgresDedupStore(pool),
+    routes: routes,
+    matching: { registry },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  // No registered order → UNMATCHED → HELD (never delivered, never dropped).
+  await dispatcher.record(message(HELD1));
+  await waitFor(async () => (await s.get(HELD1))?.status === 'HELD');
+  const held = await s.get(HELD1);
+  assert.ok(held);
+  assert.equal(held.match?.status, 'UNMATCHED');
+  assert.ok(held.timeline.some((e) => e.stage === 'HELD'));
+
+  // The LIS registers the order; the operator reviews and releases.
+  await registry.register({
+    id: `pg-ord-${HELD1}`,
+    patientId: `pg-pat-${HELD1}`,
+    sampleId: `S-${HELD1}`,
+    tests: ['GLUCOSE'],
+    status: 'active',
+    receivedAt: new Date().toISOString(),
+  });
+  assert.equal(await dispatcher.release(HELD1), true);
+  await waitFor(async () => (await s.get(HELD1))?.status === 'ROUTED');
+
+  const routed = await s.get(HELD1);
+  assert.ok(routed);
+  assert.equal(routed.status, 'ROUTED');
+  assert.ok(routed.timeline.some((e) => e.note?.includes('released by operator')));
+
+  // The held filter finds it only before release — verify final state is clean.
+  const heldList = await s.list({ held: true });
+  assert.ok(!heldList.some((m) => m.id === HELD1));
+
+  // Cleanup so sibling suites stay isolated.
+  await registry.remove(`pg-ord-${HELD1}`);
 });

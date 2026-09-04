@@ -4,7 +4,8 @@
  * sees, so the backend can be swapped without touching the pipeline.
  *
  * M1: lifecycle transitions via `mark` (plan §5.3), delivery-attempt history,
- * and a dead-letter-queue filter (PRD §23).
+ * and a dead-letter-queue filter (PRD §23). M2: match metadata on `mark` and
+ * the HELD (exception-queue) filter (PRD §27–28).
  */
 import { EventEmitter } from 'node:events';
 import type { CanonicalMessage, MessageAttempt, MessageSink, MessageStatus } from '@integration-hub/shared';
@@ -15,6 +16,8 @@ export interface MessageFilter {
   status?: string;
   /** Only messages that reached the dead-letter queue. */
   dlq?: boolean;
+  /** Only messages held in the exception queue (status HELD). */
+  held?: boolean;
   limit?: number;
 }
 
@@ -50,6 +53,7 @@ export class MessageStore implements MessageSink {
     if (filter.deviceId) out = out.filter((m) => m.deviceId === filter.deviceId);
     if (filter.status) out = out.filter((m) => m.status === filter.status);
     if (filter.dlq) out = out.filter((m) => m.dlqAt !== undefined);
+    if (filter.held) out = out.filter((m) => m.status === 'HELD');
     const limit = filter.limit ?? 100;
     return [...out].reverse().slice(0, limit);
   }
@@ -65,6 +69,7 @@ export class MessageStore implements MessageSink {
     message.status = status;
     if (fields?.dlqAt) message.dlqAt = fields.dlqAt;
     if (fields?.duplicateOf) message.duplicateOf = fields.duplicateOf;
+    if (fields?.match) message.match = fields.match;
     message.timeline.push({ stage: status, at: new Date().toISOString(), note });
   }
 

@@ -18,8 +18,9 @@ Analyzer (simulator) ──ASTM/TCP──▶ Edge gateway ──pipeline──�
 
 It is built as an **npm-workspaces TypeScript monorepo**. The protocol layer
 (`astm`, `gateway`) stays zero-dependency; M0 added Fastify + zod + pg for the
-API and persistence; M1 added the durable delivery core (`@integration-hub/core`).
-Tests use Node's built-in test runner.
+API and persistence; M1 added the durable delivery core (`@integration-hub/core`);
+M2 added the clinical gate — patient/order matching, result validation, and the
+HELD exception queue. Tests use Node's built-in test runner.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -88,8 +89,8 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 58 tests: codec, sessions, pipeline, dispatcher/DLQ, API (7 DB-gated skip)
-npm run test:db    # 58 tests: same + PostgreSQL integration (needs db:up)
+npm test           # 85 tests: codec, sessions, pipeline, matching/validation, dispatcher/DLQ, API (9 DB-gated skip)
+npm run test:db    # 85 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -110,8 +111,10 @@ packages/
                                         pipeline: parse → validate → map → route,
                                         default test-code mappings (PRD §17–18)
   core/       @integration-hub/core     Integration core: message lifecycle (plan §5.3),
-                                        dedup (PRD §29), DB-driven routing, delivery
-                                        dispatcher with retry/backoff + DLQ (PRD §21–23)
+                                        dedup (PRD §29), patient/order matching (PRD §27,
+                                        E6) + result validation (PRD §28, E5), DB-driven
+                                        routing, delivery dispatcher with retry/backoff +
+                                        DLQ (PRD §21–23), order registry (LIS seam)
   api/        @integration-hub/api      REST API on Fastify + zod (PRD §36), message store
                                         (in-memory or PostgreSQL behind the MessageSink
                                         contract), device registry, embedded web console
@@ -147,12 +150,21 @@ without touching the protocol layer.
    Unmapped codes pass through unchanged.
 5. **Deliver** (`packages/core/src/dispatcher.ts`) — the dispatcher owns the
    rest of the lifecycle (plan §5.3): duplicates within the window are marked
-   `DUPLICATE`; route rules resolve destinations; delivery runs with
-   per-destination retry/backoff and every attempt is recorded. Success ends
-   `ROUTED`; exhausted retries (or pipeline-validation failures) go to the
-   **dead-letter queue** (`FAILED` + `dlqAt`) — never dropped. The viewer shows
-   the whole timeline; DLQ messages can be replayed with
-   `POST /api/v1/messages/:id/replay` or retired with `…/discard` (PRD §23).
+   `DUPLICATE`; patient/order **matching** (PRD §27) tries the configured key
+   strategies (patient id + order id, then patient id + sample id) against the
+   expected-order registry (the LIS seam); **validation** (PRD §28) applies
+   per-rule checks (patient matched, order exists, test known, unit
+   recognized, result plausible, device authorized). Anything that does not
+   uniquely match or fails an error-severity rule is parked in the **HELD
+   exception queue** — never silently auto-assigned, never delivered. Route
+   rules resolve destinations; delivery runs with per-destination
+   retry/backoff and every attempt is recorded. Success ends `ROUTED`;
+   exhausted retries (or pipeline-validation failures) go to the
+   **dead-letter queue** (`FAILED` + `dlqAt`) — never dropped. The viewer
+   shows the whole timeline; DLQ messages can be replayed with
+   `POST /api/v1/messages/:id/replay` or retired with `…/discard` (PRD §23);
+   HELD messages are reviewed and released with
+   `POST /api/v1/messages/:id/release`.
 
 ## REST API (PRD §36)
 
@@ -168,6 +180,9 @@ without touching the protocol layer.
 | POST | `/api/v1/messages/:id/replay` | Re-run a message through the pipeline |
 | POST | `/api/v1/messages/:id/discard` | Retire a DLQ message (terminal `DISCARDED`) |
 | GET | `/api/v1/dlq` | Dead-letter queue (PRD §23) |
+| GET | `/api/v1/held` | Exception queue: messages held for review (PRD §27–28) |
+| POST | `/api/v1/messages/:id/release` | Release a HELD message into delivery |
+| GET/POST/DELETE | `/api/v1/orders` | Expected-order registry — the LIS seam (PRD §27) |
 | GET/POST/DELETE | `/api/v1/destinations` | Outbound destinations + retry policies (PRD §19) |
 | GET/POST/DELETE | `/api/v1/routes` | Route rules: device/status → destination |
 | GET | `/api/v1/results` | Flattened result rows |
@@ -218,7 +233,7 @@ M4, not before).
 
 Messages flow through the plan §5.3 lifecycle:
 `RECEIVED → PARSED → VALIDATED → MAPPED → QUEUED → DELIVERING → ROUTED`, with
-`FAILED (+DLQ)` / `DUPLICATE` / `DISCARDED` as the other terminal states.
+`FAILED (+DLQ)` / `DUPLICATE` / `DISCARDED` / `HELD` as the other states.
 
 - **Dedup (PRD §29)** — SHA-256 of protocol + device + raw wire text, retained
   24 h (configurable). A device resending a result (e.g. reconnect that lost
@@ -233,6 +248,36 @@ Messages flow through the plan §5.3 lifecycle:
   the `Dispatcher` consumes the same `MessageSink` seam the store used, so the
   Redis/BullMQ worker (cloud side) swaps in behind the same contract.
 
+## Clinical correctness (M2 — matching, validation, HELD review)
+
+Before anything is delivered, results must be safely associated (PRD §27–28).
+The clinical gate lives in the dispatcher, behind the same seam:
+
+- **Expected-order registry** — the LIS tells the hub which orders to expect
+  (`POST /api/v1/orders`); this is the interface seam an HL7 ORM feed (or a
+  manual registration UI) will fill. In-memory and Postgres implementations
+  (`order_registry` table, migration `0003`).
+- **Matching (E6)** — configurable key strategies (patient id + order id,
+  then patient id + sample/accession id). Exactly one unique hit =
+  `MATCHED`; several = `AMBIGUOUS`; a matching cancelled order = `REJECTED`;
+  nothing = `UNMATCHED`. Everything except a unique match is **HELD for
+  operator review** — no silent auto-assign. The outcome (`match` on the
+  message: status, matched order/patient, strategy) is persisted and shown in
+  the console.
+- **Validation (E5)** — per-rule checks with severity config: patient
+  matched? order exists? test known (canonical catalog)? unit recognized?
+  result plausible (numeric range seeds; unit-convention dependent — per-site
+  config)? device authorized? Error-severity findings hold the message;
+  warnings are recorded on the timeline and delivered.
+- **HELD exception queue** — `GET /api/v1/held`; the console shows held
+  messages with their reason; `POST /api/v1/messages/:id/release` re-enters
+  a reviewed message into delivery (`QUEUED → … → ROUTED`). Like the DLQ,
+  held messages are never dropped.
+
+Try the full loop in one command — `npm run demo` registers the expected
+order (LIS seam), sends two matched results and one stray unmatched sample,
+releases the held one, and prints the summary.
+
 ## Scaffold boundaries (what is intentionally not here)
 
 - The in-process delivery worker is not yet a durable external queue — if the
@@ -241,6 +286,8 @@ Messages flow through the plan §5.3 lifecycle:
   cloud deployment; the edge keeps the SQL-outbox shape (plan §4.2, §13.1.5).
 - No HL7 v2, DICOM, FHIR, webhooks, authn/RBAC, TLS, or multi-tenancy yet —
   those are the natural next layers (PRD §13–15, §34–37, §41).
-- No patient matching against an external LIS master (PRD §27) — validation is
-  structural for now; unresolved-identifier `HELD` review is part of workstream
-  E6.
+- Patient/order matching runs against the expected-order registry (the LIS
+  seam, `POST /api/v1/orders`) — wiring it to a real LIS master feed (HL7 ORM
+  or ADT) is inbound HL7 work, still open. Result-plausibility seeds assume
+  the reference simulator's unit conventions (mg/dL): a facility using SI
+  units must configure its own bounds.

@@ -9,11 +9,14 @@ export type Direction = 'device-to-host' | 'host-to-device';
  *
  *   RECEIVED → PARSED → VALIDATED → MAPPED → QUEUED → DELIVERING → ROUTED
  *                                              ↘ any failure → FAILED (+ DLQ)
- *   Dedup hit           → DUPLICATE
- *   Operator discard    → DISCARDED (from DLQ)
+ *   Dedup hit              → DUPLICATE
+ *   Operator discard       → DISCARDED (from DLQ)
+ *   Match/validation hold  → HELD (exception queue for review, PRD §27–28)
  *
  * Terminal statuses: ROUTED (success), FAILED (never silently dropped — goes
- * to the dead-letter queue), DUPLICATE, DISCARDED.
+ * to the dead-letter queue), DUPLICATE, DISCARDED. HELD is a review queue: an
+ * operator releases a held message back into delivery (PRD §27 no silent
+ * auto-assign; §28 exception queue).
  */
 export type MessageStatus =
   | 'RECEIVED'
@@ -25,7 +28,28 @@ export type MessageStatus =
   | 'ROUTED'
   | 'FAILED'
   | 'DUPLICATE'
-  | 'DISCARDED';
+  | 'DISCARDED'
+  | 'HELD';
+
+/**
+ * Patient/order matching outcome (PRD §27; plan workstream E6). Matching never
+ * silently auto-assigns: only a unique strategy hit is MATCHED; anything else
+ * is held for operator review.
+ */
+export type MatchStatus = 'MATCHED' | 'UNMATCHED' | 'AMBIGUOUS' | 'REJECTED';
+
+/** Matching metadata attached to a message once the matching engine has run. */
+export interface MessageMatch {
+  status: MatchStatus;
+  /** The registry order this message matched, when MATCHED. */
+  matchedOrderId?: string;
+  matchedPatientId?: string;
+  /** Strategy that produced the match, e.g. "patientId+orderId". */
+  strategy?: string;
+  /** Why the message was rejected, when REJECTED. */
+  reason?: string;
+  at: string; // ISO timestamp
+}
 
 /** A protocol-agnostic parsed record (ASTM, HL7 segment, ...). */
 export interface ParsedRecord {
@@ -59,6 +83,8 @@ export interface CanonicalMessage {
   dlqAt?: string;
   /** Set when the message was detected as a duplicate (PRD §29). */
   duplicateOf?: string;
+  /** Patient/order matching outcome (PRD §27); set by the matching engine. */
+  match?: MessageMatch;
 }
 
 /** One delivery attempt against a destination (plan §5.1 Messages group). */
