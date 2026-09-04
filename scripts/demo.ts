@@ -6,6 +6,17 @@ import { spawn, type ChildProcess } from 'node:child_process';
 
 const children: ChildProcess[] = [];
 
+// The API is authenticated (PRD §34); the whole demo runs as this admin key.
+const DEMO_KEY = 'ihk_demo_dev_key_001';
+
+function fetchApi(url: string, init?: RequestInit): Promise<Response> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${DEMO_KEY}`,
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  return fetch(url, { ...init, headers });
+}
+
 function run(args: string[], env: Record<string, string> = {}): ChildProcess {
   const child = spawn(process.execPath, ['--import', 'tsx', ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -45,16 +56,26 @@ function exitCode(child: ChildProcess): Promise<number | null> {
 
 async function main(): Promise<void> {
   console.log('=== Integration Hub demo ===\n');
-  const server = run(['packages/server/src/cli.ts'], { PORT: '3000', DEVICE_PORT: '5000', HOST: '127.0.0.1' });
+  const server = run(['packages/server/src/cli.ts'], {
+    PORT: '3000',
+    DEVICE_PORT: '5000',
+    HOST: '127.0.0.1',
+    HUB_ADMIN_KEY: DEMO_KEY,
+  });
   await waitForOutput(server, 'REST listening');
 
   const base = 'http://127.0.0.1:3000/api/v1';
+
+  // 0. Security gate (M2): unauthenticated requests are rejected with 401.
+  const unauth = await fetch(`${base}/stats`);
+  if (unauth.status !== 401) throw new Error(`expected 401 without an API key, got ${unauth.status}`);
+  console.log('[security] API auth enforced — unauthenticated request rejected (401)');
 
   // 1. The LIS seam: register the expected order so incoming results can be
   //    matched (PRD §27). PID-1001 / ACC-424242 / S-4242 is the simulator's
   //    fixed fixture.
   console.log('[demo] registering expected order ACC-424242 (LIS seam)');
-  const orderRes = await fetch(`${base}/orders`, {
+  const orderRes = await fetchApi(`${base}/orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 'ACC-424242', patientId: 'PID-1001', sampleId: 'S-4242', tests: ['GLUCOSE', 'CREATININE'] }),
@@ -67,10 +88,10 @@ async function main(): Promise<void> {
   //    assertions are deterministic; the simulator's normal disconnect would
   //    otherwise fire a legitimate device-offline alert at the end.
   for (const seeded of ['dev-offline', 'dest-down', 'dlq-growth']) {
-    await fetch(`${base}/alert-rules/${seeded}`, { method: 'DELETE' });
+    await fetchApi(`${base}/alert-rules/${seeded}`, { method: 'DELETE' });
   }
   console.log('[demo] adding alert rule: held results awaiting review (threshold 1)');
-  const ruleRes = await fetch(`${base}/alert-rules`, {
+  const ruleRes = await fetchApi(`${base}/alert-rules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: 'demo-held', kind: 'held-backlog', name: 'Results awaiting review', threshold: 1 }),
@@ -87,32 +108,35 @@ async function main(): Promise<void> {
   // Delivery is asynchronous (match → queue → worker → ROUTED); wait for the
   // queue to drain so the summary shows terminal states only.
   await waitForPending(base, 0);
+  // The stray message lands in HELD with its own transaction (Postgres can
+  // commit it just after the queue drains); wait for it to be visible.
+  await waitForHeld(base);
 
   // 4. The stray result sits in the HELD exception queue — and the alert fired.
-  const held = (await (await fetch(`${base}/held`)).json()) as Array<{ id: string; status: string; match: { status: string } }>;
+  const held = (await (await fetchApi(`${base}/held`)).json()) as Array<{ id: string; status: string; match: { status: string } }>;
   console.log(`\n[held] ${held.length} message(s) in the exception queue`);
   for (const m of held) {
     console.log(`  ${m.id.slice(0, 8)}  ${m.status}  match=${m.match?.status}`);
   }
-  const firing = (await (await fetch(`${base}/alerts?firing=true`)).json()) as Array<{ kind: string; message: string }>;
+  const firing = (await (await fetchApi(`${base}/alerts?firing=true`)).json()) as Array<{ kind: string; message: string }>;
   console.log(`[alerts] ${firing.length} firing`);
   for (const a of firing) console.log(`  FIRING  ${a.kind} — ${a.message}`);
 
   // 5. The operator reviews the held result and releases it; the alert resolves.
   for (const m of held) {
-    const release = await fetch(`${base}/messages/${m.id}/release`, { method: 'POST' });
+    const release = await fetchApi(`${base}/messages/${m.id}/release`, { method: 'POST' });
     if (release.status !== 200) throw new Error(`release failed: ${release.status}`);
     console.log(`  → released by operator, re-entering delivery`);
   }
   await waitForPending(base, 0);
-  const after = (await (await fetch(`${base}/alerts?firing=true`)).json()) as unknown[];
+  const after = (await (await fetchApi(`${base}/alerts?firing=true`)).json()) as unknown[];
   console.log(`[alerts] ${after.length} firing after review (held backlog cleared)`);
   if (after.length > 0) throw new Error('expected all demo alerts resolved after review');
-  await fetch(`${base}/alert-rules/demo-held`, { method: 'DELETE' });
+  await fetchApi(`${base}/alert-rules/demo-held`, { method: 'DELETE' });
 
-  const stats = await (await fetch(`${base}/stats`)).json();
-  const messages = await (await fetch(`${base}/messages`)).json();
-  const results = await (await fetch(`${base}/results`)).json();
+  const stats = await (await fetchApi(`${base}/stats`)).json();
+  const messages = await (await fetchApi(`${base}/messages`)).json();
+  const results = await (await fetchApi(`${base}/results`)).json();
 
   console.log('\n=== Demo summary ===');
   console.log(JSON.stringify(stats, null, 2));
@@ -123,16 +147,25 @@ async function main(): Promise<void> {
     );
   }
   console.log(`results: ${results.length}`);
-  console.log('\nOpen the console UI: http://127.0.0.1:3000/');
+  console.log(`\nOpen the console UI: http://127.0.0.1:3000/  (API key: ${DEMO_KEY})`);
 }
 
 async function waitForPending(base: string, target: number): Promise<void> {
   for (let i = 0; i < 100; i++) {
-    const stats = (await (await fetch(`${base}/stats`)).json()) as { pending: number };
+    const stats = (await (await fetchApi(`${base}/stats`)).json()) as { pending: number };
     if (stats.pending === target) return;
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error('timed out waiting for delivery to drain');
+}
+
+async function waitForHeld(base: string): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    const held = (await (await fetchApi(`${base}/held`)).json()) as unknown[];
+    if (held.length > 0) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('timed out waiting for the stray result to reach the HELD queue');
 }
 
 main()

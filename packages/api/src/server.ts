@@ -23,6 +23,8 @@ import {
   type RouteStore,
 } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
+import type { AuditStore, KeyStore } from './security.js';
+import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, type ApiScope } from './security.js';
 import { renderUi } from './ui.js';
 
 export interface ApiServerOptions {
@@ -44,7 +46,27 @@ export interface ApiServerOptions {
   replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
   /** Wired to the dispatcher so held messages can be released into delivery. */
   releaseHandler?: (id: string) => boolean | Promise<boolean>;
+  /**
+   * API-key store. When provided, every /api/v1 route (except health) is
+   * behind key auth + per-role scopes (ROUTE_SCOPES) and every mutating
+   * action is written to the audit store. When omitted, auth is disabled
+   * (library default; the hub process enables it — see packages/server).
+   */
+  keys?: KeyStore;
+  /** Audit log (PRD §30); defaults to an in-memory store when `keys` is set. */
+  audit?: AuditStore;
 }
+
+const createKeySchema = z.object({
+  id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
+  name: z.string().min(1),
+  role: z.enum(['admin', 'engineer', 'operator', 'viewer']),
+});
+
+const listAuditSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  result: z.enum(['ok', 'error', 'denied']).optional(),
+});
 
 const registerDeviceSchema = z.object({
   id: z.string().min(1).optional(),
@@ -116,12 +138,16 @@ export class ApiServer {
   private readonly orders: OrderRegistry;
   private readonly alerts: AlertStore;
   private readonly profiles: ProfileStore;
+  private readonly keys: KeyStore | undefined;
+  private readonly audit: AuditStore | undefined;
 
   constructor(private opts: ApiServerOptions) {
     this.routes = opts.routes ?? new InMemoryRouteStore();
     this.orders = opts.orders ?? new InMemoryOrderRegistry();
     this.alerts = opts.alerts ?? new InMemoryAlertStore();
     this.profiles = opts.profiles ?? new InMemoryProfileStore();
+    this.keys = opts.keys;
+    this.audit = opts.audit ?? (opts.keys ? new InMemoryAuditStore() : undefined);
     const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
     this.app = app;
 
@@ -136,6 +162,79 @@ export class ApiServer {
         reply.code(204).send();
       }
     });
+
+    // Security (M2, plan F2 + J; PRD §34): API-key authn + per-role scopes on
+    // every /api/v1 route, and an audit trail for every mutating action
+    // (PRD §30). Enabled when a KeyStore is provided; the route→scope table
+    // (ROUTE_SCOPES in security.ts) is centralized + fail-closed: an
+    // /api/v1 route with no declared scope is denied, not silently open.
+    if (this.keys) {
+      app.addHook('preHandler', async (req, reply) => {
+        // Console UI + health probes stay public (no data exposure).
+        const pattern: string | undefined = req.routeOptions.url;
+        if (!req.url.startsWith('/api/v1/') || pattern === '/api/v1/health') return;
+
+        const header = req.headers.authorization;
+        const secret = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
+        const key = secret ? await this.keys!.findBySecret(secret) : undefined;
+        if (!key) {
+          // 401 for everything under /api/v1 — unknown paths included, so the
+          // surface is not enumerable without a valid key.
+          return reply.code(401).send({ error: 'unauthorized', message: 'missing or invalid API key — send Authorization: Bearer <key>' });
+        }
+        // No matching route (routeOptions.url is undefined): not found — but
+        // only for authenticated callers.
+        if (pattern === undefined) {
+          return reply.code(404).send({ error: 'not found' });
+        }
+
+        const route = `${req.method} ${pattern}`;
+        const scope: ApiScope | undefined = ROUTE_SCOPES[route];
+        req.auth = { key, scope };
+        void this.keys!.touch(key.id); // best-effort last-use stamp
+        if (!scope) {
+          // A registered route missing from ROUTE_SCOPES: config gap — deny loudly.
+          return reply.code(403).send({ error: 'forbidden', reason: 'route has no declared scope (ROUTE_SCOPES)' });
+        }
+        if (!roleHasScope(key.role, scope)) {
+          return reply.code(403).send({ error: 'forbidden', required: scope, role: key.role });
+        }
+      });
+
+      // Audit every mutating action by an identified key (who/what/when/where/
+      // result — PRD §30). Unauthenticated attempts are not attributable, so
+      // they are not recorded; denied-but-identified attempts are.
+      app.addHook('onResponse', async (req, reply) => {
+        if (!this.audit) return;
+        const route = `${req.method} ${req.routeOptions.url}`;
+        const scope = ROUTE_SCOPES[route];
+        if (!scope || req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+        if (!req.auth) return;
+        const params = req.params as Record<string, unknown>;
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const statusCode = reply.statusCode;
+        const result: 'ok' | 'error' | 'denied' = statusCode < 400 ? 'ok' : statusCode === 403 ? 'denied' : 'error';
+        try {
+          await this.audit.append({
+            actorKey: req.auth.key.id,
+            actorName: req.auth.key.name,
+            actorRole: req.auth.key.role,
+            action: route,
+            target: typeof params.id === 'string' ? params.id : typeof body.id === 'string' ? body.id : undefined,
+            result,
+            statusCode,
+            ip: req.ip,
+            detail: {
+              body: Object.keys(body).length > 0 ? body : undefined,
+              params: Object.keys(params).length > 0 ? params : undefined,
+            },
+          });
+        } catch (err) {
+          // Never corrupt a response, but say so loudly: the action is NOT audited.
+          console.error(`[audit] FAILED to record ${route} (${req.auth.key.id}): ${(err as Error).message}`);
+        }
+      });
+    }
 
     app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'not found' }));
     app.setErrorHandler((err, _req, reply) => {
@@ -291,6 +390,38 @@ export class ApiServer {
           })),
         );
     });
+
+    // Security endpoints (only meaningful with auth enabled): identify the
+    // calling key, manage API keys, and query the audit log.
+    if (this.keys) {
+      app.get('/api/v1/me', async (req) => {
+        const { key } = req.auth!;
+        return { id: key.id, name: key.name, role: key.role, prefix: key.prefix, enabled: key.enabled, createdAt: key.createdAt };
+      });
+
+      app.get('/api/v1/keys', async () => this.keys!.list());
+
+      app.post('/api/v1/keys', async (req, reply) => {
+        const input = createKeySchema.parse(req.body);
+        const created = await this.keys!.create({ ...input, createdBy: req.auth!.key.id });
+        // The plaintext secret is returned exactly once, here.
+        return reply.code(201).send(created);
+      });
+
+      app.delete('/api/v1/keys/:id', async (req, reply) => {
+        const { id } = req.params as { id: string };
+        if (id === req.auth!.key.id) {
+          return reply.code(400).send({ error: 'cannot delete the API key in use' });
+        }
+        await this.keys!.remove(id);
+        return reply.code(204).send();
+      });
+
+      app.get('/api/v1/audit', async (req) => {
+        const query = listAuditSchema.parse(req.query);
+        return this.audit!.list(query);
+      });
+    }
 
     app.get('/', async (_req, reply) => reply.type('text/html; charset=utf-8').send(renderUi()));
   }

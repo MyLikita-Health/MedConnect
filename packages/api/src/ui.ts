@@ -49,18 +49,35 @@ export function renderUi(): string {
   .detail.open { display:block; }
   ul.timeline { list-style:none; padding:0; margin:0; }
   ul.timeline li { padding:3px 0; color:var(--muted); }
-  ul.timeline li b { color:var(--text); }
-  .col-id { color:var(--accent); }
+  ul.timeline li b { color:var(--text); }  .col-id { color: var(--accent); }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   @media (max-width:700px){ .grid2 { grid-template-columns:1fr; } }
   .err { color:var(--err); }
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:10; }
+  input { background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px; font-family:inherit; font-size:12px; }
+  input:focus { outline:1px solid var(--accent); }
+  .role { color:var(--accent); border-color:var(--accent); }
 </style>
 </head>
 <body>
 <header>
   <h1>Integration Hub <span class="muted">// management console</span></h1>
   <span class="badge" id="health">connecting…</span>
+  <span class="badge role" id="role" style="display:none"></span>
+  <span style="flex:1"></span>
+  <button id="keybtn" style="display:none" onclick="showSignIn()">API key</button>
 </header>
+<div class="overlay" id="overlay" style="display:none">
+  <div class="panel" style="max-width:440px;width:100%">
+    <h2>API key required</h2>
+    <p class="muted">The hub API is authenticated (PRD §34; roles admin / engineer /
+      operator / viewer). Paste an API key — ask an administrator, or copy the
+      admin key printed when the hub started (or set HUB_ADMIN_KEY).</p>
+    <input id="key-input" type="password" placeholder="ihk_…" style="width:100%;margin:10px 0" autocomplete="off"/>
+    <button onclick="applyKey()">Sign in</button>
+    <button onclick="dismissSignIn()" style="background:transparent;border:1px solid var(--border)">Cancel</button>
+  </div>
+</div>
 <main>
   <section>
     <div class="panel"><h2>Dashboard</h2><div class="stats" id="stats"></div></div>
@@ -84,15 +101,79 @@ export function renderUi(): string {
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let selectedId = null;
+let hubKey = localStorage.getItem('hub.key') || '';
+let meRole = null;
+let signInVisible = false;
+
+function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  if (hubKey) headers['Authorization'] = 'Bearer ' + hubKey;
+  return fetch(path, Object.assign({}, opts, { headers })).then((res) => {
+    if (res.status === 401) {
+      localStorage.removeItem('hub.key');
+      hubKey = '';
+      if (!sessionStorage.getItem('hub.dismissed')) showSignIn();
+      throw new Error('unauthorized');
+    }
+    return res;
+  });
+}
+
+function showSignIn() {
+  if (signInVisible) return;
+  signInVisible = true;
+  const input = document.getElementById('key-input');
+  input.value = hubKey;
+  document.getElementById('overlay').style.display = 'flex';
+  input.focus();
+}
+
+function hideSignIn() {
+  signInVisible = false;
+  document.getElementById('overlay').style.display = 'none';
+}
+
+async function applyKey() {
+  const value = document.getElementById('key-input').value.trim();
+  if (!value) return;
+  sessionStorage.removeItem('hub.dismissed');
+  hubKey = value;
+  localStorage.setItem('hub.key', value);
+  hideSignIn();
+  await updateRole();
+  refresh();
+}
+
+function dismissSignIn() {
+  sessionStorage.setItem('hub.dismissed', '1');
+  hideSignIn();
+}
+
+async function updateRole() {
+  const roleEl = document.getElementById('role');
+  roleEl.style.display = 'none';
+  if (!hubKey) return;
+  try {
+    const me = await api('/api/v1/me').then(r => r.json());
+    meRole = me.role;
+    roleEl.textContent = me.role + ' · ' + me.name;
+    roleEl.style.display = 'inline-block';
+  } catch { meRole = null; }
+}
+
+function canAct() {
+  return ['admin', 'engineer', 'operator'].indexOf(meRole) !== -1;
+}
 
 async function refresh() {
   try {
     const [health, stats, devices, alerts, messages] = await Promise.all([
-      fetch('/api/v1/health').then(r => r.json()),
-      fetch('/api/v1/stats').then(r => r.json()),
-      fetch('/api/v1/devices').then(r => r.json()),
-      fetch('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
-      fetch('/api/v1/messages?limit=100').then(r => r.json()),
+      api('/api/v1/health').then(r => r.json()),
+      api('/api/v1/stats').then(r => r.json()),
+      api('/api/v1/devices').then(r => r.json()),
+      api('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
+      api('/api/v1/messages?limit=100').then(r => r.json()),
     ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -158,7 +239,7 @@ async function openDetail(id) {
 }
 
 async function renderDetail(id) {
-  const m = await fetch('/api/v1/messages/' + id).then(r => r.json());
+  const m = await api('/api/v1/messages/' + id).then(r => r.json());
   const panel = document.getElementById('detail');
   panel.style.display = 'block';
   const errors = m.errors && m.errors.length
@@ -172,9 +253,11 @@ async function renderDetail(id) {
     (m.match.strategy ? ' via ' + esc(m.match.strategy) : '') +
     (m.match.matchedOrderId ? ' → order ' + esc(m.match.matchedOrderId) : '') +
     (m.match.reason ? ' — ' + esc(m.match.reason) : '') + '</p>' : '';
-  const actions = (m.status === 'HELD'
-    ? '<button onclick="releaseMessage(\\'' + m.id + '\\')">Review &amp; release</button> '
-    : '') + '<button onclick="replayMessage(\\'' + m.id + '\\')">Replay</button>';
+  const actions = (canAct()
+    ? (m.status === 'HELD'
+      ? '<button onclick="releaseMessage(\\'' + m.id + '\\')">Review &amp; release</button> '
+      : '') + '<button onclick="replayMessage(\\'' + m.id + '\\')">Replay</button>'
+    : '<span class="muted">read-only key — actions hidden</span>');
   panel.innerHTML =
     '<h2>Message ' + esc(m.id.slice(0, 8)) + ' <span class="status ' + esc(m.status) + '">' + esc(m.status) + '</span></h2>' +
     errors +
@@ -192,18 +275,20 @@ async function renderDetail(id) {
 }
 
 async function replayMessage(id) {
-  await fetch('/api/v1/messages/' + id + '/replay', { method: 'POST' });
+  await api('/api/v1/messages/' + id + '/replay', { method: 'POST' });
   selectedId = null;
   await refresh();
 }
 
 async function releaseMessage(id) {
-  await fetch('/api/v1/messages/' + id + '/release', { method: 'POST' });
+  await api('/api/v1/messages/' + id + '/release', { method: 'POST' });
   selectedId = null;
   await refresh();
 }
 
 refresh();
+updateRole();
+if (!hubKey) showSignIn();
 setInterval(refresh, 3000);
 </script>
 </body>

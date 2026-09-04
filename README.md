@@ -21,7 +21,9 @@ It is built as an **npm-workspaces TypeScript monorepo**. The protocol layer
 API and persistence; M1 added the durable delivery core (`@integration-hub/core`);
 M2 added the clinical gate — patient/order matching, result validation, the
 HELD exception queue — plus alerting, config-first **device profiles** and the
-golden-message **conformance harness** that certifies them. Tests use Node's
+golden-message **conformance harness** that certifies them, and a security
+review milestone: **API-key authn with per-role scopes** over the whole v1 API
+and an **audit log** of every mutating action (PRD §30, §34). Tests use Node's
 built-in test runner.
 
 ## Quickstart (in-memory, no services needed)
@@ -39,7 +41,43 @@ npm start          # hub on tcp://127.0.0.1:5000 (devices) + http://127.0.0.1:30
 npm run simulate   # analyzer simulator sends 3 result messages to the hub
 ```
 
+**The API is authenticated by default** (M2 security): on first boot the hub
+prints a generated admin key (or pin one with `HUB_ADMIN_KEY=ihk_…`). The
+console asks for it when you open <http://127.0.0.1:3000/>; `curl` needs
+`-H "Authorization: Bearer <key>"`. Set `AUTH_DISABLED=1` to open the API
+(dev only).
+
 Without `DATABASE_URL` the hub uses in-memory stores (the scaffold default).
+
+## Security (M2 — API keys, per-role scopes, audit)
+
+Every `/api/v1` route (except `health`) requires `Authorization: Bearer <key>`.
+Only a SHA-256 hash of each key secret is stored; the plaintext is returned
+exactly once, at creation. Keys map to one role; roles grant scopes (PRD §34
+personas mapped onto the scaffold):
+
+| Role | Grants | Persona (PRD §34) |
+| --- | --- | --- |
+| `viewer` | read everything | monitoring, read-only audit |
+| `operator` | + replay, DLQ discard, HELD release | lab bench / exception queue |
+| `engineer` | + register devices, configure destinations/routes/orders/alert rules/profiles | Integration Engineer |
+| `admin` | + manage API keys, view audit log | Facility / IT Admin, Super Admin |
+
+Every mutating action by an identified key is written to the **audit log**
+(who/what/when/where/result + context — PRD §30); denied attempts are
+recorded too, unauthenticated ones are not (nothing to attribute).
+
+```bash
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:3000/api/v1/me
+curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"name":"night shift","role":"operator"}' \
+     http://127.0.0.1:3000/api/v1/keys        # secret shown once
+curl -H "Authorization: Bearer $KEY" "http://127.0.0.1:3000/api/v1/audit?limit=20"
+```
+
+`DELETE /api/v1/keys/:id` revokes (you cannot delete the key in use). The route
+→ scope table is centralized in `ROUTE_SCOPES` (packages/api/src/security.ts)
+and fail-closed: an unscoped v1 route is denied until it is added there.
 
 ## Quickstart (PostgreSQL — M0 persistence)
 
@@ -90,9 +128,10 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 109 tests: codec, sessions, pipeline, matching/validation,
-                   #   alerts, profiles/conformance, dispatcher/DLQ, API (12 DB-gated skip)
-npm run test:db    # 109 tests: same + PostgreSQL integration (needs db:up)
+npm test           # 123 tests: codec, sessions, pipeline, matching/validation,
+                   #   alerts, profiles/conformance, dispatcher/DLQ, API,
+                   #   security (roles/scopes + authz + audit) (14 DB-gated skip)
+npm run test:db    # 123 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -340,8 +379,11 @@ pipeline canonicalizes correctly for both it and the reference layout.
   process dies mid-queue, queued jobs are re-visible as `QUEUED` but not
   auto-resumed. Redis/BullMQ (compose: host port 6380) closes that for the
   cloud deployment; the edge keeps the SQL-outbox shape (plan §4.2, §13.1.5).
-- No HL7 v2, DICOM, FHIR, webhooks, authn/RBAC, TLS, or multi-tenancy yet —
-  those are the natural next layers (PRD §13–15, §34–37, §41).
+- User *accounts* with passwords/JWT sessions, LDAP, 2FA and per-facility
+  scoping are future RBAC layers (API keys + roles are the v1 surface, PRD
+  §34–35); TLS termination is handled by the reverse proxy in front of the
+  hub. Still missing: HL7 v2, DICOM, FHIR, webhooks, multi-tenancy — natural
+  next layers (PRD §13–15, §37, §41).
 - Patient/order matching runs against the expected-order registry (the LIS
   seam, `POST /api/v1/orders`) — wiring it to a real LIS master feed (HL7 ORM
   or ADT) is inbound HL7 work, still open. Result-plausibility seeds assume

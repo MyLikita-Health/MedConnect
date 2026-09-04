@@ -782,11 +782,56 @@ the "goldens in CI" M2 gate item is now concrete.
    suites green: `npm test` = 109 (97 pass / 12 DB-gated skip); `npm run
    test:db` = 109/109; demos clean in both modes.
 
-Remaining M2 gate items (§8.1): security review; installer + remote update;
-certified profiles for 3–5 **real** analyzers via the field/vendor conformance
-program (workstream A6/K, gated on field access — risk R2); profile
-**versioning** on change is already modeled (`version`, goldens per version)
-but not yet enforced in the pipeline (A4 AdapterRegistry is future work).
+Remaining M2 gate items (§8.1): **security review** — now shipped (see
+§13.6); installer + remote update; certified profiles for 3–5 **real**
+analyzers via the field/vendor conformance program (workstream A6/K, gated
+on field access — risk R2); profile **versioning** on change is already
+modeled (`version`, goldens per version) but not yet enforced in the
+pipeline (A4 AdapterRegistry is future work).
+
+### 13.6 M2 security review — API-key authn, per-role scopes, audit log: status
+
+The security-review M2 gate item is implemented as a dedicated sprint and
+shipped as `M2 security review: API-key authn + RBAC + audit log`. The v1
+API is now **authenticated by default** with per-role scopes over every
+route, and every mutating action lands in an **audit log** (PRD §30, §34).
+
+1. ✅ Roles/scopes matrix + route table
+   (`packages/api/src/security.ts`): roles `viewer` / `operator` /
+   `engineer` / `admin` map PRD §34 personas onto scopes (read /
+   review / operate / configure / admin); `ROUTE_SCOPES` maps every
+   `/api/v1` route → scope and is **fail-closed** — an unscoped v1 route
+   is denied until explicitly added (verified by a test that registers a
+   route and expects 403).
+2. ✅ API keys: only SHA-256 hashes stored; plaintext secret returned once
+   at creation (`ihk_…`); `DELETE /api/v1/keys/:id` revokes (self-delete
+   blocked); Fastify `preHandler` authn hook resolves the key on every
+   request (except `/health`), records the principal on the request.
+3. ✅ Audit log (PRD §30): every mutating action by an identified key is
+   written (actor/action/route/result/ip/context + `actor` role at the
+   time); denied attempts recorded; unauthenticated requests skipped (no
+   principal to attribute). Read ops and the UI's static assets are not
+   audited. Console exposes the log at `/api/v1/audit` and in the UI.
+4. ✅ Migration `0007_security.sql` (`api_keys`, `audit_log`);
+   `PostgresKeyStore`/`PostgresAuditStore`; in-memory equivalents for
+   the scaffold default. Stores behind the `KeyStore`/`AuditStore`
+   interfaces so Redis or a hardware vault can drop in later.
+5. ✅ Bootstrap: server starts with auth enabled by default; on first boot
+   with an empty store it generates an admin key and prints it (or honors
+   `HUB_ADMIN_KEY=ihk_…`); `AUTH_DISABLED=1` opens the API for dev; CLI
+   prints the key. Console: sign-in overlay storing the key in
+   `sessionStorage`, `Authorization` header on every fetch, role badge in
+   the masthead.
+6. Tests: role/scope units, full authz matrix over the API (admin +
+   each role hitting routes it may/may not touch, incl. anonymous 401),
+   audit recording of allowed + denied actions, PG key/audit round-trip.
+   Both suites green: `npm test` = 123 (109 pass / 14 DB-gated skip);
+   `npm run test:db` = 123/123; both demos authenticated and clean.
+
+Remaining M2 gate items (§8.1): installer + remote update; certified
+profiles for 3–5 **real** analyzers (gated on field access — risk R2);
+profile **versioning** enforcement in the pipeline (A4 AdapterRegistry is
+future work).
 
 ---
 

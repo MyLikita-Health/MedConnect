@@ -6,7 +6,7 @@
  * and devices in PostgreSQL (migrations auto-applied) and serves the default
  * mapping table from the DB; otherwise it falls back to the in-memory stores.
  */
-import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, MessageStore, PostgresDeviceRegistry, PostgresMessageStore, type DeviceBackend, type StoreBackend } from '@integration-hub/api';
+import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
@@ -23,6 +23,14 @@ export interface HubOptions {
   matchOnUnmatched?: 'hold' | 'deliver';
   /** Skip seeding the default alert rules (tests/demos bring their own). */
   seedDefaultAlerts?: boolean;
+  /**
+   * Fixed admin key secret (env HUB_ADMIN_KEY). When unset, one is generated
+   * and printed on first boot. Auth is ON by default; set authDisabled to
+   * turn it off (dev only).
+   */
+  adminKey?: string;
+  /** Disable API auth entirely (AUTH_DISABLED=1; local/dev only). */
+  authDisabled?: boolean;
 }
 
 export interface Hub {
@@ -35,6 +43,9 @@ export interface Hub {
   alerts: AlertService;
   alertStore: AlertStore;
   profileStore: ProfileStore;
+  /** API-key auth + audit (present unless authDisabled). */
+  keys?: KeyStore;
+  audit?: AuditStore;
   ports: { device: number; http: number };
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool };
@@ -54,6 +65,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let profileStore: ProfileStore;
   let mappings = opts.mappings ?? DEFAULT_MAPPINGS;
   let pool: Pool | undefined;
+  let keys: KeyStore | undefined;
+  let audit: AuditStore | undefined;
+
+  const authDisabled = opts.authDisabled ?? process.env.AUTH_DISABLED === '1';
+  const adminKeySecret = opts.adminKey ?? process.env.HUB_ADMIN_KEY;
 
   if (databaseUrl) {
     pool = createDbPool(databaseUrl);
@@ -68,6 +84,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     orders = new PostgresOrderRegistry(pool);
     alertStore = new PostgresAlertStore(pool);
     profileStore = new PostgresProfileStore(pool);
+    if (!authDisabled) {
+      keys = new PostgresKeyStore(pool);
+      audit = new PostgresAuditStore(pool);
+    }
 
     // Seed the default mapping table once so DB mappings match scaffold defaults.
     if (!opts.mappings) await pgStore.setMappings(DEFAULT_MAPPINGS);
@@ -80,6 +100,33 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     orders = new InMemoryOrderRegistry();
     alertStore = new InMemoryAlertStore();
     profileStore = new InMemoryProfileStore();
+    if (!authDisabled) {
+      keys = new InMemoryKeyStore();
+      audit = new InMemoryAuditStore();
+    }
+  }
+
+  // M2 security: every API call is authenticated by default. Bootstrap an
+  // admin key — from HUB_ADMIN_KEY when set (idempotent: recreates 'admin'
+  // to match), otherwise generate one and print it once.
+  if (keys) {
+    const admin = await keys.get('admin');
+    if (adminKeySecret) {
+      const match = await keys.findBySecret(adminKeySecret);
+      if (!match) {
+        if (admin) await keys.remove('admin');
+        await keys.create({ id: 'admin', name: 'Administrator (HUB_ADMIN_KEY)', role: 'admin', secret: adminKeySecret });
+        console.log('[api]     admin key configured from HUB_ADMIN_KEY');
+      }
+    } else if (!admin) {
+      const { secret } = await keys.create({ id: 'admin', name: 'Administrator (auto-generated)', role: 'admin' });
+      console.log(`[api]     API auth enabled — generated admin API key:`);
+      console.log(`[api]       ${secret}`);
+      console.log(`[api]     Console UI and curl need: Authorization: Bearer ${secret}`);
+      console.log(`[api]     Set HUB_ADMIN_KEY to pin a fixed key.`);
+    }
+  } else if (authDisabled) {
+    console.log('[api]     API auth DISABLED (AUTH_DISABLED=1) — every /api/v1 route is open');
   }
 
   // Seed the reference + example certified profiles so CRUD/API demos work and
@@ -153,6 +200,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alerts: alertStore,
     profiles: profileStore,
     mappings,
+    keys,
+    audit,
     replayHandler: (message) => gateway.replay(message),
     releaseHandler: (id) => dispatcher.release(id),
   });
@@ -170,6 +219,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alerts,
     alertStore,
     profileStore,
+    keys,
+    audit,
     ports: { device: devicePort, http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {
