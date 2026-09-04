@@ -45,6 +45,48 @@ export interface OrderRegistry {
   list(): ExpectedOrder[] | Promise<ExpectedOrder[]>;
 }
 
+// ---------------------------------------------------------------------------
+// Patient-admission registry (B2c extension — the ADT side of the LIS seam).
+// The HIS tells the hub who is admitted via ADT^A01/A04/A08; the registry
+// stores the current admission per patient (the patient master context that
+// complements the expected-order registry — future RIS/M3 work consumes it).
+// ---------------------------------------------------------------------------
+
+export interface AdmissionRecord {
+  patientId: string;
+  name?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  /** Visit / encounter number when carried (PV1-19). */
+  visitId?: string;
+  status: 'admitted' | 'discharged';
+  receivedAt: string; // ISO timestamp
+}
+
+/** Registry of patient admissions fed from ADT messages (LIS/HIS seam). */
+export interface AdmissionRegistry {
+  find(patientId: string): AdmissionRecord[] | Promise<AdmissionRecord[]>;
+  register(admission: AdmissionRecord): void | Promise<void>;
+  list(): AdmissionRecord[] | Promise<AdmissionRecord[]>;
+}
+
+export class InMemoryAdmissionRegistry implements AdmissionRegistry {
+  private readonly admissions = new Map<string, AdmissionRecord>();
+
+  async find(patientId: string): Promise<AdmissionRecord[]> {
+    return [...this.admissions.values()].filter((a) => a.patientId === patientId);
+  }
+
+  async register(admission: AdmissionRecord): Promise<void> {
+    // One current admission per patient (an ADT A03 discharge replaces it).
+    this.admissions.set(admission.patientId, admission);
+  }
+
+  async list(): Promise<AdmissionRecord[]> {
+    return [...this.admissions.values()];
+  }
+}
+
 export type MatchKey = 'patientId' | 'orderId' | 'sampleId';
 
 export interface MatchingConfig {

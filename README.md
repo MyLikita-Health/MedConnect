@@ -31,15 +31,19 @@ Tests use Node's built-in test runner.
 **Workstream B — the HL7 v2 lab engine** is complete (inbound ORU/ADT/ORM +
 outbound ORM/ORU over MLLP, PRD §13–15): the inbound leg (ORU over MLLP →
 `Hl7Gateway` → dispatcher), the **ORM order feed** (B2c — the LIS seam that
-replaces manual `POST /api/v1/orders`), the outbound store-and-forward leg
-(B3.1–B3.3: `canonicalToOru`/`canonicalToOrm`, the `hl7` destination kind +
-config/migration, `deliverHl7` with AA/AR/AE → retry/DLQ, and a held-open
-outbound connection manager), and **generalized HL7 segment-level profile
-layouts** (B4 — per-vendor PID/OBR/OBX position + delimiter overrides wired
-through `resolveLayout`), all with the parser buy resolved as D7. Kickoff
-survey + status: plan §13.15. Goldens-in-CI for real vendor profiles arrive
-with field access (risk R2). After B: imaging/DICOM (M3), then
-FHIR/webhooks and multi-tenancy.
+replaces manual `POST /api/v1/orders`) and the **ADT patient-admission feed**
+(B2c extension — ADT^A01/A04/A08 into the admission registry), the outbound
+store-and-forward leg (B3.1–B3.3: `canonicalToOru`/`canonicalToOrm`, the
+`hl7` destination kind + config/migration, `deliverHl7` with AA/AR/AE →
+retry/DLQ, and a held-open outbound connection manager), and **generalized
+HL7 segment-level profile layouts** (B4 — per-vendor PID/OBR/OBX position +
+delimiter overrides wired through `resolveLayout`), all with the parser buy
+resolved as D7. A **vendor-variant simulator mode** (`npm run simulate:hl7 --
+--variant <name> [--kind oru|orm]`) emits B4-deviant ORU/ORM transcripts
+for profile testing. Kickoff survey + status: plan §13.15. Goldens-in-CI
+for real vendor profiles arrive with field access (risk R2). After B:
+**imaging/DICOM (M3)** — kickoff survey: plan §13.16 — then FHIR/webhooks
+and multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -241,15 +245,16 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 267 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 281 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
-                   #   Hl7Gateway + ORM order feed + ORU/ORM serializer +
-                   #   outbound deliverHl7 + connection pool, HL7 segment
-                   #   profile layouts (B4), dispatcher/DLQ, API, security
+                   #   Hl7Gateway + ORM order feed + ADT admission feed +
+                   #   ORU/ORM serializer + outbound deliverHl7 + connection
+                   #   pool, HL7 segment profile layouts (B4) + vendor-
+                   #   variant simulator oracle, dispatcher/DLQ, API, security
                    #   (roles/scopes + authz + audit), signed updates +
-                   #   supervisor (apply/rollback/crash) (17 DB-gated skip)
-npm run test:db    # 267 tests: same + PostgreSQL integration (needs db:up)
+                   #   supervisor (apply/rollback/crash) (18 DB-gated skip)
+npm run test:db    # 281 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -554,8 +559,9 @@ pipeline canonicalizes correctly for both it and the reference layout.
   peer, idle close). Goldens-in-CI for real vendor profiles are deferred
   until a real vendor's variant requirements exist (plan §13.15).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
-  registers orders (B2c, closes the "real LIS master feed" gap);
-  ADT patient-admission feeds are still open. A hub without the HL7 port
-  still uses manual `POST /api/v1/orders`. Result-plausibility seeds assume
-  the reference simulator's unit conventions (mg/dL): a facility using SI
-  units must configure its own bounds.
+  registers orders (B2c, closes the "real LIS master feed" gap), and
+  **ADT^A01/A04/A08 patient admissions** register in the admission registry
+  (`hub.admissions`, migration 0011). A hub without the HL7 port still uses
+  manual `POST /api/v1/orders`. Result-plausibility seeds assume the
+  reference simulator's unit conventions (mg/dL): a facility using SI units
+  must configure its own bounds.

@@ -1177,8 +1177,14 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    instead of manual `POST /api/v1/orders`. E2E proof
    (`packages/server/src/hl7-order-feed.test.ts`): ORM over MLLP registers
    the order and the matching ORU **ROUTED** with `MATCHED` (control: same
-   ORU without the feed → HELD `UNMATCHED`). ADT patient-admission feeds
-   remain a future B2c extension.
+   ORU without the feed → HELD `UNMATCHED`). **ADT extension shipped**: the
+   patient-admission feed (`hl7ToAdmission`, `packages/hl7/src/admission.ts`)
+   translates ADT^A01/A04/A08 (admitted) and A03 (discharged) into an
+   `AdmissionRegistry` (InMemory + PG `0011_adt_admissions.sql`) via the
+   gateway's `admissions` seam, wired in `startHub` (`hub.admissions`) — the
+   patient-side LIS master feed. E2E (`packages/server/src/hl7-adt-feed.test.ts`)
+   against the real `startHub`: ADT → AA → registered (A03 flips status;
+   garbage → AR).
 7. ✅ **B3.3 — outbound delivery (first real outbound beyond HTTP)**: the
    Dispatcher gains an injected `deliver` seam (`DispatcherOptions.deliver`;
    core stays protocol-blind — the built-in handles console/http, anything
@@ -1211,18 +1217,23 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    (`defaultHl7LayoutFor` — defaults byte-identical to the generic
    translator, so unprofiled devices parse exactly as before); `Hl7Gateway`
    gains a `resolveLayout` seam from the MSH sender identity and `startHub`
-   binds it to the device→profile store. Vendor-variant tests cover each
+   binds it to the device→profile store.   Vendor-variant tests cover each
    deviation (name-at-PID-6, code-component swap, ORC anchor, alternate
    delimiters, ORM PID-4/ORC-4) at translator, order-feed and gateway level.
-   Goldens-in-CI stay deferred until real vendor transcripts exist (the
-   layout language + conformance oracle are the machinery that will certify
-   them).
-10. Test status: `npm test` = 267 (250 pass / 17 DB-gated skip); `npm run
-    test:db` = 267/267.
+   A **vendor-variant simulator mode** (`packages/simulator/src/hl7-variant.ts`,
+   `npm run simulate:hl7 -- --variant <name> [--kind oru|orm]`) emits
+   deterministic B4-deviant ORU/ORM transcripts; each variant ships the
+   `Hl7RecordLayout` that decodes it, and the conformance-oracle tests pin
+   that the generic parse fails/misreads while the layout yields the exact
+   canonical payload — the same oracle goldens-in-CI will run against real
+   vendor transcripts when field access (risk R2) provides them.
+10. Test status: `npm test` = 281 (263 pass / 18 DB-gated skip); `npm run
+    test:db` = 281/281.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
-profiles arrive with field access (risk R2); ADT patient-admission feeds
-stay a documented B2c extension.
+profiles arrive with field access (risk R2); the ADT patient-admission feed
+and the vendor-variant simulator are shipped. Next phase: **M3 imaging &
+DICOM via Orthanc** (kickoff survey: §13.16).
 
 ---
 
@@ -1328,6 +1339,76 @@ death); (5) ✅ **B4 done** — generalized HL7 segment-level profile layouts
 gateway seam) with vendor-variant tests; goldens-in-CI stays deferred until a
 real vendor's transcripts exist. Each step keeps both suites green (`npm
 test` / `npm run test:db`) and demo-able in memory and Postgres.
+
+---
+
+### 13.16 Workstream M3 — imaging & DICOM (via Orthanc): kickoff survey
+
+**Objective** (plan §7.C, PRD Phase 2): X-ray/CT/MRI modality connectivity and
+RIS/PACS interchange **without writing DICOM networking** — the §3.1/§3.2
+decision is fixed: DICOM storage/worklist/forwarding is **delegated to Orthanc**
+(adjacent AGPLv3 process driven over its REST API; never a hand-written Node
+C-STORE stack — risk R6). The hub orchestrates: canonical imaging metadata,
+routing rules, exception handling, the radiology console — exactly the layers it
+already owns for lab. M2's gate has closed (B shipped; §8.2), so M3 may start.
+Exit gate (§8.1): radiology pilot — order→MWL→store→PACS end-to-end, failure
+drill passes, dual-domain console at one facility.
+
+**What the lab engine already hands M3 for free** (the survey's value — most
+of C1–C6 is composition, not new protocol work):
+
+- **RIS/HIS order + patient feeds exist** (B2c + ADT extension): inbound
+  ORM^O01 already lands in the `OrderRegistry` and ADT^A01 admissions in the
+  admission registry — MWL generation (C2) reads orders from the registry; no
+  new inbound protocol to build.
+- **Outbound HL7 exists** (B3.1/B3.3): imaging status/order download back to
+  the RIS/HIS reuses `canonicalToOrm` + `deliverHl7` to the `hl7` destination
+  kind — §6.4's imaging leg is the existing outbound machinery.
+- **The whole delivery pipeline is protocol-blind** (§3.3 invariant 1): study
+  metadata + status events enter as `CanonicalMessage` envelopes and get dedup
+  → match → HELD → route → retry → DLQ for free. The **imaging failure queue
+  (C4) is the existing exception queue** + `dispatcher.release` replay.
+- **Routing rules are data** (RouteStore): modality/department/accession rules
+  for storage routing (C3) are new rules + a new destination kind, not new
+  engine code.
+- **Modality health = device state** (C4): Orthanc-registered modalities as
+  devices → the existing device-state seam + `device-offline` alerting.
+- **Console/API foundations**: ApiServer authn/audit/RBAC for the radiology
+  console (C6); the in-memory/PG store duality for study metadata rows.
+
+**Build list (new), mapped to slices:**
+
+1. **M3.1 — `@integration-hub/dicom` module + canonical imaging shapes**: a
+   `DicomOrthancAdapter` REST client (create patient/study, worklist items,
+   query/delete studies, list modalities/peers) and the §6.2 phase-2 canonical
+   additions in shared (`ImagingRequest` accession/modality/requested
+   procedure; Study/Series/Instance **metadata** + storage URLs — pixels never
+   in the hub DB).
+2. **M3.2 — MWL workflow (C2)**: order registry → Orthanc worklist;
+   hub monitors whether the study was performed (poll v1; MPPS is an M5
+   refinement per §8.1).
+3. **M3.3 — Storage routing (C3)**: hub registers as an Orthanc forwarding
+   peer to PACS/archive; study metadata + status flow through the dispatcher
+   with DB-driven routing rules.
+4. **M3.4 — Failure handling + radiology console (C4/C6)**: failed studies in
+   the exception queue with replay; modality/Orthanc health as devices;
+   console views (modality list, worklist status, failed studies, routing).
+5. **M3.5 — Orthanc lifecycle (C5)**: compose packaging + upgrade path, the
+   §7.5.5 AGPL boundary doc, optional customer-provided Orthanc — **decision
+   D10** (bundled vs customer-provided) resolves here.
+
+**Decisions & risks carried forward**: D10 open (packaging/commercial); R6
+enforced by the §3.2 matrix (no Node DICOM stack); AGPL boundary kept by the
+separate-process compose pattern (invariant 7); DICOMweb via Orthanc's plugin
+stays M5 (§8.1). Simulators (workstream K): a DICOM simulator = Orthanc + a
+fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
+route with failure injection — the M3 exit drill.
+
+**Sequencing & gates**: M3.1 adapter+shapes → M3.2 MWL → M3.3 storage
+routing → M3.4 console+failure → M3.5 packaging; every slice keeps `npm test`
+/ `npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
+**Status: kickoff survey only — not started** (M2/B just closed; sequencing
+per §8.2).
 
 ---
 

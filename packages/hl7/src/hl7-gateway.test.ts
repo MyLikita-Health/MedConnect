@@ -13,6 +13,7 @@ import net from 'node:net';
 import type { CanonicalMessage, Hl7RecordLayout, MessageSink } from '@integration-hub/shared';
 import { Hl7Gateway, type OrderFeed } from './hl7-gateway.js';
 import type { OrderRegistration } from './order.js';
+import type { AdmissionRegistration } from './admission.js';
 import { MllpDecoder, wrapMessage } from './mllp.js';
 import { parseMessage, segmentField } from './message.js';
 
@@ -30,7 +31,13 @@ interface Hub {
   port: number;
 }
 
-async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed, resolveLayout?: (deviceId: string) => Hl7RecordLayout | undefined): Promise<Hub> {
+async function startHub(
+  t: any,
+  sink?: MessageSink,
+  orders?: OrderFeed,
+  resolveLayout?: (deviceId: string) => Hl7RecordLayout | undefined,
+  admissions?: { register(a: AdmissionRegistration): void | Promise<void> },
+): Promise<Hub> {
   const messages: CanonicalMessage[] = [];
   const states: Hub['states'] = [];
   const errors: Error[] = [];
@@ -39,6 +46,7 @@ async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed, resolveL
     port: 0,
     sink: sink ?? { record: (m) => void messages.push(m) }, // recording default
     orders,
+    admissions,
     resolveLayout,
     onDeviceState: (deviceId, state) => states.push([deviceId, state]),
     onSessionError: (e) => errors.push(e),
@@ -210,6 +218,86 @@ test('a malformed ORM is rejected AR; a registry failure answers AE', async (t) 
   await waitFor(() => hub2.errors.length >= 1, 'session error surfaced');
   assert.equal(msa(c2.acks[0]!).status, 'AE');
   assert.match(msa(c2.acks[0]!).text ?? '', /order registration failed: registry down/);
+});
+
+test('ADT^A01 patient-admission feeds the registry (AA) instead of the results sink', async (t) => {
+  const registered: AdmissionRegistration[] = [];
+  const hub = await startHub(t, undefined, undefined, undefined, { register: (a) => void registered.push(a) });
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  const adt = [
+    'MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-1|P|2.3.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+    'PV1|1|I|WARD-A^BED-3|||||||||||||||VIS-77',
+  ].join('\r');
+  socket.write(wrapMessage(adt));
+  await waitFor(() => acks.length >= 1, 'AA ack');
+  await waitFor(() => registered.length >= 1, 'admission registered');
+
+  assert.equal(msa(acks[0]!).status, 'AA');
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0]!.patientId, 'PID-1001');
+  assert.equal(registered[0]!.name, 'Adeyemi, Tunde');
+  assert.equal(registered[0]!.status, 'admitted');
+  // An ADT is not a result: the results sink is untouched.
+  assert.equal(hub.messages.length, 0);
+  assert.deepEqual(hub.errors, []);
+});
+
+test('a malformed ADT is rejected AR; a registry failure answers AE', async (t) => {
+  const hub = await startHub(t, undefined, undefined, undefined, { register: () => {} });
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  // Missing PID-3 → cannot register → AR with reasons.
+  const bad = [
+    'MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-2|P|2.3.1',
+    'PID|1|||^NoId^X||19850312|M',
+    'PV1|1|I',
+  ].join('\r');
+  socket.write(wrapMessage(bad));
+  await waitFor(() => acks.length >= 1, 'AR ack');
+  assert.equal(msa(acks[0]!).status, 'AR');
+  assert.match(msa(acks[0]!).text ?? '', /Missing patient identifier/);
+
+  // An admission registry that throws → AE + session error.
+  const hub2 = await startHub(t, undefined, undefined, undefined, {
+    register: () => {
+      throw new Error('registry down');
+    },
+  });
+  const c2 = await connect(hub2.port);
+  t.after(() => c2.socket.destroy());
+  const good = [
+    'MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-3|P|2.3.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+  ].join('\r');
+  c2.socket.write(wrapMessage(good));
+  await waitFor(() => c2.acks.length >= 1, 'AE ack');
+  await waitFor(() => hub2.errors.length >= 1, 'session error surfaced');
+  assert.equal(msa(c2.acks[0]!).status, 'AE');
+  assert.match(msa(c2.acks[0]!).text ?? '', /admission registration failed: registry down/);
+});
+
+test('without the admissions seam, ADT falls through and is rejected loudly', async (t) => {
+  // Control: no seam wired — same rule as ORM — the ADT cannot be
+  // canonicalized (no results) so it is AR-rejected and persisted FAILED.
+  const hub = await startHub(t);
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  const adt = [
+    'MSH|^~\\&|ACME_HIS|FAC1|HUB|FAC2|20260904120000||ADT^A01|ADT-4|P|2.3.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+  ].join('\r');
+  socket.write(wrapMessage(adt));
+  await waitFor(() => acks.length >= 1, 'AR ack');
+  await waitFor(() => hub.messages.length >= 1, 'FAILED message persisted');
+
+  assert.equal(msa(acks[0]!).status, 'AR');
+  assert.match(msa(acks[0]!).text ?? '', /unsupported message type ADT/);
+  assert.equal(hub.messages[0]!.status, 'FAILED');
 });
 
 test('disconnect fires for the device that carried the connection', async (t) => {

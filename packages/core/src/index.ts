@@ -27,9 +27,12 @@ export {
 } from './dispatcher.js';
 export {
   DEFAULT_MATCHING_CONFIG,
+  InMemoryAdmissionRegistry,
   InMemoryOrderRegistry,
   matchMessage,
   matchToMessageMatch,
+  type AdmissionRecord,
+  type AdmissionRegistry,
   type ExpectedOrder,
   type MatchKey,
   type MatchOutcome,
@@ -41,7 +44,7 @@ export {
 export { PostgresAlertStore } from './pg-alerts.js';
 export { InMemoryAlertStore, type AlertFilter, type AlertKind, type AlertRecord, type AlertRule, type AlertStore } from './alert-store.js';
 export { AlertService, type AlertServiceOptions } from './alerts.js';
-export { PostgresOrderRegistry } from './pg-registry.js';
+export { PostgresAdmissionRegistry, PostgresOrderRegistry } from './pg-registry.js';
 export {
   DEFAULT_UNIT_CATALOG,
   DEFAULT_VALIDATION_RULES,

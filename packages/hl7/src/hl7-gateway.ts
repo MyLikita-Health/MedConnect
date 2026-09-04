@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import type { CanonicalMessage, Hl7RecordLayout, LabPayload, MappingTable, MessageSink, ParsedRecord } from '@integration-hub/shared';
 import { hl7ToCanonical } from './translate.js';
 import { hl7ToOrder, type OrderRegistration } from './order.js';
+import { hl7ToAdmission, type AdmissionRegistration } from './admission.js';
 import { MllpSession, type AckDecision } from './mllp-session.js';
 import { MSH_SLOTS, parseMessage } from './message.js';
 import type { MllpTlsCredentials } from './mllp-server.js';
@@ -59,6 +60,14 @@ export interface Hl7GatewayOptions {
    * is rejected loudly.
    */
   orders?: OrderFeed;
+  /**
+   * The patient-admission seam (B2c extension): when wired, incoming
+   * ADT^A01/A04/A08 patient-admission messages register in the admission
+   * registry (the patient-side LIS feed) instead of the results pipeline.
+   * Without it, ADT falls through to the results translator and is rejected
+   * loudly — same rule as ORM.
+   */
+  admissions?: { register(admission: AdmissionRegistration): void | Promise<void> };
   /** PEM key + cert: when present the listener is TLS-terminated. */
   tls?: MllpTlsCredentials;
   /** Connection-state callbacks keyed by the MSH sender identity. */
@@ -140,6 +149,23 @@ export class Hl7Gateway {
       }
     }
 
+    // B2c extension — the patient-admission seam: ADT^A01/A04/A08 messages
+    // register the patient admission (no results to deliver), before the AA
+    // ack; AR + reasons when they cannot be translated.
+    if (this.opts.admissions && isAdt(payload)) {
+      const { admission, issues } = hl7ToAdmission(payload, { layout });
+      if (!admission) return { status: 'AR', text: issues.join('; ') };
+      try {
+        const result = this.opts.admissions.register(admission);
+        if (result instanceof Promise) await result;
+        return {}; // AA — admission registered
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.opts.onSessionError?.(error);
+        return { status: 'AE', text: `admission registration failed: ${error.message}` };
+      }
+    }
+
     const { payload: canonical, issues } = hl7ToCanonical(payload, { mappings: this.opts.mappings, layout });
     const message = buildEnvelope(records, payload, canonical, issues, deviceId);
 
@@ -164,6 +190,13 @@ function isOrm(payload: string): boolean {
   const msh = parseMessage(payload).segments.find((s) => s.id === 'MSH');
   const type = msh ? msh.fields[MSH_SLOTS.messageType] : undefined;
   return (type ?? '').startsWith('ORM^');
+}
+
+/** True for the ADT^A01 patient-admission trigger family (MSH-9). */
+function isAdt(payload: string): boolean {
+  const msh = parseMessage(payload).segments.find((s) => s.id === 'MSH');
+  const type = msh ? msh.fields[MSH_SLOTS.messageType] : undefined;
+  return (type ?? '').startsWith('ADT^');
 }
 
 /** Device id from the MSH sender (sending application, else facility). */

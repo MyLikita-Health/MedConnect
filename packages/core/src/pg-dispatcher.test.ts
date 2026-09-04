@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import type { Pool } from 'pg';
 import type { CanonicalMessage } from '@integration-hub/shared';
 import { PostgresMessageStore, closeDbPool, createDbPool, runMigrations } from '@integration-hub/api';
-import { Dispatcher, PostgresDedupStore, PostgresOrderRegistry, PostgresRouteStore } from './index.js';
+import { Dispatcher, PostgresAdmissionRegistry, PostgresDedupStore, PostgresOrderRegistry, PostgresRouteStore } from './index.js';
 
 const DB_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const skipReason = DB_URL ? false : 'TEST_DATABASE_URL/DATABASE_URL not set (npm run db:up && npm run test:db)';
@@ -178,6 +178,32 @@ test('Postgres route store round-trips an hl7 destination config', { skip: skipR
 
   // Cleanup so sibling suites stay isolated.
   await r.deleteDestination('pg-lis-mllp');
+});
+
+test('Postgres admission registry round-trips ADT admissions (upsert on re-admit)', { skip: skipReason }, async () => {
+  if (!pool) return skipTest('no pool');
+  const registry = new PostgresAdmissionRegistry(pool);
+
+  await registry.register({
+    patientId: 'PG-ADM-1',
+    name: 'Doe, Jane',
+    dateOfBirth: '19850312',
+    gender: 'F',
+    visitId: 'VIS-9',
+    status: 'admitted',
+    receivedAt: new Date().toISOString(),
+  });
+  const [admitted] = await registry.find('PG-ADM-1');
+  assert.ok(admitted);
+  assert.equal(admitted.name, 'Doe, Jane');
+  assert.equal(admitted.dateOfBirth, '19850312');
+  assert.equal(admitted.visitId, 'VIS-9');
+  assert.equal(admitted.status, 'admitted');
+  assert.ok((await registry.list()).some((a) => a.patientId === 'PG-ADM-1'));
+
+  // An A03 discharge for the same patient replaces the current admission.
+  await registry.register({ patientId: 'PG-ADM-1', status: 'discharged', receivedAt: new Date().toISOString() });
+  assert.equal((await registry.find('PG-ADM-1'))[0]!.status, 'discharged');
 });
 
 test('Postgres dispatcher matches the registry, holds unmatched, and releases into delivery', { skip: skipReason }, async (t) => {

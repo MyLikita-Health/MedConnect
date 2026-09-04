@@ -4,7 +4,7 @@
  * safely associated (PRD §27) — same contract as `InMemoryOrderRegistry`.
  */
 import type { Pool } from 'pg';
-import type { ExpectedOrder, OrderQuery, OrderRegistry } from './matching.js';
+import type { AdmissionRecord, AdmissionRegistry, ExpectedOrder, OrderQuery, OrderRegistry } from './matching.js';
 
 interface OrderRow {
   id: string;
@@ -72,6 +72,77 @@ function rowToOrder(row: OrderRow): ExpectedOrder {
     tests: (row.tests as string[]) ?? [],
     status: row.status as ExpectedOrder['status'],
     // created_at is when the LIS registered the expected order.
+    receivedAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+/**
+ * PostgreSQL-backed patient-admission registry (B2c extension — the ADT side
+ * of the LIS seam). Stores admissions the HIS has told the hub about via
+ * ADT^A01/A04/A08 — same contract as `InMemoryAdmissionRegistry`.
+ */
+
+interface AdmissionRow {
+  patient_id: string;
+  name: string | null;
+  date_of_birth: string | null;
+  gender: string | null;
+  visit_id: string | null;
+  status: string;
+  created_at: Date | string;
+}
+
+export class PostgresAdmissionRegistry implements AdmissionRegistry {
+  constructor(private readonly pool: Pool) {}
+
+  async find(patientId: string): Promise<AdmissionRecord[]> {
+    const { rows } = await this.pool.query<AdmissionRow>(
+      `SELECT patient_id, name, date_of_birth, gender, visit_id, status, created_at
+       FROM admission_registry WHERE patient_id = $1`,
+      [patientId],
+    );
+    return rows.map(rowToAdmission);
+  }
+
+  async register(admission: AdmissionRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO admission_registry (patient_id, name, date_of_birth, gender, visit_id, status)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (patient_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         date_of_birth = EXCLUDED.date_of_birth,
+         gender = EXCLUDED.gender,
+         visit_id = EXCLUDED.visit_id,
+         status = EXCLUDED.status,
+         updated_at = now()`,
+      [
+        admission.patientId,
+        admission.name ?? null,
+        admission.dateOfBirth ?? null,
+        admission.gender ?? null,
+        admission.visitId ?? null,
+        admission.status,
+      ],
+    );
+  }
+
+  async list(): Promise<AdmissionRecord[]> {
+    const { rows } = await this.pool.query<AdmissionRow>(
+      `SELECT patient_id, name, date_of_birth, gender, visit_id, status, created_at
+       FROM admission_registry ORDER BY created_at DESC`,
+    );
+    return rows.map(rowToAdmission);
+  }
+}
+
+function rowToAdmission(row: AdmissionRow): AdmissionRecord {
+  return {
+    patientId: row.patient_id,
+    ...(row.name ? { name: row.name } : {}),
+    ...(row.date_of_birth ? { dateOfBirth: row.date_of_birth } : {}),
+    ...(row.gender ? { gender: row.gender } : {}),
+    ...(row.visit_id ? { visitId: row.visit_id } : {}),
+    status: row.status as AdmissionRecord['status'],
     receivedAt: new Date(row.created_at).toISOString(),
   };
 }

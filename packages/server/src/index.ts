@@ -10,7 +10,7 @@ import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, In
 import { AstmGateway } from '@integration-hub/gateway';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -65,6 +65,8 @@ export interface Hub {
   devices: DeviceBackend;
   dispatcher: Dispatcher;
   routes: RouteStore;
+  orders: OrderRegistry;
+  admissions: AdmissionRegistry;
   alerts: AlertService;
   alertStore: AlertStore;
   profileStore: ProfileStore;
@@ -86,6 +88,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let routes: RouteStore;
   let dedup: DispatcherOptions['dedup'];
   let orders: OrderRegistry;
+  let admissions: AdmissionRegistry;
   let alertStore: AlertStore;
   let profileStore: ProfileStore;
   let mappings = opts.mappings ?? DEFAULT_MAPPINGS;
@@ -111,6 +114,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     routes = new PostgresRouteStore(pool);
     dedup = new PostgresDedupStore(pool);
     orders = new PostgresOrderRegistry(pool);
+    admissions = new PostgresAdmissionRegistry(pool);
     alertStore = new PostgresAlertStore(pool);
     profileStore = new PostgresProfileStore(pool);
     if (!authDisabled) {
@@ -127,6 +131,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     routes = new InMemoryRouteStore();
     dedup = new InMemoryDedupStore();
     orders = new InMemoryOrderRegistry();
+    admissions = new InMemoryAdmissionRegistry();
     alertStore = new InMemoryAlertStore();
     profileStore = new InMemoryProfileStore();
     if (!authDisabled) {
@@ -304,6 +309,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         orders: {
           register: (order) => orders.register({ ...order, receivedAt: order.receivedAt ?? new Date().toISOString() }),
         },
+        // B2c extension — the ADT patient-admission feed: ADT^A01/A04/A08
+        // register the patient admission (the patient-side LIS master feed).
+        admissions: {
+          register: (admission) => admissions.register({ ...admission, receivedAt: admission.receivedAt ?? new Date().toISOString() }),
+        },
         onDeviceState: onDeviceState('HL7'),
         onSessionError: (err) => console.error(`[gateway] HL7 session error: ${err.message}`),
       })
@@ -356,6 +366,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     devices,
     dispatcher,
     routes,
+    orders,
+    admissions,
     alerts,
     alertStore,
     profileStore,
