@@ -8,7 +8,7 @@
  */
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
-import { deliverHl7, Hl7Gateway } from '@integration-hub/hl7';
+import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
@@ -189,10 +189,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // B3.3 — outbound HL7: deliver `hl7` destinations over MLLP (the
     // integration core stays protocol-blind; this is the only HL7-aware wire).
     // A non-AA application ACK throws → the dispatcher retries per policy,
-    // then DLQs with the MSA-3 reason — never silently dropped.
+    // then DLQs with the MSA-3 reason — never silently dropped. Deliveries
+    // share one held-open connection pool per (host, port) — LIS peers
+    // expect persistent MLLP connections (reconnect + idle close handled).
     deliver: async (destination, message) => {
       if (destination.kind !== 'hl7' || !destination.hl7) throw new Error(`cannot deliver kind ${destination.kind} over HL7`);
-      await deliverHl7(destination.hl7, message, { debug: (line) => console.log(`[outbound:hl7] ${line}`) });
+      await deliverHl7(destination.hl7, message, {
+        pool: hl7OutboundPool,
+        debug: (line) => console.log(`[outbound:hl7] ${line}`),
+      });
     },
     events: {
       onDelivery: async (event) => {
@@ -252,6 +257,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
   };
 
+  // Outbound connection manager (B3.3 refinement): one held-open MLLP
+  // connection per destination endpoint, reused across deliveries.
+  const hl7OutboundPool = new MllpConnectionPool({ debug: (line) => console.log(`[outbound:hl7] ${line}`) });
+
   const gateway = new AstmGateway({
     host,
     port: opts.devicePort ?? 0,
@@ -280,6 +289,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         sink: dispatcher,
         mappings,
         ...(tls ? { tls } : {}),
+        // B4 — profile-bound HL7 parsing: a device registered with an HL7
+        // profile (its `hl7` segment-level layout) is canonicalized with that
+        // profile's positions + delimiters; unbound devices parse generically.
+        resolveLayout: async (deviceId) => {
+          const device = await devices.get(deviceId);
+          if (!device?.profileId) return undefined;
+          const profile = await profileStore.get(device.profileId);
+          return profile?.hl7;
+        },
         // B2c — the LIS seam: inbound ORM^O01 order messages register the
         // expected order (replacing the manual POST /api/v1/orders flow);
         // matching then sees it, so results against it route instead of HELD.
@@ -350,6 +368,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       await api.stop();
       await gateway.stop();
       if (hl7Gateway) await hl7Gateway.stop();
+      await hl7OutboundPool.close();
       if (pool) await closeDbPool(pool);
     },
   };

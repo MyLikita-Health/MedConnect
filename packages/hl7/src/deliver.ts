@@ -13,15 +13,17 @@
  *                           surfaces in the attempt/feed)
  *     connection/timeout  → throw (transient; retried per policy)
  *
- * Connection management is deliberately per-delivery: each delivery opens its
- * own MLLP connection, sends, awaits the ACK, and closes. Held-open persistent
- * MLLP sessions with reconnect are the documented next refinement (the plan's
- * outbound connection manager); per-delivery is correct, simple, and matches
- * how the dispatcher treats delivery as stateless today.
+ * Connection management: pass an `MllpConnectionPool` to reuse held-open MLLP
+ * connections (LIS peers expect persistence — the outbound connection
+ * manager); without one, each delivery connects, sends, awaits the ACK, and
+ * closes (stateless v1).
  */
 import net from 'node:net';
 import type { CanonicalMessage } from '@integration-hub/shared';
 import { canonicalToOru, canonicalToOrm, type OutboundOptions } from './serialize.js';
+import { MllpClient } from './mllp-client.js';
+import { MllpConnectionPool } from './connection-pool.js';
+import { parseMessage, segmentField } from './message.js';
 
 /**
  * Outbound MLLP endpoint (structural match to the integration core's
@@ -37,11 +39,17 @@ export interface MllpEndpointConfig {
   receivingFacility?: string;
   version?: string;
 }
-import { MllpClient } from './mllp-client.js';
-import { parseMessage, segmentField } from './message.js';
 
 export interface Hl7DeliverOptions {
   debug?: (line: string) => void;
+  /**
+   * Held-open outbound connection manager: when provided, deliveries reuse a
+   * persistent MLLP connection per (host, port) instead of opening a fresh
+   * one per delivery. The pool owns socket lifecycle + reconnect + idle
+   * close; call `close()` at shutdown. When absent, each delivery connects,
+   * sends, awaits the ACK and closes (stateless v1).
+   */
+  pool?: MllpConnectionPool;
 }
 
 /** Throw when the ACK is not AA; resolves otherwise. */
@@ -67,6 +75,15 @@ export async function deliverHl7(
   };
   const wire = payload.results.length > 0 ? canonicalToOru(payload, outbound) : canonicalToOrm(payload, outbound);
 
+  if (opts.pool) {
+    // Connection-manager path: reuse a held-open connection; the pool owns
+    // the socket (reconnect + idle close). Only the ACK semantics are ours.
+    const ack = await opts.pool.send(destination, wire);
+    assertAccept(ack);
+    return;
+  }
+
+  // Stateless v1 path: connect per delivery, await the ACK, close.
   const socket = await connect(destination.host, destination.port);
   try {
     const client = new MllpClient(socket, { debug: opts.debug });

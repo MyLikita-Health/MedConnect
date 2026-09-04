@@ -1187,20 +1187,42 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    (results) / ORM^O01 (order-only) via the B3.1 serializer → MLLP connect →
    await the application ACK — AA resolves (attempt OK), **AE/AR throw with
    the MSA-3 reason** → per-destination retry/backoff → DLQ (the reason
-   surfaces in the timeline; never silently dropped). Connection per delivery
-   v1 (held-open sessions/reconnect = the documented connection-manager
-   refinement). E2E (`packages/server/src/hl7-outbound.test.ts`): inbound
-   ORU → route → mock LIS over MLLP → ROUTED; an AE-rejecting LIS → 3
-   attempts → FAILED/DLQ with the reason. `npm run demo:outbound` runs the
-   live loop (hub + in-process mock LIS + destination/route + simulator →
-   LIS received).
-8. Test status: `npm test` = 256 (239 pass / 17 DB-gated skip); `npm run
-   test:db` = 256/256.
+   surfaces in the timeline; never silently dropped). E2E
+   (`packages/server/src/hl7-outbound.test.ts`): inbound ORU → route → mock
+   LIS over MLLP → ROUTED; an AE-rejecting LIS → 3 attempts → FAILED/DLQ
+   with the reason. `npm run demo:outbound` runs the live loop (hub +
+   in-process mock LIS + destination/route + simulator → LIS received).
+8. ✅ **B3.3 refinement — outbound connection manager**
+   (`MllpConnectionPool`, `packages/hl7/src/connection-pool.ts`): one
+   held-open MLLP connection per destination endpoint, reused across
+   deliveries (LIS peers expect persistent sessions); a dying connection is
+   detected on write and **replaced with a fresh one in the same attempt**
+   (one retry), sockets idle-close after 30s, and `deliverHl7` now takes a
+   shared pool (wired in `startHub`; closed on shutdown). Tests pin reuse
+   (N messages, 1 connection), the replace-on-dead-peer path, and idle
+   close — the documented "connection per delivery v1" refinement is now
+   real.
+9. ✅ **B4 — generalized HL7 profiles (segment-level layouts)**: a profile's
+   `hl7` config (`Hl7RecordLayout` in shared, zod-validated in core) pins
+   PID/OBR/OBX field+component positions (`patient.name` at PID-6, CE
+   identifier at OBX-3^2 with a separate `testName` ref, ORC-anchored
+   orders, `delimiters` stamped on a lying MSH-2 before parsing).
+   `hl7ToCanonical` + `hl7ToOrder` read against a resolved layout
+   (`defaultHl7LayoutFor` — defaults byte-identical to the generic
+   translator, so unprofiled devices parse exactly as before); `Hl7Gateway`
+   gains a `resolveLayout` seam from the MSH sender identity and `startHub`
+   binds it to the device→profile store. Vendor-variant tests cover each
+   deviation (name-at-PID-6, code-component swap, ORC anchor, alternate
+   delimiters, ORM PID-4/ORC-4) at translator, order-feed and gateway level.
+   Goldens-in-CI stay deferred until real vendor transcripts exist (the
+   layout language + conformance oracle are the machinery that will certify
+   them).
+10. Test status: `npm test` = 267 (250 pass / 17 DB-gated skip); `npm run
+    test:db` = 267/267.
 
-Remaining B: **B4** HL7 segment profiles + goldens-in-CI (defer until a
-real vendor's variant requirements exist), plus the outbound
-connection-manager refinement (held-open MLLP sessions with reconnect) if a
-peer demands it.
+Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
+profiles arrive with field access (risk R2); ADT patient-admission feeds
+stay a documented B2c extension.
 
 ---
 
@@ -1299,10 +1321,13 @@ FHIR) actually arrives.
 **done** — serializer + `hl7` destination kind/config/migration; (3) ✅
 **B2c done** — inbound ORM^O01 → `OrderRegistry` feed closes the LIS seam;
 (4) ✅ **B3.3 done** — injectable `deliver` seam + `deliverHl7` (store-and-
-forward to an MLLP LIS, `demo:outbound`); (5) ⬜ B4 profile generalization
-+ HL7 conformance last (deferred until a real vendor's variants exist). Each
-step keeps both suites green (`npm test` / `npm run test:db`) and demo-able
-in memory and Postgres.
+forward to an MLLP LIS, `demo:outbound`) + the connection-manager
+refinement (`MllpConnectionPool`: held-open sessions, reuse, replace-on-
+death); (5) ✅ **B4 done** — generalized HL7 segment-level profile layouts
+(`hl7` config in the profile schema, layout-aware translators, `resolveLayout`
+gateway seam) with vendor-variant tests; goldens-in-CI stays deferred until a
+real vendor's transcripts exist. Each step keeps both suites green (`npm
+test` / `npm run test:db`) and demo-able in memory and Postgres.
 
 ---
 

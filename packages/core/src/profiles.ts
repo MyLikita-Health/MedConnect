@@ -10,6 +10,51 @@
 import { z } from 'zod';
 import type { DeviceProfile } from '@integration-hub/shared';
 
+/** B4: segment-level HL7 layout overrides (the ASTM record layout cannot describe them). */
+export const hl7FieldRefSchema = z.object({
+  field: z.number().int().min(1),
+  component: z.number().int().min(1).optional(),
+});
+
+export const hl7LayoutSchema = z.object({
+  delimiters: z
+    .object({
+      component: z.string().length(1).optional(),
+      repetition: z.string().length(1).optional(),
+      escape: z.string().length(1).optional(),
+      subcomponent: z.string().length(1).optional(),
+    })
+    .optional(),
+  patient: z
+    .object({
+      id: hl7FieldRefSchema,
+      name: hl7FieldRefSchema.optional(),
+      dateOfBirth: hl7FieldRefSchema.optional(),
+      sex: hl7FieldRefSchema.optional(),
+    })
+    .optional(),
+  order: z
+    .object({
+      segment: z.enum(['OBR', 'ORC']).optional(),
+      fillerId: hl7FieldRefSchema.optional(),
+      placerId: hl7FieldRefSchema.optional(),
+      test: hl7FieldRefSchema.optional(),
+    })
+    .optional(),
+  result: z
+    .object({
+      testCode: hl7FieldRefSchema,
+      testName: hl7FieldRefSchema.optional(),
+      value: hl7FieldRefSchema,
+      unit: hl7FieldRefSchema.optional(),
+      referenceRange: hl7FieldRefSchema.optional(),
+      flag: hl7FieldRefSchema.optional(),
+      status: hl7FieldRefSchema.optional(),
+      measuredAt: hl7FieldRefSchema.optional(),
+    })
+    .optional(),
+});
+
 export const recordLayoutSchema = z.object({
   patient: z
     .object({
@@ -47,6 +92,8 @@ export const deviceProfileSchema = z.object({
   transport: z.enum(['tcp', 'serial', 'api']).default('tcp'),
   version: z.number().int().min(1).default(1),
   layout: recordLayoutSchema,
+  /** B4: HL7 v2 segment-level layout overrides (HL7 profiles only). */
+  hl7: hl7LayoutSchema.optional(),
   mappings: z.record(z.string(), z.string()).optional(),
   capabilities: z.array(z.enum(['results-up', 'orders-down', 'host-query'])).optional(),
   connection: z

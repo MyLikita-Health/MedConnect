@@ -28,17 +28,18 @@ gate item: the facility **installer** (Docker image) plus **signed remote
 updates** with supervisor-driven apply, health-gate and rollback (PRD §42–43).
 Tests use Node's built-in test runner.
 
-**Workstream B — the HL7 v2 lab engine** is nearly complete (inbound
-ORU/ADT/ORM + outbound ORM/ORU over MLLP, PRD §13–15): the inbound leg (ORU
-over MLLP → `Hl7Gateway` → dispatcher), the **ORM order feed** (B2c — the
-LIS seam that replaces manual `POST /api/v1/orders`), and the outbound store-
-and-forward leg (B3.1–B3.3: `canonicalToOru`/`canonicalToOrm`, the `hl7`
-destination kind + config/migration, and `deliverHl7` wiring results/orders
-to a real MLLP peer with AA/AR/AE → retry/DLQ) are all shipped, with the
-parser buy resolved as D7. Kickoff survey + status: plan §13.15. Remaining:
-B4 (HL7 segment profiles + goldens), deferred until a real vendor's
-variants exist. After B: imaging/DICOM (M3), then FHIR/webhooks and
-multi-tenancy.
+**Workstream B — the HL7 v2 lab engine** is complete (inbound ORU/ADT/ORM +
+outbound ORM/ORU over MLLP, PRD §13–15): the inbound leg (ORU over MLLP →
+`Hl7Gateway` → dispatcher), the **ORM order feed** (B2c — the LIS seam that
+replaces manual `POST /api/v1/orders`), the outbound store-and-forward leg
+(B3.1–B3.3: `canonicalToOru`/`canonicalToOrm`, the `hl7` destination kind +
+config/migration, `deliverHl7` with AA/AR/AE → retry/DLQ, and a held-open
+outbound connection manager), and **generalized HL7 segment-level profile
+layouts** (B4 — per-vendor PID/OBR/OBX position + delimiter overrides wired
+through `resolveLayout`), all with the parser buy resolved as D7. Kickoff
+survey + status: plan §13.15. Goldens-in-CI for real vendor profiles arrive
+with field access (risk R2). After B: imaging/DICOM (M3), then
+FHIR/webhooks and multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -240,14 +241,15 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 256 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 267 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ORU/ORM serializer +
-                   #   outbound deliverHl7, dispatcher/DLQ, API, security
+                   #   outbound deliverHl7 + connection pool, HL7 segment
+                   #   profile layouts (B4), dispatcher/DLQ, API, security
                    #   (roles/scopes + authz + audit), signed updates +
                    #   supervisor (apply/rollback/crash) (17 DB-gated skip)
-npm run test:db    # 256 tests: same + PostgreSQL integration (needs db:up)
+npm run test:db    # 267 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -544,12 +546,13 @@ pipeline canonicalizes correctly for both it and the reference layout.
 - User *accounts* with passwords/JWT sessions, LDAP, 2FA and per-facility
   scoping are future RBAC layers (API keys + roles are the v1 surface, PRD
   §34–35).
-- **HL7 segment profiles remain (workstream B4)** — inbound ORU + ORM order
-  feed + outbound MLLP delivery are live (`demo:outbound`); the `hl7`
-  destination kind delivers per-connection v1 (a held-open outbound
-  connection manager with reconnect is the documented refinement). HL7
-  segment profiles + goldens are deferred until a real vendor's variant
-  requirements exist (plan §13.15).
+- **HL7 segment-level profiles are live (workstream B4)** — a profile's
+  `hl7` config pins per-vendor PID/OBR/OBX positions + delimiter overrides;
+  `Hl7Gateway.resolveLayout` applies them from the MSH sender identity, and
+  both translators read against them. Outbound MLLP delivery now runs over a
+  held-open connection pool (`MllpConnectionPool` — reuse, replace-on-dead-
+  peer, idle close). Goldens-in-CI for real vendor profiles are deferred
+  until a real vendor's variant requirements exist (plan §13.15).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap);
   ADT patient-admission feeds are still open. A hub without the HL7 port

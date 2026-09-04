@@ -22,7 +22,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
-import type { CanonicalMessage, LabPayload, MappingTable, MessageSink, ParsedRecord } from '@integration-hub/shared';
+import type { CanonicalMessage, Hl7RecordLayout, LabPayload, MappingTable, MessageSink, ParsedRecord } from '@integration-hub/shared';
 import { hl7ToCanonical } from './translate.js';
 import { hl7ToOrder, type OrderRegistration } from './order.js';
 import { MllpSession, type AckDecision } from './mllp-session.js';
@@ -43,6 +43,14 @@ export interface Hl7GatewayOptions {
   sink: MessageSink;
   /** Analyzer/LIS test-code → canonical mappings (PRD §17–18). */
   mappings?: MappingTable;
+  /**
+   * B4: resolve the sender's HL7 segment-level layout overrides (a certified
+   * profile's `hl7` config) from the MSH device identity. When present, the
+   * profile's positions replace the generic translator defaults for that
+   * device's messages (and its `delimiters` are stamped on the raw wire
+   * before parsing). A device without a bound HL7 profile parses generically.
+   */
+  resolveLayout?: (deviceId: string) => Hl7RecordLayout | undefined | Promise<Hl7RecordLayout | undefined>;
   /**
    * The LIS seam (B2c): when wired, incoming ORM^O01 order messages are
    * translated into the expected-order registry instead of the results
@@ -109,12 +117,17 @@ export class Hl7Gateway {
     this.deviceBySocket.set(socket, deviceId);
     this.opts.onDeviceState?.(deviceId, 'connected');
 
+    // B4 — profile resolution: a certified profile's `hl7` layout overrides
+    // the generic translator positions for this device's messages. Both
+    // translators (ORU results + ORM orders) honor the same overrides.
+    const layout = this.opts.resolveLayout ? await this.opts.resolveLayout(deviceId) : undefined;
+
     // B2c — the LIS seam: an ORM^O01 order message feeds the expected-order
     // registry directly (no results to deliver). Persisted before the ACK,
     // so the sender never resends a registered order; AR + reasons when it
     // cannot be translated.
     if (this.opts.orders && isOrm(payload)) {
-      const { order, issues } = hl7ToOrder(payload, { mappings: this.opts.mappings });
+      const { order, issues } = hl7ToOrder(payload, { mappings: this.opts.mappings, layout });
       if (!order) return { status: 'AR', text: issues.join('; ') };
       try {
         const result = this.opts.orders.register(order);
@@ -127,7 +140,7 @@ export class Hl7Gateway {
       }
     }
 
-    const { payload: canonical, issues } = hl7ToCanonical(payload, { mappings: this.opts.mappings });
+    const { payload: canonical, issues } = hl7ToCanonical(payload, { mappings: this.opts.mappings, layout });
     const message = buildEnvelope(records, payload, canonical, issues, deviceId);
 
     try {

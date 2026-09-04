@@ -81,3 +81,33 @@ test('non-ORM messages are rejected loudly; missing ids/orders are flagged', () 
   assert.equal(noOrc.order, null);
   assert.ok(noOrc.issues.some((i) => i.includes('Missing order segments')));
 });
+
+// ---------------------------------------------------------------------------
+// B4 — vendor segment-level layout overrides also drive the ORM feed (the
+// LIS seam shares the profile's `hl7` config with the results translator).
+// ---------------------------------------------------------------------------
+
+test('B4: a patient-id override reads PID-4 when the vendor omits PID-3', () => {
+  // This vendor carries the patient id in PID-4 (alternate id position);
+  // PID-3 is empty. The generic translator would flag a missing identifier.
+  const wire = [MSH, 'PID|1|||ALT-55^^^FAC1^PI||Adeyemi^Tunde||19850312|M', 'ORC|NW|PL-77|ACC-9|GLU', 'OBR|1|PL-77|ACC-9|GLU'].join('\r');
+
+  const generic = hl7ToOrder(wire);
+  assert.equal(generic.order, null);
+  assert.ok(generic.issues.includes('Missing patient identifier'));
+
+  const { order, issues } = hl7ToOrder(wire, { layout: { patient: { id: { field: 4, component: 1 } } } });
+  assert.ok(order, issues.join('; '));
+  assert.equal(order.patientId, 'ALT-55');
+});
+
+test('B4: an order-id override reads ORC-4 when that is where the vendor carries it', () => {
+  const wire = [MSH, PID, 'ORC|NW|PL-77|ACC-424242|LIS-ORD-9|GLU', 'OBR|1|PL-77|ACC-424242|GLU'].join('\r');
+
+  const generic = hl7ToOrder(wire);
+  assert.equal(generic.order!.id, 'ACC-424242');
+
+  const { order, issues } = hl7ToOrder(wire, { layout: { order: { fillerId: { field: 4, component: 1 } } } });
+  assert.ok(order, issues.join('; '));
+  assert.equal(order.id, 'LIS-ORD-9');
+});

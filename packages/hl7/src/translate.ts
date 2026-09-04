@@ -28,7 +28,7 @@
  */
 import { HL7Message as Parse, type HL7Message, type HL7Segment } from 'hl7v2';
 import { serializeMessage, unescapeText, type Hl7Encoding, type Hl7Message as PlatformMessage } from './message.js';
-import type { LabPayload, MappingTable } from '@integration-hub/shared';
+import { defaultHl7LayoutFor, type Hl7FieldRef, type Hl7RecordLayout, type LabPayload, type MappingTable } from '@integration-hub/shared';
 
 /** Canonicalization result shape, mirroring the ASTM pipeline's return. */
 export interface Hl7CanonicalizationResult {
@@ -39,6 +39,12 @@ export interface Hl7CanonicalizationResult {
 export interface Hl7ToCanonicalOptions {
   /** Analyzer/LIS test-code → canonical mappings (PRD §17–18); empty = pass-through. */
   mappings?: MappingTable;
+  /**
+   * B4: vendor HL7 segment-level layout overrides (a profile's `hl7`
+   * config). Position defaults match the generic translator exactly;
+   * `delimiters` overrides a sender's (wrong) MSH-2 for raw-wire input.
+   */
+  layout?: Hl7RecordLayout;
 }
 
 /** Translate an ORU^R01 (raw wire text or already parsed) to the canonical model. */
@@ -46,7 +52,8 @@ export function hl7ToCanonical(
   message: string | HL7Message | PlatformMessage,
   opts: Hl7ToCanonicalOptions = {},
 ): Hl7CanonicalizationResult {
-  const parsed = toHl7v2Message(message);
+  const layout = defaultHl7LayoutFor({ hl7: opts.layout });
+  const parsed = toHl7v2Message(opts.layout?.delimiters && typeof message === 'string' ? forceDelimiters(message, opts.layout.delimiters) : message);
   const issues: string[] = [];
 
   // v1 translator scope: results-up only. Anything else fails loudly.
@@ -58,21 +65,21 @@ export function hl7ToCanonical(
   const pid = parsed.getSegment('PID');
   const patient: LabPayload['patient'] = pid
     ? {
-        id: comp(pid, 3, 1) ?? '',
-        name: formatPersonName(pid),
-        dateOfBirth: comp(pid, 7),
-        gender: comp(pid, 8),
+        id: refComp(pid, layout.patient.id) ?? '',
+        name: formatPersonName(pid, layout.patient.name?.field ?? 5),
+        dateOfBirth: refPlain(pid, layout.patient.dateOfBirth),
+        gender: refPlain(pid, layout.patient.sex),
       }
     : { id: '' };
   if (!patient.id) issues.push('Missing patient identifier');
 
-  const { order, extraGroups } = resolveOrder(parsed);
+  const { order, extraGroups } = resolveOrder(parsed, layout);
   if (!order || !order.id) issues.push('Missing order identifier');
   if (extraGroups > 0) {
     issues.push(`message contains ${extraGroups + 1} distinct order groups — only one order per message is supported (v1)`);
   }
 
-  const results = collectResults(parsed);
+  const results = collectResults(parsed, layout);
   if (results.length === 0) issues.push('No result records');
   for (const r of results) {
     if (!r.value) issues.push(`Result for "${r.testCode || '(unknown test)'}" has no value`);
@@ -93,24 +100,31 @@ export function hl7ToCanonical(
 
   return { payload: { patient, order, results: mapped }, issues };
 
-  /** Resolve the single order anchor (first OBR, else first ORC) + group count. */
-  function resolveOrder(m: HL7Message): { order?: LabPayload['order']; extraGroups: number } {
+  /** Resolve the single order anchor (OBR by default, ORC when pinned) + group count. */
+  function resolveOrder(m: HL7Message, lay: ReturnType<typeof defaultHl7LayoutFor>): { order?: LabPayload['order']; extraGroups: number } {
     const obrs = m.segments.filter((s) => s.segmentType === 'OBR');
     const orcs = m.segments.filter((s) => s.segmentType === 'ORC');
     if (obrs.length === 0 && orcs.length === 0) return { extraGroups: 0 };
 
     // The guard above guarantees at least one exists (length checks do not
     // narrow index access under noUncheckedIndexedAccess, hence the assert).
-    const anchor = (obrs[0] ?? orcs[0])!;
-    const isObr = anchor.segmentType === 'OBR';
-    // Filler (3) is the usual accession anchor; placer (2) is the fallback.
-    const orderId = eiId(anchor, 3) ?? eiId(anchor, 2);
-    const test = isObr ? { code: ceId(anchor, 4), name: ceText(anchor, 4) } : undefined;
+    const anchor = (lay.order.segment === 'ORC' ? orcs[0] ?? obrs[0] : obrs[0] ?? orcs[0])!;
+    // Filler is the usual accession anchor; placer is the fallback. The
+    // requested test always reads from the first OBR row (an ORC-anchored
+    // feed still carries its tests on OBR — B4 layout `segment: 'ORC'`).
+    const orderId = refComp(anchor, lay.order.fillerId) ?? refComp(anchor, lay.order.placerId);
+    const obr = obrs[0];
+    const test = obr
+      ? { code: refComp(obr, lay.order.test) ?? '', name: comp(obr, lay.order.test.field, 2) ?? comp(obr, lay.order.test.field) }
+      : undefined;
 
     // Distinct secondary groups (by resolved id) are flagged, not merged.
+    // OBR rows are the observation groups; a single ORC header belongs to the
+    // first one (an ORC+OBR pair for the same order is ONE group, not two).
+    const groupSegs = obrs.length > 0 ? obrs : orcs;
     const ids = new Set<string>();
-    for (const o of [...obrs, ...orcs]) {
-      const id = eiId(o, 3) ?? eiId(o, 2);
+    for (const o of groupSegs) {
+      const id = refComp(o, lay.order.fillerId) ?? refComp(o, lay.order.placerId);
       if (id) ids.add(id);
     }
 
@@ -125,7 +139,7 @@ export function hl7ToCanonical(
   }
 
   /** Results under the order anchor: OBX after the first OBR (all when one group). */
-  function collectResults(m: HL7Message): LabPayload['results'] {
+  function collectResults(m: HL7Message, lay: ReturnType<typeof defaultHl7LayoutFor>): LabPayload['results'] {
     const out: LabPayload['results'] = [];
     const obrs = m.segments.filter((s) => s.segmentType === 'OBR');
     const firstObrIndex = m.segments.findIndex((s) => s.segmentType === 'OBR');
@@ -144,14 +158,18 @@ export function hl7ToCanonical(
         if (group !== firstObrIndex) continue;
       }
       out.push({
-        testCode: ceId(s, 3) ?? '',
-        testName: ceText(s, 3),
-        value: valueText(s, 5) ?? '',
-        unit: ceId(s, 6),
-        referenceRange: comp(s, 7),
-        flag: comp(s, 8),
-        status: comp(s, 11) ?? 'F',
-        measuredAt: comp(s, 14),
+        testCode: refComp(s, lay.result.testCode) ?? '',
+        // Name defaults to the CE text component of the code field; a vendor
+        // that names its code differently pins `testName` explicitly (B4).
+        testName: lay.result.testName
+          ? refComp(s, lay.result.testName) ?? ''
+          : comp(s, lay.result.testCode.field, 2) ?? comp(s, lay.result.testCode.field),
+        value: valueText(s, lay.result.value.field) ?? '',
+        unit: refComp(s, lay.result.unit),
+        referenceRange: refPlain(s, lay.result.referenceRange),
+        flag: refPlain(s, lay.result.flag),
+        status: refPlain(s, lay.result.status) ?? 'F',
+        measuredAt: refPlain(s, lay.result.measuredAt),
       });
     }
     return out;
@@ -180,14 +198,36 @@ function ceId(seg: HL7Segment, field: number): string | undefined {
   return comp(seg, field, 1) ?? comp(seg, field);
 }
 
-/** CE text: second component (the display name). */
-function ceText(seg: HL7Segment, field: number): string | undefined {
-  return comp(seg, field, 2);
-}
-
 /** EI id: entity-identifier component, else the whole field (OBR-2/3, ORC-2/3). */
 function eiId(seg: HL7Segment, field: number): string | undefined {
   return comp(seg, field, 1) ?? comp(seg, field);
+}
+
+/** Identifier-component default for a field ref (component 1, else whole field). */
+function refComp(seg: HL7Segment, ref?: Hl7FieldRef): string | undefined {
+  if (!ref) return undefined;
+  return comp(seg, ref.field, ref.component) ?? comp(seg, ref.field);
+}
+
+/** Plain read for a field ref (no identifier-component default — TS/IS/ST). */
+function refPlain(seg: HL7Segment, ref?: Hl7FieldRef): string | undefined {
+  if (!ref) return undefined;
+  return ref.component !== undefined ? comp(seg, ref.field, ref.component) : comp(seg, ref.field);
+}
+
+/**
+ * Override a raw message's MSH-2 separators (B4: senders whose MSH-2 lies).
+ * Position 0-3 hold `MSH|`; MSH-2 lives at offset 4 — the declared field,
+ * repetition, escape and subcomponent separators are stamped in place.
+ */
+export function forceDelimiters(raw: string, d: NonNullable<Hl7RecordLayout['delimiters']>): string {
+  if (!raw.startsWith('MSH') || raw.length < 8) return raw;
+  const chars = raw.split('');
+  if (d.component) chars[4] = d.component;
+  if (d.repetition) chars[5] = d.repetition;
+  if (d.escape) chars[6] = d.escape;
+  if (d.subcomponent) chars[7] = d.subcomponent;
+  return chars.join('');
 }
 
 /**
@@ -212,9 +252,9 @@ function valueText(seg: HL7Segment, field: number): string | undefined {
 }
 
 /** "Doe^Jane^A" → "Doe, Jane A" (same display convention as the ASTM pipeline). */
-function formatPersonName(pid: HL7Segment): string | undefined {
-  const family = comp(pid, 5, 1);
-  const given = [comp(pid, 5, 2), comp(pid, 5, 3)].filter((c): c is string => c !== undefined).join(' ').trim();
+function formatPersonName(pid: HL7Segment, field: number): string | undefined {
+  const family = comp(pid, field, 1);
+  const given = [comp(pid, field, 2), comp(pid, field, 3)].filter((c): c is string => c !== undefined).join(' ').trim();
   if (!family) return given || undefined;
   return given ? `${family}, ${given}` : family;
 }

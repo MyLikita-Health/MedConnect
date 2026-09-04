@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import type { CanonicalMessage, MessageSink } from '@integration-hub/shared';
+import type { CanonicalMessage, Hl7RecordLayout, MessageSink } from '@integration-hub/shared';
 import { Hl7Gateway, type OrderFeed } from './hl7-gateway.js';
 import type { OrderRegistration } from './order.js';
 import { MllpDecoder, wrapMessage } from './mllp.js';
@@ -30,7 +30,7 @@ interface Hub {
   port: number;
 }
 
-async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed): Promise<Hub> {
+async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed, resolveLayout?: (deviceId: string) => Hl7RecordLayout | undefined): Promise<Hub> {
   const messages: CanonicalMessage[] = [];
   const states: Hub['states'] = [];
   const errors: Error[] = [];
@@ -39,6 +39,7 @@ async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed): Promise
     port: 0,
     sink: sink ?? { record: (m) => void messages.push(m) }, // recording default
     orders,
+    resolveLayout,
     onDeviceState: (deviceId, state) => states.push([deviceId, state]),
     onSessionError: (e) => errors.push(e),
   });
@@ -222,4 +223,34 @@ test('disconnect fires for the device that carried the connection', async (t) =>
     ['ACME_LIS', 'connected'],
     ['ACME_LIS', 'disconnected'],
   ]);
+});
+
+test('B4: a bound device layout overrides canonicalization; unbound devices parse generically', async (t) => {
+  // ACME_LIS is bound to a profile whose `hl7` layout puts the patient name
+  // at PID-6; other senders have no profile and parse with generic positions.
+  const hub = await startHub(t, undefined, undefined, (deviceId) =>
+    deviceId === 'ACME_LIS' ? { patient: { name: { field: 6 } } } : undefined,
+  );
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  // Bound device: name at PID-6, PID-5 empty.
+  const vendorWire = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORU^R01|B4-1|P|2.5.1',
+    'PID|1||PID-1001^^^FAC1^PI|||Adeyemi^Tunde|19850312|M',
+    'OBR|1|ORD-77|ACC-88|GLU^Glucose',
+    'OBX|1|NM|GLU^Glucose||95|mg/dL|70-110|N|||F',
+  ].join('\r');
+  socket.write(wrapMessage(vendorWire));
+  await waitFor(() => hub.messages.length >= 1, 'bound message recorded');
+  assert.equal(msa(acks[0]!).status, 'AA');
+  assert.equal(hub.messages[0]!.payload?.patient.name, 'Adeyemi, Tunde');
+
+  // Unbound device: same wire shape → no name (generic PID-5 read).
+  const unbound = vendorWire.replace('ACME_LIS', 'OTHER_LIS').replace('B4-1', 'B4-2');
+  socket.write(wrapMessage(unbound));
+  await waitFor(() => hub.messages.length >= 2, 'unbound message recorded');
+  assert.equal(hub.messages[1]!.deviceId, 'OTHER_LIS');
+  assert.equal(hub.messages[1]!.payload?.patient.name, undefined);
+  assert.deepEqual(hub.errors, []);
 });

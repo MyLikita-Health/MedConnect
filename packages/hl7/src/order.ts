@@ -19,7 +19,8 @@
  * returns `null` + the reasons (the gateway ACKs AR, so the LIS knows).
  */
 import { HL7Message as Parse, type HL7Message, type HL7Segment } from 'hl7v2';
-import type { MappingTable } from '@integration-hub/shared';
+import { defaultHl7LayoutFor, type Hl7FieldRef, type Hl7RecordLayout, type MappingTable } from '@integration-hub/shared';
+import { forceDelimiters } from './translate.js';
 
 export type OrderStatus = 'active' | 'completed' | 'cancelled';
 
@@ -43,11 +44,20 @@ export interface Hl7OrderResult {
 export interface Hl7ToOrderOptions {
   /** Analyzer/LIS test-code → canonical mappings (PRD §17–18); empty = pass-through. */
   mappings?: MappingTable;
+  /**
+   * B4: vendor HL7 segment-level layout overrides (a profile's `hl7`
+   * config). Position defaults match the generic translator exactly;
+   * `delimiters` overrides a sender's (wrong) MSH-2 for raw-wire input.
+   */
+  layout?: Hl7RecordLayout;
 }
 
 /** Translate an ORM^O01 (raw wire text or already parsed) to an expected order. */
 export function hl7ToOrder(message: string | HL7Message, opts: Hl7ToOrderOptions = {}): Hl7OrderResult {
-  const parsed = typeof message === 'string' ? Parse.parse(message) : message;
+  const layout = defaultHl7LayoutFor({ hl7: opts.layout });
+  const parsed = typeof message === 'string'
+    ? Parse.parse(opts.layout?.delimiters ? forceDelimiters(message, opts.layout.delimiters) : message)
+    : message;
   const issues: string[] = [];
 
   const type = parsed.messageType;
@@ -56,17 +66,17 @@ export function hl7ToOrder(message: string | HL7Message, opts: Hl7ToOrderOptions
   }
 
   const pid = parsed.getSegment('PID');
-  const patientId = pid ? comp(pid, 3, 1) ?? '' : '';
+  const patientId = pid ? refComp(pid, layout.patient.id) ?? '' : '';
   if (!patientId) issues.push('Missing patient identifier');
 
   const orc = parsed.getSegment('ORC');
   const obrs = parsed.segments.filter((s) => s.segmentType === 'OBR');
   if (!orc && obrs.length === 0) issues.push('Missing order segments (need ORC or OBR)');
 
-  let orderId = orc ? eiId(orc, 3) ?? eiId(orc, 2) : undefined;
+  let orderId = orc ? refComp(orc, layout.order.fillerId) ?? refComp(orc, layout.order.placerId) : undefined;
   if (!orderId) {
     for (const o of obrs) {
-      const id = eiId(o, 3) ?? eiId(o, 2);
+      const id = refComp(o, layout.order.fillerId) ?? refComp(o, layout.order.placerId);
       if (id) {
         orderId = id;
         break;
@@ -76,7 +86,7 @@ export function hl7ToOrder(message: string | HL7Message, opts: Hl7ToOrderOptions
   if (!orderId) issues.push('Missing order identifier');
 
   // Requested tests from every OBR row (an ORM legitimately carries several).
-  const tests = [...new Set(obrs.map((o) => ceId(o, 4)).filter((c): c is string => c !== undefined && c.length > 0))];
+  const tests = [...new Set(obrs.map((o) => refComp(o, layout.order.test) ?? '').filter((c) => c.length > 0))];
   if (tests.length === 0) issues.push('No requested tests (OBR-4)');
 
   if (!patientId || !orderId || issues.length > 0) return { order: null, issues };
@@ -129,7 +139,8 @@ function ceId(seg: HL7Segment, field: number): string | undefined {
   return comp(seg, field, 1) ?? comp(seg, field);
 }
 
-/** EI id: entity-identifier component, else the whole field (ORC-2/3). */
-function eiId(seg: HL7Segment, field: number): string | undefined {
-  return comp(seg, field, 1) ?? comp(seg, field);
+/** Identifier-component default for a field ref (component 1, else whole field). */
+function refComp(seg: HL7Segment, ref?: Hl7FieldRef): string | undefined {
+  if (!ref) return undefined;
+  return comp(seg, ref.field, ref.component) ?? comp(seg, ref.field);
 }

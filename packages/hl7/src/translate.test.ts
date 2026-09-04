@@ -133,3 +133,91 @@ test('flags multi-order-group ORU messages instead of conflating them', () => {
   assert.equal(payload, null);
   assert.match(issues.join('; '), /2 distinct order groups/);
 });
+
+// ---------------------------------------------------------------------------
+// B4 — vendor segment-level layout overrides (a profile's `hl7` config).
+// Each variant reads the SAME wire that the generic translator would
+// mis-parse, and must canonicalize correctly once the layout is applied.
+// ---------------------------------------------------------------------------
+
+test('B4: a patient-name override reads PID-6 when the vendor does not use PID-5', () => {
+  // Name lives at PID-6; PID-5 is empty. The generic translator would see no
+  // name — the profile pins `patient.name` to field 6.
+  const wire = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORU^R01|V1|P|2.5.1',
+    'PID|1||PID-1001^^^FAC1^PI|||Adeyemi^Tunde|19850312|M',
+    'OBR|1|ORD-77|ACC-88|GLU^Glucose',
+    'OBX|1|NM|GLU^Glucose||95|mg/dL|70-110|N|||F',
+  ].join('\r');
+
+  const generic = hl7ToCanonical(wire);
+  assert.equal(generic.payload!.patient.name, undefined);
+
+  const { payload, issues } = hl7ToCanonical(wire, { layout: { patient: { name: { field: 6 } } } });
+  assert.deepEqual(issues, []);
+  assert.equal(payload!.patient.name, 'Adeyemi, Tunde');
+});
+
+test('B4: a code-component override reads the identifier at OBX-3^2 (name first vendors)', () => {
+  // This vendor emits the CE as `name^code` — the generic translator would
+  // take `Glucose` as the code. The profile pins testCode to component 2 and
+  // testName to component 1.
+  const wire = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORU^R01|V2|P|2.5.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+    'OBR|1|ORD-77|ACC-88|GLU^Glucose',
+    'OBX|1|NM|Glucose^GLU||95|mg/dL|70-110|N|||F',
+  ].join('\r');
+
+  const generic = hl7ToCanonical(wire);
+  assert.equal(generic.payload!.results[0]!.testCode, 'Glucose'); // wrong under generic
+
+  const { payload, issues } = hl7ToCanonical(wire, {
+    layout: { result: { testCode: { field: 3, component: 2 }, testName: { field: 3, component: 1 } } },
+  });
+  assert.deepEqual(issues, []);
+  assert.equal(payload!.results[0]!.testCode, 'GLU');
+  assert.equal(payload!.results[0]!.testName, 'Glucose');
+});
+
+test('B4: an ORC-anchored layout resolves the order from ORC and tests from OBR', () => {
+  const wire = [
+    'MSH|^~\\&|SEND|FAC|RECV|FAC2|20260904120000||ORU^R01|V3|P|2.5.1',
+    'PID|1||P-3^^^HOSP^MR||Bello^Musa||19750505|M',
+    'ORC|RE|PL-9|ACC-ORC-9|GLU^Glucose',
+    'OBR|1|PL-9|ACC-OBR-9|GLU^Glucose',
+    'OBX|1|NM|GLU^Glucose||95|mg/dL|70-110|N|||F',
+  ].join('\r');
+
+  const generic = hl7ToCanonical(wire);
+  assert.equal(generic.payload!.order.id, 'ACC-OBR-9'); // OBR anchored by default
+
+  const { payload, issues } = hl7ToCanonical(wire, { layout: { order: { segment: 'ORC' } } });
+  assert.deepEqual(issues, []);
+  assert.equal(payload!.order.id, 'ACC-ORC-9');
+  assert.deepEqual(payload!.order.tests, [{ code: 'GLU', name: 'Glucose' }]); // tests still from OBR
+});
+
+test('B4: a delimiters override repairs a sender whose MSH-2 declares the wrong separators', () => {
+  // The wire really separates components with `*` (repetition `%`, escape `@`,
+  // subcomponent `#`), but MSH-2 still declares the standard `^~\&` — parsing
+  // it as-is would garble every composite. The profile knows the sender and
+  // stamps the real delimiters on MSH-2 before parsing.
+  // Fields stay `|`-separated; the deviation is at the COMPONENT level
+  // (`*` for components, `%` repetitions, `@` escape, `#` subcomponents).
+  const wire = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORU*R01|V4|P|2.5.1',
+    'PID|1||PID-1001***FAC1*PI||Adeyemi*Tunde||19850312|M',
+    'OBR|1|ORD-77|ACC-88|GLU*Glucose',
+    'OBX|1|NM|GLU*Glucose||95|mg/dL|70-110|N|||F',
+  ].join('\r');
+
+  const layout = { delimiters: { component: '*', repetition: '%', escape: '@', subcomponent: '#' } };
+  const { payload, issues } = hl7ToCanonical(wire, { layout });
+  assert.deepEqual(issues, []);
+  assert.equal(payload!.patient.id, 'PID-1001');
+  assert.equal(payload!.patient.name, 'Adeyemi, Tunde');
+  assert.equal(payload!.order.id, 'ACC-88');
+  assert.equal(payload!.results[0]!.value, '95');
+  assert.equal(payload!.results[0]!.unit, 'mg/dL');
+});
