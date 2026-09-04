@@ -60,8 +60,19 @@ export interface MwlMonitorStatus {
   totals: { created: number; queued: number; failed: number };
 }
 
+/** One live worklist item as Orthanc reports it (the worklist view). */
+export interface MwlWorklistItem {
+  worklistId: string;
+  accession?: string;
+  patientId?: string;
+  patientName?: string;
+  modality?: string;
+  scheduledDate?: string;
+}
+
 export class MwlMonitor {
   private readonly service: WorklistService;
+  private readonly adapter: DicomOrthancAdapter;
   private readonly log: (line: string) => void;
   private timer?: ReturnType<typeof setInterval>;
   private lastRunAt?: string;
@@ -74,11 +85,33 @@ export class MwlMonitor {
   private readonly retired = new Set<string>();
 
   constructor(private readonly opts: MwlMonitorOptions) {
-    this.service = new WorklistService(
-      opts.adapter ?? new DicomOrthancAdapter({ baseUrl: opts.baseUrl, username: opts.username, password: opts.password }),
-      { defaultModality: opts.defaultModality ?? 'CT' },
-    );
+    this.adapter = opts.adapter ?? new DicomOrthancAdapter({ baseUrl: opts.baseUrl, username: opts.username, password: opts.password });
+    this.service = new WorklistService(this.adapter, { defaultModality: opts.defaultModality ?? 'CT' });
     this.log = opts.log ?? ((line) => console.log(line));
+  }
+
+  /**
+   * The live Orthanc worklist right now (adapter listing — the operator view
+   * of what modalities will C-FIND). Throws when Orthanc is unreachable.
+   */
+  async worklist(): Promise<MwlWorklistItem[]> {
+    const out: MwlWorklistItem[] = [];
+    for (const id of await this.adapter.listWorklistIds()) {
+      const item = await this.adapter.getWorklistItem(id);
+      const tags = (item.Tags ?? item) as Record<string, unknown>;
+      const step = Array.isArray(tags.ScheduledProcedureStepSequence)
+        ? (tags.ScheduledProcedureStepSequence as Record<string, unknown>[])[0]
+        : undefined;
+      out.push({
+        worklistId: id,
+        ...(typeof tags.AccessionNumber === 'string' ? { accession: tags.AccessionNumber } : {}),
+        ...(typeof tags.PatientID === 'string' ? { patientId: tags.PatientID } : {}),
+        ...(typeof tags.PatientName === 'string' ? { patientName: tags.PatientName } : {}),
+        ...(step && typeof step.Modality === 'string' ? { modality: step.Modality } : {}),
+        ...(step && typeof step.ScheduledProcedureStepStartDate === 'string' ? { scheduledDate: step.ScheduledProcedureStepStartDate } : {}),
+      });
+    }
+    return out;
   }
 
   /** Tail of the poll chain — polls are serialized so a boot tick and a

@@ -369,25 +369,6 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     console.log(`[updates] agent ${updates.enabled ? 'enabled' : 'present but disabled (set UPDATE_SOURCE + UPDATE_PUBLIC_KEY)'} — state dir ${stateDir}`);
   }
 
-  const api = new ApiServer({
-    host,
-    port: opts.httpPort ?? 0,
-    tls,
-    store,
-    devices,
-    routes,
-    orders,
-    admissions,
-    alerts: alertStore,
-    profiles: profileStore,
-    mappings,
-    keys,
-    audit,
-    updates,
-    replayHandler: (message) => gateway.replay(message),
-    releaseHandler: (id) => dispatcher.release(id),
-  });
-
   // Workstream M3.2 + M3.3 — the MWL study monitor + imaging storage router
   // (enabled by ORTHANC_URL / the opts.orthanc block). The monitor pushes
   // active registry orders onto the real Orthanc worklist and polls performed
@@ -439,6 +420,30 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     mwl.start();
     console.log(`[mwl]    Orthanc study monitor enabled — ${orthancUrl} (sync+poll every ${orthancPollMs}ms; performed studies route through the dispatcher${forwardPeer ? ` and forward to peer ${forwardPeer}` : ''})`);
   }
+
+  const api = new ApiServer({
+    host,
+    port: opts.httpPort ?? 0,
+    tls,
+    store,
+    devices,
+    routes,
+    orders,
+    admissions,
+    // M3.2/M3.3: the MWL monitor surface (status + live worklist at
+    // GET /api/v1/mwl) and the imaging study-status view (GET /api/v1/imaging,
+    // store-backed). Both present only when Orthanc is configured.
+    mwl,
+    imaging: imaging !== undefined,
+    alerts: alertStore,
+    profiles: profileStore,
+    mappings,
+    keys,
+    audit,
+    updates,
+    replayHandler: (message) => gateway.replay(message),
+    releaseHandler: (id) => dispatcher.release(id),
+  });
 
   const { port: devicePort } = await gateway.start();
   const { port: hl7Port } = hl7Gateway ? await hl7Gateway.start() : { port: undefined as number | undefined };

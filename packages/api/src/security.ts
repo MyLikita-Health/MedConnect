@@ -81,6 +81,8 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/alerts': 'api:read',
   'GET /api/v1/orders': 'api:read',
   'GET /api/v1/admissions': 'api:read',
+  'GET /api/v1/mwl': 'api:read',
+  'GET /api/v1/imaging': 'api:read',
   'GET /api/v1/me': 'api:read',
   // Management reads (admin)
   'GET /api/v1/keys': 'keys:manage',

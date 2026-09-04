@@ -1469,6 +1469,11 @@ of C1–C6 is composition, not new protocol work):
      stack gains a `pacs` archive service — order → worklist → performed →
      webhook receives the study event (ROUTED) AND the archive Orthanc
      receives the study. Cleanup leaves both empty.
+   - **Operator surface** — `GET /api/v1/mwl` (monitor status + live
+     worklist; 404 when Orthanc isn't configured) and `GET /api/v1/imaging`
+     (performed-study messages by status — ROUTED/DUPLICATE/FAILED — from
+     the store; both `api:read`). Operators watch worklist sync + study
+     routing without console logs.
 4. **M3.4 — Failure handling + radiology console (C4/C6)**: failed studies in
    the exception queue with replay; modality/Orthanc health as devices;
    console views (modality list, worklist status, failed studies, routing).

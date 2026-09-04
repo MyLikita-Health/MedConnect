@@ -37,6 +37,52 @@ export interface ApiTls {
   cert: string;
 }
 
+// ---------------------------------------------------------------------------
+// MWL study-monitor surface (M3.2/M3.3) — the JSON GET /api/v1/mwl returns.
+// Structural DTOs: the server package owns the real MwlMonitor; this package
+// only needs the shape (status snapshot + live worklist items from Orthanc).
+// ---------------------------------------------------------------------------
+
+/** One performed study the monitor observed (performed-studies view). */
+export interface MwlPerformedDto {
+  order: { accession: string; patientId?: string };
+  study: {
+    orthancId: string;
+    accessionNumber?: string;
+    studyDescription?: string;
+    studyDate?: string;
+    storageUrl: string;
+  };
+  at: string;
+}
+
+/** Monitor status snapshot (poll loop health + cumulative totals). */
+export interface MwlStatusDto {
+  enabled: boolean;
+  baseUrl?: string;
+  pollMs?: number;
+  lastRunAt?: string;
+  lastError?: string;
+  totals: { created: number; queued: number; failed: number };
+  performed: MwlPerformedDto[];
+}
+
+/** One live worklist item as Orthanc reports it (the worklist view). */
+export interface MwlWorklistItemDto {
+  worklistId: string;
+  accession?: string;
+  patientId?: string;
+  patientName?: string;
+  modality?: string;
+  scheduledDate?: string;
+}
+
+/** The `hub.mwl` surface this package consumes (structural). */
+export interface MwlStatusSource {
+  status(): MwlStatusDto;
+  worklist(): Promise<MwlWorklistItemDto[]>;
+}
+
 export interface ApiServerOptions {
   host?: string;
   port: number;
@@ -55,6 +101,18 @@ export interface ApiServerOptions {
    * read at GET /api/v1/admissions. Defaults to an in-memory registry.
    */
   admissions?: AdmissionRegistry;
+  /**
+   * MWL study monitor (M3.2/M3.3, `hub.mwl`): when wired, its status +
+   * the live Orthanc worklist are read at GET /api/v1/mwl. Structural — the
+   * server package owns the actual MwlMonitor.
+   */
+  mwl?: MwlStatusSource;
+  /**
+   * Imaging routing enabled (M3.3, `hub.imaging`): when true, the
+   * performed-study messages in the store are surfaced at GET /api/v1/imaging
+   * (study-status view — routed/duplicate/failed counts + recent messages).
+   */
+  imaging?: boolean;
   /** Alert rules + derived alerts (PRD §33); defaults to in-memory. */
   alerts?: AlertStore;
   /** Config-first device profiles (PRD §39–40); defaults to in-memory. */
@@ -470,6 +528,37 @@ export class ApiServer {
       const admission = admissionSchema.parse(req.body);
       await this.admissions.register({ ...admission, receivedAt: new Date().toISOString() });
       return reply.code(201).send(admission);
+    });
+
+    // MWL study monitor (M3.2/M3.3): the monitor's status + the live Orthanc
+    // worklist — performed studies and queued imaging orders become visible.
+    // The worklist query hits Orthanc per request; when it fails (e.g. Orthanc
+    // down) the status is still returned with a worklistError explaining why.
+    app.get('/api/v1/mwl', async (req, reply) => {
+      if (!this.opts.mwl) {
+        return reply.code(404).send({ error: 'MWL study monitor not configured (set ORTHANC_URL)' });
+      }
+      const status = this.opts.mwl.status();
+      try {
+        return { status, worklist: await this.opts.mwl.worklist() };
+      } catch (err) {
+        return { status, worklist: [], worklistError: err instanceof Error ? err.message : String(err) };
+      }
+    });
+
+    // Imaging study-status view (M3.3): the performed-study messages the
+    // storage router pushed through the dispatcher, with per-status counts.
+    // Store-backed — imaging events land in the same store as lab messages,
+    // so the operator sees how studies are routing (ROUTED / DUPLICATE /
+    // FAILED-DLQ) without the console logs.
+    app.get('/api/v1/imaging', async (req, reply) => {
+      if (!this.opts.imaging) {
+        return reply.code(404).send({ error: 'imaging routing not configured (set ORTHANC_URL)' });
+      }
+      const messages = (await this.opts.store.list({ limit: 500 })).filter((m) => m.imaging !== undefined);
+      const byStatus: Record<string, number> = {};
+      for (const m of messages) byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
+      return { total: messages.length, byStatus, messages: messages.slice(0, 100) };
     });
 
     // Release identity (M2 installer/update: version is the update axis).

@@ -366,6 +366,8 @@ without touching the protocol layer.
 | GET | `/api/v1/held` | Exception queue: messages held for review (PRD §27–28) |
 | POST | `/api/v1/messages/:id/release` | Release a HELD message into delivery |
 | GET/POST/DELETE | `/api/v1/orders` | Expected-order registry — the LIS seam (PRD §27) |
+| GET | `/api/v1/mwl` | MWL study monitor: status + live Orthanc worklist (M3.2; 404 without ORTHANC_URL) |
+| GET | `/api/v1/imaging` | Performed-study messages by status — ROUTED/DUPLICATE/FAILED (M3.3) |
 | GET/POST/DELETE | `/api/v1/alert-rules` | Alert rules (PRD §33) |
 | GET | `/api/v1/alerts?firing=&limit=` | Derived alerts: fire/resolve history |
 | GET/POST/DELETE | `/api/v1/destinations` | Outbound destinations + retry policies; `kind` incl. `hl7` (MLLP host/port + MSH fields, PRD §19) |

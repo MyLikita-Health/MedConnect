@@ -20,7 +20,7 @@ function message(overrides: Partial<CanonicalMessage> = {}): CanonicalMessage {
   };
 }
 
-async function startApi(t: any, replayHandler?: (m: CanonicalMessage) => CanonicalMessage) {
+async function startApi(t: any, replayHandler?: (m: CanonicalMessage) => CanonicalMessage, imaging = false) {
   const store = new MessageStore();
   const devices = new DeviceRegistry();
   const api = new ApiServer({
@@ -29,6 +29,7 @@ async function startApi(t: any, replayHandler?: (m: CanonicalMessage) => Canonic
     store,
     devices,
     replayHandler,
+    ...(imaging ? { imaging: true } : {}),
   });
   const { port } = await api.start();
   t.after(() => api.stop());
@@ -389,6 +390,80 @@ test('alert-rule endpoints manage rules and the alerts endpoint lists them', asy
   const deletedDrift = await fetch(`${base}/api/v1/alert-rules/pd`, { method: 'DELETE' });
   assert.equal(deletedDrift.status, 204);
   assert.equal(((await (await fetch(`${base}/api/v1/alert-rules`)).json()) as unknown[]).length, 0);
+});
+
+test('mwl endpoint returns monitor status + live worklist; 404 when not wired', async (t) => {
+  const store = new MessageStore();
+  const devices = new DeviceRegistry();
+  const api = new ApiServer({
+    port: 0,
+    host: '127.0.0.1',
+    store,
+    devices,
+    mwl: {
+      status: () => ({
+        enabled: true,
+        baseUrl: 'http://orthanc:8042',
+        pollMs: 60_000,
+        lastRunAt: '2026-09-04T00:00:00.000Z',
+        totals: { created: 2, queued: 1, failed: 0 },
+        performed: [],
+      }),
+      worklist: async () => [
+        { worklistId: 'wl-1', accession: 'ACC-1', patientName: 'Okafor^Amara', modality: 'CT' },
+      ],
+    },
+  });
+  const { port } = await api.start();
+  t.after(() => api.stop());
+  const base = `http://127.0.0.1:${port}`;
+
+  const body = (await (await fetch(`${base}/api/v1/mwl`)).json()) as {
+    status: { totals: { created: number } };
+    worklist: Array<{ worklistId: string; accession: string }>;
+  };
+  assert.equal(body.status.totals.created, 2);
+  assert.equal(body.worklist.length, 1);
+  assert.equal(body.worklist[0]?.accession, 'ACC-1');
+
+  // Without the monitor wired the endpoint says so (404), like other optional legs.
+  const bare = await startApi(t);
+  assert.equal((await fetch(`${bare.base}/api/v1/mwl`)).status, 404);
+});
+
+test('imaging endpoint surfaces performed-study messages by status; 404 when disabled', async (t) => {
+  const { base, store } = await startApi(t, undefined, true);
+  store.record(
+    message({
+      id: 'img-1',
+      imaging: {
+        kind: 'imaging',
+        accession: 'ACC-9',
+        performedAt: new Date().toISOString(),
+        study: {
+          orthancId: 'study-1',
+          patientOrthancId: 'patient-1',
+          accessionNumber: 'ACC-9',
+          series: [],
+          storageUrl: 'http://orthanc:8042/studies/study-1',
+        },
+      },
+      status: 'ROUTED',
+    }),
+  );
+  store.record(message({ id: 'lab-1', status: 'ROUTED' })); // not an imaging event
+
+  const body = (await (await fetch(`${base}/api/v1/imaging`)).json()) as {
+    total: number;
+    byStatus: Record<string, number>;
+    messages: Array<{ imaging: { accession: string } }>;
+  };
+  assert.equal(body.total, 1); // only the imaging message, not the lab one
+  assert.deepEqual(body.byStatus, { ROUTED: 1 });
+  assert.equal(body.messages[0]?.imaging.accession, 'ACC-9');
+
+  const bare = await startApi(t);
+  assert.equal((await fetch(`${bare.base}/api/v1/imaging`)).status, 404);
 });
 
 test('results endpoint flattens result rows across messages', async (t) => {
