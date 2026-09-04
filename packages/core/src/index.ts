@@ -51,3 +51,20 @@ export {
   type ValidationRuleConfig,
   type ValidationRuleName,
 } from './validate.js';
+export {
+  ACME_CHEM_200_PROFILE,
+  InMemoryProfileStore,
+  REFERENCE_PROFILE,
+  deviceProfileSchema,
+  parseDeviceProfile,
+  type ProfileStore,
+} from './profiles.js';
+export { PostgresProfileStore } from './pg-profiles.js';
+export {
+  runConformance,
+  type ConformanceCaseResult,
+  type ConformanceRunResult,
+  type GoldenCase,
+  type GoldenExpectation,
+  type GoldenFile,
+} from './conformance.js';

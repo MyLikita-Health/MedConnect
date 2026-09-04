@@ -11,7 +11,9 @@
     }
   },
   "dependencies": {
+    "@integration-hub/gateway": "*",
     "@integration-hub/shared": "*",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "zod": "^4.5.4"
   }
 }

@@ -230,6 +230,51 @@ test('release endpoint returns 501 when no handler is wired', async (t) => {
   assert.equal(res.status, 501);
 });
 
+test('profile endpoints CRUD config-first device profiles', async (t) => {
+  const { base } = await startApi(t);
+  const body = {
+    id: 'acme-chem-200',
+    name: 'Acme Chem 200',
+    manufacturer: 'Acme Diagnostics',
+    model: 'Chem 200',
+    protocol: 'ASTM',
+    transport: 'tcp',
+    version: 1,
+    layout: {
+      patient: { id: 3, name: 4, dateOfBirth: 6, sex: 7 },
+      order: { sampleId: 3, accession: 2, test: 4 },
+      result: { test: 2, value: 3, unit: 4, referenceRange: 5, flag: 6, status: 8 },
+    },
+    mappings: { GLU: 'GLUCOSE' },
+    status: 'certified',
+  };
+  const res = await fetch(`${base}/api/v1/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  assert.equal(res.status, 201);
+
+  const byId = (await (await fetch(`${base}/api/v1/profiles/acme-chem-200`)).json()) as { manufacturer: string; status: string };
+  assert.equal(byId.manufacturer, 'Acme Diagnostics');
+  assert.equal(byId.status, 'certified');
+
+  // Invalid profile → 400 via zod.
+  const bad = await fetch(`${base}/api/v1/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, layout: { order: { accession: 0, test: 4 } } }),
+  });
+  assert.equal(bad.status, 400);
+
+  const missing = await fetch(`${base}/api/v1/profiles/nope`);
+  assert.equal(missing.status, 404);
+
+  const deleted = await fetch(`${base}/api/v1/profiles/acme-chem-200`, { method: 'DELETE' });
+  assert.equal(deleted.status, 204);
+  assert.equal(((await (await fetch(`${base}/api/v1/profiles`)).json()) as unknown[]).length, 0);
+});
+
 test('alert-rule endpoints manage rules and the alerts endpoint lists them', async (t) => {
   const { base } = await startApi(t);
   const res = await fetch(`${base}/api/v1/alert-rules`, {

@@ -1,0 +1,61 @@
+{
+  "profile": {
+    "id": "acme-chem-200",
+    "name": "Acme Chem 200",
+    "manufacturer": "Acme Diagnostics",
+    "model": "Chem 200",
+    "protocol": "ASTM",
+    "transport": "tcp",
+    "version": 1,
+    "layout": {
+      "patient": { "id": 3, "name": 4, "dateOfBirth": 6, "sex": 7 },
+      "order": { "sampleId": 3, "accession": 2, "test": 4 },
+      "result": { "test": 2, "value": 3, "unit": 4, "referenceRange": 5, "flag": 6, "status": 8 }
+    },
+    "mappings": {
+      "GLU": "GLUCOSE",
+      "CREA": "CREATININE"
+    },
+    "capabilities": ["results-up", "host-query"],
+    "connection": { "port": 5000 },
+    "session": { "initiator": "device", "checksumIncludesStx": true },
+    "status": "certified",
+    "certifiedAt": "2026-09-04T00:00:00.000Z"
+  },
+  "goldens": [
+    {
+      "name": "acme sends accession before sample id on the O record",
+      "records": [
+        { "type": "H", "fields": ["\\^&", "", "", "", "ACME-CHEM200^ACME-001", "", "", "", "", "", "", "P", "1", "20260904130000"] },
+        { "type": "P", "fields": ["1", "", "PID-1001", "Adeyemi^Tunde", "", "19850312", "M"] },
+        { "type": "O", "fields": ["1", "ACC-424242", "S-4242", "^GLU^Glucose"] },
+        { "type": "R", "fields": ["1", "^GLU^Glucose", "102", "mg/dL", "70-110", "H", "", "F"] },
+        { "type": "L", "fields": ["1", "N"] }
+      ],
+      "expected": {
+        "patient": { "id": "PID-1001", "name": "Adeyemi, Tunde" },
+        "order": { "id": "ACC-424242", "sampleId": "S-4242" },
+        "results": [
+          { "testCode": "GLUCOSE", "originalTestCode": "GLU", "value": "102", "unit": "mg/dL", "referenceRange": "70-110", "flag": "H", "status": "F" }
+        ]
+      }
+    },
+    {
+      "name": "acme creatinine panel keeps accession in field two",
+      "records": [
+        { "type": "H", "fields": ["\\^&", "", "", "", "ACME-CHEM200^ACME-001", "", "", "", "", "", "", "P", "1", "20260904130100"] },
+        { "type": "P", "fields": ["1", "", "PID-1003", "Balogun^Femi", "", "19760823", "M"] },
+        { "type": "O", "fields": ["1", "ACC-424245", "S-4245", "^CREA^Creatinine"] },
+        { "type": "R", "fields": ["1", "^CREA^Creatinine", "2.4", "mg/dL", "0.6-1.3", "H", "", "F"] },
+        { "type": "L", "fields": ["1", "N"] }
+      ],
+      "expected": {
+        "patient": { "id": "PID-1003", "name": "Balogun, Femi" },
+        "order": { "id": "ACC-424245", "sampleId": "S-4245" },
+        "results": [
+          { "testCode": "CREATININE", "originalTestCode": "CREA", "value": "2.4", "unit": "mg/dL", "referenceRange": "0.6-1.3", "flag": "H", "status": "F" }
+        ]
+      }
+    }
+  ]
+}

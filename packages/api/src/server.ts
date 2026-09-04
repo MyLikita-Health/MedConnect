@@ -10,7 +10,18 @@ import net from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
-import { DEFAULT_RETRY, InMemoryAlertStore, InMemoryOrderRegistry, InMemoryRouteStore, type AlertStore, type OrderRegistry, type RouteStore } from '@integration-hub/core';
+import {
+  DEFAULT_RETRY,
+  InMemoryAlertStore,
+  InMemoryOrderRegistry,
+  InMemoryProfileStore,
+  InMemoryRouteStore,
+  parseDeviceProfile,
+  type AlertStore,
+  type OrderRegistry,
+  type ProfileStore,
+  type RouteStore,
+} from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import { renderUi } from './ui.js';
 
@@ -27,6 +38,8 @@ export interface ApiServerOptions {
   orders?: OrderRegistry;
   /** Alert rules + derived alerts (PRD §33); defaults to in-memory. */
   alerts?: AlertStore;
+  /** Config-first device profiles (PRD §39–40); defaults to in-memory. */
+  profiles?: ProfileStore;
   /** Wired to the gateway so failed messages can be corrected + replayed. */
   replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
   /** Wired to the dispatcher so held messages can be released into delivery. */
@@ -102,11 +115,13 @@ export class ApiServer {
   private readonly routes: RouteStore;
   private readonly orders: OrderRegistry;
   private readonly alerts: AlertStore;
+  private readonly profiles: ProfileStore;
 
   constructor(private opts: ApiServerOptions) {
     this.routes = opts.routes ?? new InMemoryRouteStore();
     this.orders = opts.orders ?? new InMemoryOrderRegistry();
     this.alerts = opts.alerts ?? new InMemoryAlertStore();
+    this.profiles = opts.profiles ?? new InMemoryProfileStore();
     const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
     this.app = app;
 
@@ -210,6 +225,25 @@ export class ApiServer {
       const released = await this.opts.releaseHandler(id);
       if (!released) return reply.code(409).send({ error: 'message is not in the HELD queue' });
       return reply.code(200).send({ ok: true, id });
+    });
+
+    // Config-first device profiles (plan §6.3, workstream A2; PRD §39–40).
+    app.get('/api/v1/profiles', async () => this.profiles.list());
+    app.post('/api/v1/profiles', async (req, reply) => {
+      const profile = parseDeviceProfile(req.body); // zod: 400 on invalid input
+      await this.profiles.upsert(profile);
+      return reply.code(201).send(profile);
+    });
+    app.get('/api/v1/profiles/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const profile = await this.profiles.get(id);
+      if (!profile) return reply.code(404).send({ error: 'profile not found' });
+      return profile;
+    });
+    app.delete('/api/v1/profiles/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      await this.profiles.remove(id);
+      return reply.code(204).send();
     });
 
     // Alert rules + alerts (plan workstream I, PRD §33).

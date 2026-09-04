@@ -19,8 +19,10 @@ Analyzer (simulator) ──ASTM/TCP──▶ Edge gateway ──pipeline──�
 It is built as an **npm-workspaces TypeScript monorepo**. The protocol layer
 (`astm`, `gateway`) stays zero-dependency; M0 added Fastify + zod + pg for the
 API and persistence; M1 added the durable delivery core (`@integration-hub/core`);
-M2 added the clinical gate — patient/order matching, result validation, and the
-HELD exception queue. Tests use Node's built-in test runner.
+M2 added the clinical gate — patient/order matching, result validation, the
+HELD exception queue — plus alerting, config-first **device profiles** and the
+golden-message **conformance harness** that certifies them. Tests use Node's
+built-in test runner.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -53,8 +55,7 @@ applied automatically at startup by a tiny zero-dependency runner (the ORM
 choice is still open — plan decision D1). Host ports 5434/6380 avoid clashing
 with other local projects that bind 5432/6379.
 
-Run the DB-backed test suite (4 extra integration tests against a live
-Postgres):
+Run the DB-backed test suite (everything again against a live Postgres):
 
 ```bash
 npm run test:db
@@ -89,8 +90,9 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 98 tests: codec, sessions, pipeline, matching/validation, alerts, dispatcher/DLQ, API (11 DB-gated skip)
-npm run test:db    # 98 tests: same + PostgreSQL integration (needs db:up)
+npm test           # 109 tests: codec, sessions, pipeline, matching/validation,
+                   #   alerts, profiles/conformance, dispatcher/DLQ, API (12 DB-gated skip)
+npm run test:db    # 109 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -301,6 +303,32 @@ payload `{ rule, kind, status: FIRING|RESOLVED, ... }` — failures are logged,
 never thrown. The demo shows the full lifecycle: a held result fires
 `held-backlog`, and the alert resolves the moment an operator reviews and
 releases it.
+
+## Device profiles & conformance (M2 — PRD §39–40, plan §6.3)
+
+Certified device support is **configuration, not code**. A profile turns the
+generic ASTM pipeline into a device adapter: 1-based record-layout field
+positions (P/O/R records), per-model test-code mappings, capabilities and
+transport/session options (`packages/shared/src/profiles.ts`). A vendor whose
+O record swaps accession and sample-id positions gets a profile, and the same
+pipeline canonicalizes correctly for both it and the reference layout.
+
+- **Config service** — `device_profileSchema` (zod) validates every profile at
+  the API boundary and whenever stored JSON is read back, so a corrupt
+  profile fails loudly instead of silently mis-parsing results. Stores:
+  in-memory and Postgres (`device_profiles` table, migration `0006`).
+- **API + seeds** — `GET/POST/GET/DELETE /api/v1/profiles`; the server seeds
+  the generic `astm-reference` profile plus the fictional `acme-chem-200`
+  (a vendor whose accession/sample fields swap — mis-associated under the
+  reference profile, correct under its own).
+- **Golden-message conformance (workstream K)** — `goldens/*.json` pair a
+  certified profile with recorded ASTM transcripts and the canonical payload
+  it must produce, including negative cases. `runConformance`
+  (`packages/core/src/conformance.ts`) replays them through the real pipeline
+  and asserts the canonical output; `packages/core/src/goldens.test.ts` runs
+  every golden file in CI — a profile is only as good as its recorded
+  conformance run — and proves an Acme transcript *fails* under the
+  reference profile (profiles matter).
 
 ## Scaffold boundaries (what is intentionally not here)
 

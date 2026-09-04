@@ -721,8 +721,8 @@ are implemented end-to-end; alerting (I), DeviceProfile model + goldens
 ### 13.4 M2 sprint 2 — alerting (workstream I): status
 
 Shipped as `M2 sprint 2: alerting` (PRD §33). The milestone's "alerting live"
-item is implemented end-to-end; security review, installer/remote update, and
-DeviceProfile model + goldens (A2/K) remain for later M2 sprints.
+item is implemented end-to-end; DeviceProfile model + goldens (A2/K) shipped
+in sprint 3 (§13.5); security review and installer/remote update remain.
 
 1. ✅ Alert engine (`packages/core/src/alerts.ts` + `alert-store.ts`): rules
    (kind/threshold/subject/cooldown/channels), fire/resolve lifecycle, one
@@ -744,10 +744,49 @@ DeviceProfile model + goldens (A2/K) remain for later M2 sprints.
    green: `npm test` = 98 (87 pass / 11 DB-gated skip); `npm run test:db`
    = 98/98. Demo exercises fire → resolve for held-backlog.
 
+### 13.5 M2 sprint 3 — device profiles + conformance (A2/K): status
+
+Shipped as `M2 sprint 3: config-first device profiles + conformance harness`.
+The config-first DeviceProfile model (PRD §39–40, §6.3) is implemented
+end-to-end, and the golden-message conformance harness (workstream K) runs
+certified profiles against golden ASTM transcripts **in the test suite** —
+the "goldens in CI" M2 gate item is now concrete.
+
+1. ✅ Shared model (`packages/shared/src/profiles.ts`): 1-based P/O/R record
+   layouts, mappings, capabilities, connection/session options;
+   `DEFAULT_REFERENCE_LAYOUT` + `defaultLayoutFor` (partial profiles inherit
+   the reference per group — config declares only deviations).
+2. ✅ Config service (`packages/core/src/profiles.ts`): zod
+   `deviceProfileSchema` / `parseDeviceProfile` validate at the API boundary
+   and on every stored-JSON read (corrupt rows fail loudly — covered by a PG
+   test that corrupts a row and expects a throw); `InMemoryProfileStore`;
+   seed profiles `astm-reference` + fictional `acme-chem-200` (a vendor
+   whose O record swaps accession and sample-id — mis-associated under the
+   reference profile, correct under its own).
+3. ✅ Gateway pipeline honors profile layouts: `astmToCanonical(records,
+   { layout })` canonicalizes by 1-based profile positions, defaulting each
+   group to the reference layout (backward-compatible).
+4. ✅ Conformance harness (`packages/core/src/conformance.ts`):
+   `runConformance(profile, goldens)` replays recorded ASTM transcripts
+   through the real pipeline and asserts the canonical payload per case,
+   including negative cases.
+5. ✅ Goldens library + CI gate: `goldens/reference.json` +
+   `goldens/acme-chem-200.json`; `packages/core/src/goldens.test.ts` runs
+   every golden file on every `npm test`/CI run and proves an Acme
+   transcript fails under the reference profile (profiles matter).
+6. ✅ Migration `0006_device_profiles.sql` + `PostgresProfileStore`; API
+   `GET/POST/GET/DELETE /api/v1/profiles`; server seeds both profiles when
+   the store is empty (memory and Postgres).
+7. Tests: schema acceptance/rejection, layout canonicalization, conformance
+   runner, goldens-in-CI, API CRUD, PG store round-trip + corrupt-row. Both
+   suites green: `npm test` = 109 (97 pass / 12 DB-gated skip); `npm run
+   test:db` = 109/109; demos clean in both modes.
+
 Remaining M2 gate items (§8.1): security review; installer + remote update;
-DeviceProfile model + DB + CRUD + conformance gate (§6.3, workstream A2);
-golden-message library + automated conformance in CI (workstream K);
-certified profiles.
+certified profiles for 3–5 **real** analyzers via the field/vendor conformance
+program (workstream A6/K, gated on field access — risk R2); profile
+**versioning** on change is already modeled (`version`, goldens per version)
+but not yet enforced in the pipeline (A4 AdapterRegistry is future work).
 
 ---
 

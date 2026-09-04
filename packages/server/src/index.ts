@@ -9,7 +9,7 @@
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, MessageStore, PostgresDeviceRegistry, PostgresMessageStore, type DeviceBackend, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
-import { DEFAULT_UNIT_CATALOG, AlertService, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresRouteStore, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 export interface HubOptions {
@@ -34,6 +34,7 @@ export interface Hub {
   routes: RouteStore;
   alerts: AlertService;
   alertStore: AlertStore;
+  profileStore: ProfileStore;
   ports: { device: number; http: number };
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool };
@@ -50,6 +51,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let dedup: DispatcherOptions['dedup'];
   let orders: OrderRegistry;
   let alertStore: AlertStore;
+  let profileStore: ProfileStore;
   let mappings = opts.mappings ?? DEFAULT_MAPPINGS;
   let pool: Pool | undefined;
 
@@ -65,6 +67,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     dedup = new PostgresDedupStore(pool);
     orders = new PostgresOrderRegistry(pool);
     alertStore = new PostgresAlertStore(pool);
+    profileStore = new PostgresProfileStore(pool);
 
     // Seed the default mapping table once so DB mappings match scaffold defaults.
     if (!opts.mappings) await pgStore.setMappings(DEFAULT_MAPPINGS);
@@ -76,6 +79,14 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     dedup = new InMemoryDedupStore();
     orders = new InMemoryOrderRegistry();
     alertStore = new InMemoryAlertStore();
+    profileStore = new InMemoryProfileStore();
+  }
+
+  // Seed the reference + example certified profiles so CRUD/API demos work and
+  // the store never starts empty (goldens/*.json embed the authoritative copy).
+  if ((await profileStore.list()).length === 0) {
+    await profileStore.upsert(REFERENCE_PROFILE);
+    await profileStore.upsert(ACME_CHEM_200_PROFILE);
   }
 
   const alerts = new AlertService(alertStore, { log: (line) => console.log(line) });
@@ -140,6 +151,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     routes,
     orders,
     alerts: alertStore,
+    profiles: profileStore,
     mappings,
     replayHandler: (message) => gateway.replay(message),
     releaseHandler: (id) => dispatcher.release(id),
@@ -157,6 +169,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     routes,
     alerts,
     alertStore,
+    profileStore,
     ports: { device: devicePort, http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {

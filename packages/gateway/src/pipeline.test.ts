@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { astmToCanonical, buildMessage } from './pipeline.js';
+import type { DeviceRecordLayout } from '@integration-hub/shared';
 import { DEFAULT_MAPPINGS } from './mappings.js';
 import type { AstmRecord } from '@integration-hub/astm';
 
@@ -64,6 +65,36 @@ test('no result records is a validation failure', () => {
   const { payload, issues } = astmToCanonical(records, DEFAULT_MAPPINGS);
   assert.equal(payload, null);
   assert.ok(issues.some((i) => i.includes('result')));
+});
+
+test('vendor layout override rescues deviating O-record field order', () => {
+  // Acme Chem 200 sends accession in field two and sample id in field three
+  // (the reference layout assumes the reverse). With the profile layout the
+  // same pipeline canonicalizes correctly.
+  const acmeOrder: DeviceRecordLayout = {
+    patient: { id: 3, name: 4, dateOfBirth: 6, sex: 7 },
+    order: { sampleId: 3, accession: 2, test: 4 },
+    result: { test: 2, value: 3, unit: 4, referenceRange: 5, flag: 6, status: 8 },
+  };
+  const records: AstmRecord[] = [
+    { type: 'H', fields: ['\\^&', '', '', '', 'ACME-200^1', '', '', '', '', '', '', 'P', '1', '20260903143000'] },
+    { type: 'P', fields: ['1', '', 'PID-1001', 'Adeyemi^Tunde', '', '19850312', 'M'] },
+    { type: 'O', fields: ['1', 'ACC-424242', 'S-4242', '^GLU^Glucose'] },
+    { type: 'R', fields: ['1', '^GLU^Glucose', '102', 'mg/dL', '70-110', 'H', '', 'F'] },
+    { type: 'L', fields: ['1', 'N'] },
+  ];
+
+  // Reference layout mis-associates: sample id lands in the accession slot.
+  const misparsed = astmToCanonical(records);
+  assert.equal(misparsed.payload?.order.id, 'S-4242');
+
+  // Profile layout reads accession from field two — correct.
+  const { payload, issues } = astmToCanonical(records, { layout: acmeOrder, mappings: { GLU: 'GLUCOSE' } });
+  assert.deepEqual(issues, []);
+  assert.equal(payload?.order.id, 'ACC-424242');
+  assert.equal(payload?.order.sampleId, 'S-4242');
+  assert.equal(payload?.results[0]?.testCode, 'GLUCOSE');
+  assert.equal(payload?.results[0]?.value, '102');
 });
 
 test('buildMessage envelopes with timeline and FAILED status on bad input', () => {

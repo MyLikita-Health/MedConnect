@@ -1,0 +1,73 @@
+{
+  "profile": {
+    "id": "astm-reference",
+    "name": "Generic ASTM E1394 reference",
+    "manufacturer": "(generic)",
+    "model": "Reference layout",
+    "protocol": "ASTM",
+    "transport": "tcp",
+    "version": 1,
+    "layout": {
+      "patient": { "id": 3, "name": 4, "dateOfBirth": 6, "sex": 7 },
+      "order": { "sampleId": 2, "accession": 3, "test": 4 },
+      "result": { "test": 2, "value": 3, "unit": 4, "referenceRange": 5, "flag": 6, "status": 8 }
+    },
+    "mappings": {
+      "GLU": "GLUCOSE",
+      "GLUC": "GLUCOSE",
+      "CREA": "CREATININE",
+      "HGB": "HEMOGLOBIN"
+    },
+    "capabilities": ["results-up"],
+    "status": "certified",
+    "certifiedAt": "2026-09-04T00:00:00.000Z"
+  },
+  "goldens": [
+    {
+      "name": "two-panel male result (GLU + CREA)",
+      "records": [
+        { "type": "H", "fields": ["\\^&", "", "", "", "SIM-BS430^SIM-001", "", "", "", "", "", "", "P", "1", "20260904120000"] },
+        { "type": "P", "fields": ["1", "", "PID-1001", "Adeyemi^Tunde", "", "19850312", "M"] },
+        { "type": "O", "fields": ["1", "S-4242", "ACC-424242", "^GLU^Glucose"] },
+        { "type": "R", "fields": ["1", "^GLU^Glucose", "95", "mg/dL", "70-110", "N", "", "F"] },
+        { "type": "R", "fields": ["2", "^CREA^Creatinine", "1.1", "mg/dL", "0.6-1.3", "N", "", "F"] },
+        { "type": "L", "fields": ["1", "N"] }
+      ],
+      "expected": {
+        "patient": { "id": "PID-1001", "name": "Adeyemi, Tunde", "dateOfBirth": "19850312", "gender": "M" },
+        "order": { "id": "ACC-424242", "sampleId": "S-4242" },
+        "results": [
+          { "testCode": "GLUCOSE", "originalTestCode": "GLU", "value": "95", "unit": "mg/dL", "referenceRange": "70-110", "flag": "N", "status": "F" },
+          { "testCode": "CREATININE", "originalTestCode": "CREA", "value": "1.1", "unit": "mg/dL", "referenceRange": "0.6-1.3", "flag": "N", "status": "F" }
+        ]
+      }
+    },
+    {
+      "name": "single female hemoglobin result",
+      "records": [
+        { "type": "H", "fields": ["\\^&", "", "", "", "SIM-BS430^SIM-001", "", "", "", "", "", "", "P", "1", "20260904120100"] },
+        { "type": "P", "fields": ["1", "", "PID-1002", "Okafor^Chioma", "", "19921107", "F"] },
+        { "type": "O", "fields": ["1", "S-4243", "ACC-424243", "^HGB^Hemoglobin"] },
+        { "type": "R", "fields": ["1", "^HGB^Hemoglobin", "8.9", "g/dL", "13.0-17.0", "L", "", "F"] },
+        { "type": "L", "fields": ["1", "N"] }
+      ],
+      "expected": {
+        "patient": { "id": "PID-1002", "name": "Okafor, Chioma", "gender": "F" },
+        "order": { "id": "ACC-424243", "sampleId": "S-4243" },
+        "results": [
+          { "testCode": "HEMOGLOBIN", "originalTestCode": "HGB", "value": "8.9", "unit": "g/dL", "referenceRange": "13.0-17.0", "flag": "L", "status": "F" }
+        ]
+      }
+    },
+    {
+      "name": "missing patient identifier must fail canonicalization",
+      "records": [
+        { "type": "H", "fields": ["\\^&", "", "", "", "SIM-BS430^SIM-001", "", "", "", "", "", "", "P", "1", "20260904120200"] },
+        { "type": "P", "fields": ["1", "", "", "No^Id", "", "", "M"] },
+        { "type": "O", "fields": ["1", "S-4244", "ACC-424244", "^GLU^Glucose"] },
+        { "type": "R", "fields": ["1", "^GLU^Glucose", "95", "mg/dL", "70-110", "N", "", "F"] }
+      ],
+      "expected": { "expectIssues": ["Missing patient identifier"] }
+    }
+  ]
+}
