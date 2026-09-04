@@ -6,9 +6,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type http from 'node:http';
 import { DicomOrthancAdapter, OrthancError } from './adapter.js';
+import { json, startMockOrthanc } from './mock-orthanc.js';
 
 /** Canned Orthanc resources (mirror the documented REST JSON shapes). */
 const PATIENT = {
@@ -48,49 +48,7 @@ const INSTANCE = {
   MainDicomTags: { SOPInstanceUID: '1.2.840.113704.1.111.7016.3' },
 };
 
-interface RequestLog {
-  method: string;
-  path: string;
-  body?: unknown;
-  auth?: string;
-}
 
-interface MockOrthanc {
-  base: string;
-  log: RequestLog[];
-}
-
-/** Handler sees (method, path, parsed body, log entry); answers via res. */
-type Handler = (req: http.IncomingMessage, res: http.ServerResponse, entry: RequestLog, body: string) => void;
-
-async function startMockOrthanc(t: any, handler: Handler): Promise<MockOrthanc> {
-  const log: RequestLog[] = [];
-  const server = http.createServer((req, res) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => {
-      const body = Buffer.concat(chunks).toString('utf8');
-      const entry: RequestLog = { method: req.method ?? 'GET', path: req.url ?? '/', auth: req.headers.authorization };
-      if (body) {
-        try {
-          entry.body = JSON.parse(body);
-        } catch {
-          entry.body = body;
-        }
-      }
-      log.push(entry);
-      handler(req, res, entry, body);
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => server.close());
-  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, log };
-}
-
-function json(res: http.ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(payload));
-}
 
 test('ping + listing hit the documented Orthanc routes', async (t) => {
   const { base, log } = await startMockOrthanc(t, (req, res, entry) => {

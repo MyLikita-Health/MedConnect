@@ -233,6 +233,42 @@ export class DicomOrthancAdapter {
   }
 
   // -------------------------------------------------------------------------
+  // Modality worklist (M3.2 / plan §7.C2) — the Orthanc **Worklists plugin**
+  // REST API (github.com/orthanc-server/orthanc-worklists; the folder-based
+  // legacy sample plugin has no REST). A modality pulls these items via DICOM
+  // C-FIND MWL; the hub creates them from RIS orders and deletes them once
+  // the study is performed.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a worklist item (POST /worklists/create). `tags` are DICOM keyword
+   * long names exactly as the plugin stores them — top-level patient/order
+   * tags plus ScheduledProcedureStepSequence[] for the scheduled step.
+   */
+  async createWorklistItem(tags: Record<string, unknown>): Promise<{ id: string }> {
+    const raw = await this.request<{ ID?: string; Path?: string }>('POST', '/worklists/create', { Tags: tags });
+    if (!raw.ID) throw new OrthancError('Orthanc worklist create answered without an ID', 200);
+    return { id: raw.ID };
+  }
+
+  /** List worklist item ids (GET /worklists/?format=Short — tolerant of shape). */
+  async listWorklistIds(): Promise<string[]> {
+    const raw = await this.request<unknown>('GET', '/worklists/?format=Short');
+    if (!Array.isArray(raw)) return [];
+    return raw.map((entry) => (typeof entry === 'string' ? entry : (entry as { ID?: string }).ID ?? '')).filter((id) => id.length > 0);
+  }
+
+  /** Raw worklist item content (GET /worklists/{id}) — Tags nested or flat. */
+  async getWorklistItem(id: string): Promise<{ Tags?: Record<string, unknown> } & Record<string, unknown>> {
+    return this.request('GET', `/worklists/${encodeURIComponent(id)}`);
+  }
+
+  /** Delete a worklist item (DELETE /worklists/{id}) — performed studies leave. */
+  async deleteWorklistItem(id: string): Promise<void> {
+    await this.request('DELETE', `/worklists/${encodeURIComponent(id)}`);
+  }
+
+  // -------------------------------------------------------------------------
   // Forwarding + lifecycle (C3 storage routing primitives)
   // -------------------------------------------------------------------------
 

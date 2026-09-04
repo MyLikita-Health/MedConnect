@@ -1237,8 +1237,8 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    (`goldens/hl7-adt-admissions.json`, kind `adt` → the `hl7ToAdmission`
    oracle) records the B2c feed contract the same way. Real vendor field
    transcripts replace the synthetic corpus under risk R2.
-10. Test status: `npm test` = 299 (281 pass / 18 DB-gated skip); `npm run
-    test:db` = 299/299.
+10. Test status: `npm test` = 303 (285 pass / 18 DB-gated skip); `npm run
+    test:db` = 303/303.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
 profiles arrive with field access (risk R2); the ADT patient-admission feed
@@ -1409,9 +1409,23 @@ of C1–C6 is composition, not new protocol work):
    metadata → walk to instances → live C-ECHO via a self-registered
    modality → cleanup. MWL worklist sync (C2) is the next slice on the same
    substrate.
-2. **M3.2 — MWL workflow (C2)**: order registry → Orthanc worklist;
-   hub monitors whether the study was performed (poll v1; MPPS is an M5
-   refinement per §8.1).
+2. ✅ **M3.2 — MWL workflow (C2)**: order registry → Orthanc worklist,
+   hub polls for performed studies (poll v1; MPPS stays an M5 refinement
+   per §8.1). The adapter gains the Worklists-plugin REST surface —
+   `createWorklistItem` (POST /worklists/create from DICOM tags),
+   `listWorklistIds` / `getWorklistItem`, `deleteWorklistItem` — and
+   `packages/dicom/src/worklist.ts` ships `MwlOrder` + `orderToWorklistTags`
+   (AccessionNumber, PatientName/ID/DOB, requested procedure + protocol
+   name) and the `WorklistService`: `sync` is idempotent per accession
+   (create only when absent), `pollPerformed` returns studies whose
+   accession matched the synced set, and cleanup deletes the item once
+   performed. Tested against a shared mock Orthanc HTTP server (create,
+   idempotent re-sync, performed → item deleted, error paths).
+   ⚠️ **Live MWL needs the new REST-based Worklists plugin**: the compose
+   image ships the legacy folder-based sample (`libModalityWorklists`) with
+   no REST surface, and the new plugin (AGPL, Nov 2025) is packaged
+   independently — building it into the compose `orthanc` service is
+   tracked under M3.5 packaging (C5).
 3. **M3.3 — Storage routing (C3)**: hub registers as an Orthanc forwarding
    peer to PACS/archive; study metadata + status flow through the dispatcher
    with DB-driven routing rules.
@@ -1429,10 +1443,11 @@ stays M5 (§8.1). Simulators (workstream K): a DICOM simulator = Orthanc + a
 fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
 route with failure injection — the M3 exit drill.
 
-**Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL → M3.3
-storage routing → M3.4 console+failure → M3.5 packaging; every slice keeps
-`npm test` / `npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
-**Status: kickoff survey + M3.1 scaffold done**; MWL (M3.2) is next.
+**Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL
+(✅ shipped) → M3.3 storage routing → M3.4 console+failure → M3.5
+packaging; every slice keeps `npm test` / `npm run test:db` green; the §8.1
+radiology-pilot gate closes M3. **Status: kickoff survey + M3.1 + M3.2
+done**; storage routing (M3.3) is next.
 
 ---
 

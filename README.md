@@ -45,7 +45,8 @@ transcripts are recorded in the shared golden library and executed under
 `npm test` by the HL7 conformance runner (real vendor field transcripts
 replace them under risk R2). Kickoff survey + status: plan §13.15. Next:
 **imaging/DICOM (M3)** — kickoff survey + the M3.1 Orthanc adapter scaffold
-are in (plan §13.16), MWL is next — then FHIR/webhooks and multi-tenancy.
+and the M3.2 MWL worklist client are in (plan §13.16), storage routing is
+next — then FHIR/webhooks and multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -247,17 +248,18 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 299 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 303 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
                    #   ORU/ORM serializer + outbound deliverHl7 + connection
                    #   pool, HL7 segment profile layouts (B4) + vendor-
                    #   variant + ADT golden corpora, Orthanc REST adapter
-                   #   (M3.1), dispatcher/DLQ, API, security
-                   #   (roles/scopes + authz + audit), signed updates +
-                   #   supervisor (apply/rollback/crash) (18 DB-gated skip)
-npm run test:db    # 299 tests: same + PostgreSQL integration (needs db:up)
+                   #   (M3.1) + MWL worklist client (M3.2), dispatcher/DLQ,
+                   #   API, security (roles/scopes + authz + audit), signed
+                   #   updates + supervisor (apply/rollback/crash) (18
+                   #   DB-gated skip)
+npm run test:db    # 303 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -277,6 +279,8 @@ packages/
   dicom/      @integration-hub/dicom    Orthanc REST client (M3.1): canonical
                                         study/series/instance metadata reads,
                                         tools/find, peer/modality store + echo
+                                        (M3.2): Worklists-plugin worklist client
+                                        + sync/poll WorklistService
   hl7/        @integration-hub/hl7      HL7 v2 (workstream B): MLLP framing +
                                         sessions/ACK, ORU translator + ORM order
                                         feed + ADT admission feed, ORU/ORM
@@ -573,10 +577,14 @@ pipeline canonicalizes correctly for both it and the reference layout.
   library (`goldens/hl7-b4-vendor-variants.json`, `goldens/hl7-adt-admissions.json`)
   and run under `npm test` by the HL7 conformance runner; real vendor field
   transcripts replace the synthetic corpus under risk R2 (plan §13.15).
-  The **imaging side is scaffolded (M3.1)** — canonical imaging metadata
-  shapes in shared + the `@integration-hub/dicom` Orthanc REST adapter,
-  with a real Orthanc container in the compose stack (`docker compose up -d
-  orthanc && npm run demo:dicom` — plan §13.16).
+  The **imaging side is scaffolded (M3.1 + M3.2)** — canonical imaging
+  metadata shapes in shared + the `@integration-hub/dicom` Orthanc REST
+  adapter plus the **MWL worklist client** (`sync` registry orders into the
+  worklist idempotently, `pollPerformed` finds performed studies by
+  accession), with a real Orthanc container in the compose stack
+  (`docker compose up -d orthanc && npm run demo:dicom` — plan §13.16).
+  Live worklist sync needs the REST-based Worklists plugin, tracked under
+  M3.5 packaging.
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry
