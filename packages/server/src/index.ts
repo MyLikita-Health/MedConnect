@@ -272,6 +272,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         sink: dispatcher,
         mappings,
         ...(tls ? { tls } : {}),
+        // B2c — the LIS seam: inbound ORM^O01 order messages register the
+        // expected order (replacing the manual POST /api/v1/orders flow);
+        // matching then sees it, so results against it route instead of HELD.
+        orders: {
+          register: (order) => orders.register({ ...order, receivedAt: order.receivedAt ?? new Date().toISOString() }),
+        },
         onDeviceState: onDeviceState('HL7'),
         onSessionError: (err) => console.error(`[gateway] HL7 session error: ${err.message}`),
       })

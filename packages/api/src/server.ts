@@ -141,14 +141,32 @@ const retrySchema = z.object({
   jitter: z.boolean().default(DEFAULT_RETRY.jitter),
 });
 
-const destinationSchema = z.object({
-  id: z.string().min(1),
-  kind: z.enum(['console', 'http']).default('http'),
-  name: z.string().min(1),
-  url: z.string().url().optional(),
-  enabled: z.boolean().default(true),
-  retry: retrySchema.optional(),
-});
+const destinationSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(['console', 'http', 'hl7']).default('http'),
+    name: z.string().min(1),
+    url: z.string().url().optional(),
+    /** MLLP endpoint for kind 'hl7' (workstream B3): host/port + MSH header fields. */
+    hl7: z
+      .object({
+        host: z.string().min(1),
+        port: z.number().int().positive().max(65535),
+        sendingApp: z.string().optional(),
+        sendingFacility: z.string().optional(),
+        receivingApp: z.string().optional(),
+        receivingFacility: z.string().optional(),
+        version: z.string().optional(),
+      })
+      .optional(),
+    enabled: z.boolean().default(true),
+    retry: retrySchema.optional(),
+  })
+  .superRefine((d, ctx) => {
+    if (d.kind === 'hl7' && !d.hl7) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['hl7'], message: 'an hl7 destination requires an hl7 config (host + port)' });
+    }
+  });
 
 const routeRuleSchema = z.object({
   id: z.string().min(1),

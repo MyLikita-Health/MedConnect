@@ -158,6 +158,28 @@ test('Postgres dispatcher exhausts retries into the DLQ with attempt history', {
   await r.deleteDestination('down-lis');
 });
 
+test('Postgres route store round-trips an hl7 destination config', { skip: skipReason }, async () => {
+  if (!pool || !routes) return skipTest('no pool');
+  const r = routes;
+  await r.upsertDestination({
+    id: 'pg-lis-mllp',
+    kind: 'hl7',
+    name: 'PG LIS MLLP',
+    hl7: { host: '127.0.0.1', port: 6661, sendingApp: 'HUB', receivingApp: 'ACME_LIS', version: '2.5.1' },
+    enabled: true,
+    retry: { maxAttempts: 3, backoffMs: 10, backoffFactor: 2, jitter: false },
+  });
+
+  const listed = await r.listDestinations();
+  const hl7 = listed.find((d) => d.id === 'pg-lis-mllp');
+  assert.ok(hl7);
+  assert.equal(hl7.kind, 'hl7');
+  assert.deepEqual(hl7.hl7, { host: '127.0.0.1', port: 6661, sendingApp: 'HUB', receivingApp: 'ACME_LIS', version: '2.5.1' });
+
+  // Cleanup so sibling suites stay isolated.
+  await r.deleteDestination('pg-lis-mllp');
+});
+
 test('Postgres dispatcher matches the registry, holds unmatched, and releases into delivery', { skip: skipReason }, async (t) => {
   if (!pool || !store || !routes) return skipTest('no pool');
   const s = store;

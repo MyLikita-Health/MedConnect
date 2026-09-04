@@ -24,9 +24,16 @@ import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
 import type { CanonicalMessage, LabPayload, MappingTable, MessageSink, ParsedRecord } from '@integration-hub/shared';
 import { hl7ToCanonical } from './translate.js';
+import { hl7ToOrder, type OrderRegistration } from './order.js';
 import { MllpSession, type AckDecision } from './mllp-session.js';
 import { MSH_SLOTS, parseMessage } from './message.js';
 import type { MllpTlsCredentials } from './mllp-server.js';
+
+/** The LIS seam (workstream B2c): a minimal registry of expected orders. */
+export interface OrderFeed {
+  /** Register (or update) an expected order. Resolves when persisted. */
+  register(order: OrderRegistration): void | Promise<void>;
+}
 
 export interface Hl7GatewayOptions {
   host?: string;
@@ -36,6 +43,14 @@ export interface Hl7GatewayOptions {
   sink: MessageSink;
   /** Analyzer/LIS test-code → canonical mappings (PRD §17–18). */
   mappings?: MappingTable;
+  /**
+   * The LIS seam (B2c): when wired, incoming ORM^O01 order messages are
+   * translated into the expected-order registry instead of the results
+   * pipeline (orders have no results to deliver — the Dispatcher stays
+   * untouched). Without it, ORM falls through to the results translator and
+   * is rejected loudly.
+   */
+  orders?: OrderFeed;
   /** PEM key + cert: when present the listener is TLS-terminated. */
   tls?: MllpTlsCredentials;
   /** Connection-state callbacks keyed by the MSH sender identity. */
@@ -94,6 +109,24 @@ export class Hl7Gateway {
     this.deviceBySocket.set(socket, deviceId);
     this.opts.onDeviceState?.(deviceId, 'connected');
 
+    // B2c — the LIS seam: an ORM^O01 order message feeds the expected-order
+    // registry directly (no results to deliver). Persisted before the ACK,
+    // so the sender never resends a registered order; AR + reasons when it
+    // cannot be translated.
+    if (this.opts.orders && isOrm(payload)) {
+      const { order, issues } = hl7ToOrder(payload, { mappings: this.opts.mappings });
+      if (!order) return { status: 'AR', text: issues.join('; ') };
+      try {
+        const result = this.opts.orders.register(order);
+        if (result instanceof Promise) await result;
+        return {}; // AA — order registered
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.opts.onSessionError?.(error);
+        return { status: 'AE', text: `order registration failed: ${error.message}` };
+      }
+    }
+
     const { payload: canonical, issues } = hl7ToCanonical(payload, { mappings: this.opts.mappings });
     const message = buildEnvelope(records, payload, canonical, issues, deviceId);
 
@@ -111,6 +144,13 @@ export class Hl7Gateway {
     if (!canonical) return { status: 'AR', text: issues.join('; ') };
     return {};
   }
+}
+
+/** True for the ORM^O01 order trigger (MSH-9). */
+function isOrm(payload: string): boolean {
+  const msh = parseMessage(payload).segments.find((s) => s.id === 'MSH');
+  const type = msh ? msh.fields[MSH_SLOTS.messageType] : undefined;
+  return (type ?? '').startsWith('ORM^');
 }
 
 /** Device id from the MSH sender (sending application, else facility). */

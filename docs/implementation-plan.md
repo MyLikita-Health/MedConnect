@@ -1114,8 +1114,10 @@ gated on field access (risk R2) only.
 
 ### 13.15 Workstream B — HL7 v2 lab engine: kickoff survey + status
 
-**Status (B1–B2b shipped, Sept 2026).** The survey below (written pre-build)
-mapped B onto this codebase; the inbound leg is now real:
+**Status (B1–B3.2 + B2c shipped, Sept 2026).** The survey below (written
+pre-build) mapped B onto this codebase; the inbound leg is real, the LIS
+seam closes over the wire, and the outbound serializer + destination kind
+are in:
 
 1. ✅ **B1 — MLLP framing + sessions + application ACK** (D7 parser adoption,
    framing/ACK, wire sessions): `@integration-hub/hl7` ships `MllpServer` /
@@ -1147,14 +1149,44 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    HELD review → release → all ROUTED, AA acks). Dispatcher integration
    tests prove HL7 reaches ROUTED and resends are deduped exactly like
    ASTM.
-4. Test status: `npm test` = 230 (214 pass / 16 DB-gated skip); suites green
-   incl. the new hl7 package + server integration tests.
+4. ✅ **B3.1 — canonical → HL7 serializer** (`@integration-hub/hl7`
+   `canonicalToOru` / `canonicalToOrm`): `LabPayload` → ORU^R01 (results to
+   an LIS) and ORM^O01 (order download, §6.4). Wire text is built on our own
+   message model — never round-tripped through `toHL7String()` (the D7
+   constraint); OBX-5 values are escaped; multi-test ORMs emit one OBR per
+   test; `OutboundOptions` covers MSH-3/4/5/6 + version + control id. The
+   **round-trip oracle** (`serialize.test.ts`) feeds each generated ORU back
+   through `hl7ToCanonical` and asserts the canonical payload matches — the
+   inbound translator doubles as outbound conformance for free.
+5. ✅ **B3.2 — `hl7` destination kind + config schema + migration**:
+   `DestinationKind 'hl7'` + `Hl7DestinationConfig` (host/port + MSH
+   fields) in core `routing.ts`; API zod schema (kind `hl7` requires the
+   config — superRefine); migrations `0010_hl7_destinations.sql` adds the
+   additive `hl7_config` jsonb column; in-memory + PG route stores
+   round-trip it (API / routing / DB-gated tests). Route rules now select
+   MLLP endpoints like any destination.
+6. ✅ **B2c — inbound ORM^O01 order feed (the LIS seam)**: `hl7ToOrder`
+   (`packages/hl7/src/order.ts`) extracts ORC-1 action → status (NW/RO →
+   active, CA → cancelled, CM/OC → completed), ORC-3/ORC-2/OBR order id,
+   PID-3 patient, SPM-2 sample (best-effort), and OBR-4 requested tests
+   (mapped). `Hl7Gateway` gains an `orders` feed: when wired, ORM messages
+   bypass the results pipeline entirely (orders have no results to deliver)
+   and register the expected order before the AA ack (AR + reasons on
+   translation failure, AE on registry failure). `startHub` wires the real
+   `OrderRegistry` — matching (`/api/v1/orders`) is now fed by the LIS wire
+   instead of manual `POST /api/v1/orders`. E2E proof
+   (`packages/server/src/hl7-order-feed.test.ts`): ORM over MLLP registers
+   the order and the matching ORU **ROUTED** with `MATCHED` (control: same
+   ORU without the feed → HELD `UNMATCHED`). ADT patient-admission feeds
+   remain a future B2c extension.
+7. Test status: `npm test` = 248 (231 pass / 17 DB-gated skip); `npm run
+   test:db` = 248/248.
 
-Remaining B: **B2c** inbound ORM/ADT → `OrderRegistry` feed (closes the LIS
-seam, replaces manual `POST /api/v1/orders`); **B3** outbound —
-`canonicalToHl7` serializer + an `hl7` destination kind + outbound connection
-manager (first real outbound beyond HTTP; order download §6.4); **B4** HL7
-segment profiles + goldens-in-CI.
+Remaining B: **B3.3** the dispatcher `deliver` seam for `hl7` — an injected
+protocol-blind `deliver` (core stays kind-agnostic) wired in `startHub` to
+connect via `MllpClient`, await the application ACK (AA = delivered; AE/AR =
+throw → retry/DLQ), plus the outbound connection manager + e2e/demo;
+**B4** HL7 segment profiles + goldens-in-CI.
 
 ---
 
@@ -1249,12 +1281,13 @@ FHIR) actually arrives.
 
 **Suggested sequencing.** (1) ✅ **done** — B1 + B2-inbound-ORU end-to-end
 (`@integration-hub/hl7` framing/sessions/translator + `Hl7Gateway` in
-`startHub`, `simulate:hl7`/`demo:hl7`, status above); (2) ⬜ B3 outbound
-ORM/ORU as an `hl7` destination kind — first real outbound beyond HTTP;
-(3) ⬜ inbound ORM/ADT → `OrderRegistry` feed — closes the LIS seam;
-(4) ⬜ B4 profile generalization + HL7 conformance last. Each step keeps both
-suites green (`npm test` / `npm run test:db`) and demo-able in memory and
-Postgres.
+`startHub`, `simulate:hl7`/`demo:hl7`, status above); (2) ✅ **B3.1 + B3.2**
+**done** — serializer + `hl7` destination kind/config/migration; (3) ✅
+**B2c done** — inbound ORM^O01 → `OrderRegistry` feed closes the LIS seam;
+(4) ⬜ B3.3 deliverer seam + connection manager (first real outbound beyond
+HTTP; order download §6.4); (5) ⬜ B4 profile generalization + HL7
+conformance last. Each step keeps both suites green (`npm test` / `npm run
+test:db`) and demo-able in memory and Postgres.
 
 ---
 

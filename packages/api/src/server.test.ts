@@ -141,6 +141,39 @@ test('destination and route endpoints manage routing configuration', async (t) =
   assert.equal(((await (await fetch(`${base}/api/v1/destinations`)).json()) as unknown[]).length, 0);
 });
 
+test('hl7 destinations carry their MLLP config; a missing config is rejected', async (t) => {
+  const { base } = await startApi(t);
+  const res = await fetch(`${base}/api/v1/destinations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 'lis-mllp',
+      name: 'LIS MLLP',
+      kind: 'hl7',
+      hl7: { host: '127.0.0.1', port: 6661, sendingApp: 'HUB', receivingApp: 'ACME_LIS' },
+    }),
+  });
+  assert.equal(res.status, 201);
+  const out = (await (await fetch(`${base}/api/v1/destinations`)).json()) as Array<{
+    id: string;
+    kind: string;
+    hl7?: { host: string; port: number; receivingApp?: string };
+  }>;
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.kind, 'hl7');
+  assert.equal(out[0]!.hl7?.host, '127.0.0.1');
+  assert.equal(out[0]!.hl7?.port, 6661);
+  assert.equal(out[0]!.hl7?.receivingApp, 'ACME_LIS');
+
+  // kind 'hl7' without an hl7 config is a validation error (superRefine).
+  const missing = await fetch(`${base}/api/v1/destinations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'bad-mllp', name: 'Bad MLLP', kind: 'hl7' }),
+  });
+  assert.equal(missing.status, 400);
+});
+
 test('dlq endpoint lists failed messages and discard retires them', async (t) => {
   const { base, store } = await startApi(t);
   store.record(message({ id: 'm1', status: 'FAILED' }));

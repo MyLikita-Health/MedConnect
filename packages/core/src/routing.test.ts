@@ -70,6 +70,30 @@ test('status-scoped rules only match that status', async () => {
   assert.deepEqual((await resolveDestinations(routes, message('SIM-1', 'QUEUED'))).map((d) => d.id), [CONSOLE_DESTINATION.id]);
 });
 
+test('an hl7 destination round-trips its MLLP config through the store', async () => {
+  const routes = new InMemoryRouteStore();
+  const hl7Dest: Destination = {
+    id: 'lis-mllp',
+    kind: 'hl7',
+    name: 'LIS MLLP',
+    hl7: { host: '10.0.0.9', port: 6661, sendingApp: 'HUB', receivingApp: 'ACME_LIS', version: '2.5.1' },
+    enabled: true,
+    retry: { maxAttempts: 3, backoffMs: 10, backoffFactor: 2, jitter: false },
+  };
+  await routes.upsertDestination(hl7Dest);
+  await routes.upsertRule(rule({ id: 'r-hl7', destinationId: 'lis-mllp', deviceId: 'SIM-1' }));
+
+  const listed = await routes.listDestinations();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]!.kind, 'hl7');
+  assert.deepEqual(listed[0]!.hl7, hl7Dest.hl7);
+
+  // Routing selection treats it like any other destination.
+  const resolved = await resolveDestinations(routes, message('SIM-1'));
+  assert.deepEqual(resolved.map((d) => d.id), ['lis-mllp']);
+  assert.deepEqual(resolved[0]!.hl7, hl7Dest.hl7);
+});
+
 test('deleting a destination removes its rules', async () => {
   const routes = new InMemoryRouteStore();
   await routes.upsertDestination(httpDest);

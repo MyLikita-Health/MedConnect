@@ -8,7 +8,7 @@
 import type { Pool } from 'pg';
 import type { CanonicalMessage } from '@integration-hub/shared';
 
-export type DestinationKind = 'console' | 'http';
+export type DestinationKind = 'console' | 'http' | 'hl7';
 
 export interface RetryPolicy {
   /** Total attempts per destination (1 = no retry). */
@@ -27,8 +27,32 @@ export interface Destination {
   name: string;
   /** HTTP URL for kind = 'http'. */
   url?: string;
+  /**
+   * MLLP endpoint for kind = 'hl7' (workstream B3): the delivery writes the
+   * canonical message out as HL7 v2 and awaits the application ACK. Delivered
+   * by an injected `deliver` in the Dispatcher (the integration core stays
+   * protocol-blind); a destination of this kind with no deliverer throws on
+   * delivery, exactly like any unhandled kind.
+   */
+  hl7?: Hl7DestinationConfig;
   enabled: boolean;
   retry: RetryPolicy;
+}
+
+/** Outbound MLLP endpoint for an `hl7` destination (plan §6.4, B3). */
+export interface Hl7DestinationConfig {
+  host: string;
+  port: number;
+  /** MSH-3 sending application (default 'HUB'). */
+  sendingApp?: string;
+  /** MSH-4 sending facility. */
+  sendingFacility?: string;
+  /** MSH-5 receiving application (the LIS). */
+  receivingApp?: string;
+  /** MSH-6 receiving facility. */
+  receivingFacility?: string;
+  /** MSH-12 version (default 2.5.1). */
+  version?: string;
 }
 
 export interface RouteRule {
@@ -125,14 +149,16 @@ export class PostgresRouteStore implements RouteStore {
       kind: string;
       name: string;
       url: string | null;
+      hl7_config: unknown;
       enabled: boolean;
       retry_policy: unknown;
-    }>(`SELECT id, kind, name, url, enabled, retry_policy FROM destinations`);
+    }>(`SELECT id, kind, name, url, hl7_config, enabled, retry_policy FROM destinations`);
     return rows.map((row) => ({
       id: row.id,
       kind: row.kind as DestinationKind,
       name: row.name,
       url: row.url ?? undefined,
+      hl7: row.hl7_config === null ? undefined : (row.hl7_config as Hl7DestinationConfig),
       enabled: row.enabled,
       retry: (row.retry_policy ?? DEFAULT_RETRY) as RetryPolicy,
     }));
@@ -140,12 +166,13 @@ export class PostgresRouteStore implements RouteStore {
 
   async upsertDestination(destination: Destination): Promise<void> {
     await this.pool.query(
-      `INSERT INTO destinations (id, kind, name, url, enabled, retry_policy)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO destinations (id, kind, name, url, hl7_config, enabled, retry_policy)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (id) DO UPDATE SET
          kind = EXCLUDED.kind,
          name = EXCLUDED.name,
          url = EXCLUDED.url,
+         hl7_config = EXCLUDED.hl7_config,
          enabled = EXCLUDED.enabled,
          retry_policy = EXCLUDED.retry_policy`,
       [
@@ -153,6 +180,7 @@ export class PostgresRouteStore implements RouteStore {
         destination.kind,
         destination.name,
         destination.url ?? null,
+        destination.hl7 ? JSON.stringify(destination.hl7) : null,
         destination.enabled,
         JSON.stringify(destination.retry),
       ],

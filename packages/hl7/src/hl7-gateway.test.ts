@@ -11,7 +11,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import type { CanonicalMessage, MessageSink } from '@integration-hub/shared';
-import { Hl7Gateway } from './hl7-gateway.js';
+import { Hl7Gateway, type OrderFeed } from './hl7-gateway.js';
+import type { OrderRegistration } from './order.js';
 import { MllpDecoder, wrapMessage } from './mllp.js';
 import { parseMessage, segmentField } from './message.js';
 
@@ -29,7 +30,7 @@ interface Hub {
   port: number;
 }
 
-async function startHub(t: any, sink?: MessageSink): Promise<Hub> {
+async function startHub(t: any, sink?: MessageSink, orders?: OrderFeed): Promise<Hub> {
   const messages: CanonicalMessage[] = [];
   const states: Hub['states'] = [];
   const errors: Error[] = [];
@@ -37,6 +38,7 @@ async function startHub(t: any, sink?: MessageSink): Promise<Hub> {
     host: '127.0.0.1',
     port: 0,
     sink: sink ?? { record: (m) => void messages.push(m) }, // recording default
+    orders,
     onDeviceState: (deviceId, state) => states.push([deviceId, state]),
     onSessionError: (e) => errors.push(e),
   });
@@ -140,6 +142,73 @@ test('a persistence failure answers AE and surfaces onSessionError', async (t) =
   assert.equal(msa(acks[0]!).status, 'AE');
   assert.match(msa(acks[0]!).text ?? '', /postgres unavailable/);
   assert.equal(hub.messages.length, 0);
+});
+
+test('ORM^O01 order feeds the registry (AA) instead of the results sink', async (t) => {
+  const registered: OrderRegistration[] = [];
+  const orders: OrderFeed = { register: (o) => void registered.push(o) };
+  const hub = await startHub(t, undefined, orders);
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  const orm = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORM^O01|ORD-9|P|2.3.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+    'ORC|NW|PL-77|ACC-424242|GLU^Glucose',
+    'OBR|1|PL-77|ACC-424242|GLU^Glucose',
+  ].join('\r');
+  socket.write(wrapMessage(orm));
+  await waitFor(() => acks.length >= 1, 'AA ack');
+  await waitFor(() => registered.length >= 1, 'order registered');
+
+  assert.equal(msa(acks[0]!).status, 'AA');
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0]!.id, 'ACC-424242');
+  assert.equal(registered[0]!.patientId, 'PID-1001');
+  // An ORM is not a result: the results sink is untouched.
+  assert.equal(hub.messages.length, 0);
+  assert.deepEqual(hub.errors, []);
+});
+
+test('a malformed ORM is rejected AR; a registry failure answers AE', async (t) => {
+  const registered: OrderRegistration[] = [];
+  const hub = await startHub(t, undefined, {
+    register: (o) => void registered.push(o),
+  } as OrderFeed);
+  const { socket, acks } = await connect(hub.port);
+  t.after(() => socket.destroy());
+
+  // Missing PID-3 → cannot register → AR with reasons.
+  const bad = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORM^O01|BAD2|P|2.3.1',
+    'PID|1|||^NoId^X||19850312|M',
+    'ORC|NW|PL-77|ACC-9||',
+    'OBR|1|PL-77|ACC-9|GLU',
+  ].join('\r');
+  socket.write(wrapMessage(bad));
+  await waitFor(() => acks.length >= 1, 'AR ack');
+  assert.equal(msa(acks[0]!).status, 'AR');
+  assert.match(msa(acks[0]!).text ?? '', /Missing patient identifier/);
+
+  // A registry that throws → AE + session error.
+  const hub2 = await startHub(t, undefined, {
+    register: () => {
+      throw new Error('registry down');
+    },
+  } as OrderFeed);
+  const c2 = await connect(hub2.port);
+  t.after(() => c2.socket.destroy());
+  const good = [
+    'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORM^O01|ORD-10|P|2.3.1',
+    'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
+    'ORC|NW|PL-77|ACC-424242|GLU^Glucose',
+    'OBR|1|PL-77|ACC-424242|GLU^Glucose',
+  ].join('\r');
+  c2.socket.write(wrapMessage(good));
+  await waitFor(() => c2.acks.length >= 1, 'AE ack');
+  await waitFor(() => hub2.errors.length >= 1, 'session error surfaced');
+  assert.equal(msa(c2.acks[0]!).status, 'AE');
+  assert.match(msa(c2.acks[0]!).text ?? '', /order registration failed: registry down/);
 });
 
 test('disconnect fires for the device that carried the connection', async (t) => {

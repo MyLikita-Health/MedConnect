@@ -12,6 +12,7 @@ export {
   resolveDestinations,
   type Destination,
   type DestinationKind,
+  type Hl7DestinationConfig,
   type RetryPolicy,
   type RouteRule,
   type RouteStore,
