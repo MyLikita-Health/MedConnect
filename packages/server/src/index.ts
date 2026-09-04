@@ -10,6 +10,7 @@ import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, In
 import { AstmGateway } from '@integration-hub/gateway';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
+import { MwlMonitor } from './mwl-monitor.js';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
@@ -54,6 +55,13 @@ export interface HubOptions {
   updateSource?: string;
   /** PEM update public key (env UPDATE_PUBLIC_KEY) that must sign manifests. */
   updatePublicKey?: string;
+  /**
+   * Orthanc (workstream M3.2 — the MWL study monitor): when set the hub
+   * syncs active registry orders onto the Orthanc worklist and polls for
+   * performed studies (env ORTHANC_URL / ORTHANC_USER / ORTHANC_PASSWORD /
+   * MWL_POLL_MS). Present on hub as `hub.mwl`.
+   */
+  orthanc?: { baseUrl: string; username?: string; password?: string; pollMs?: number };
 }
 
 export interface Hub {
@@ -70,6 +78,8 @@ export interface Hub {
   alerts: AlertService;
   alertStore: AlertStore;
   profileStore: ProfileStore;
+  /** Present when Orthanc is configured: the M3.2 MWL study monitor. */
+  mwl?: MwlMonitor;
   /** API-key auth + audit (present unless authDisabled). */
   keys?: KeyStore;
   audit?: AuditStore;
@@ -101,6 +111,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const stateDir = opts.stateDir ?? process.env.HUB_STATE_DIR;
   const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
   const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
+  const orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
+  const orthancUser = opts.orthanc?.username ?? process.env.ORTHANC_USER;
+  const orthancPass = opts.orthanc?.password ?? process.env.ORTHANC_PASSWORD;
+  const envPollMs = Number(process.env.MWL_POLL_MS);
+  const orthancPollMs = opts.orthanc?.pollMs ?? (Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : 60_000);
   const tls = opts.tls ?? (await loadTlsFromEnv());
 
   if (databaseUrl) {
@@ -348,6 +363,25 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     releaseHandler: (id) => dispatcher.release(id),
   });
 
+  // Workstream M3.2 — the MWL study monitor (enabled by ORTHANC_URL / the
+  // opts.orthanc block): active registry orders are pushed onto the real
+  // Orthanc worklist and performed studies are polled + retired. Performed
+  // study metadata is surfaced on hub.mwl; routing it onward is M3.3.
+  let mwl: MwlMonitor | undefined;
+  if (orthancUrl) {
+    mwl = new MwlMonitor({
+      baseUrl: orthancUrl,
+      username: orthancUser,
+      password: orthancPass,
+      pollMs: orthancPollMs,
+      orders,
+      admissions,
+      log: (line) => console.log(line),
+    });
+    mwl.start();
+    console.log(`[mwl]    Orthanc study monitor enabled — ${orthancUrl} (sync+poll every ${orthancPollMs}ms)`);
+  }
+
   const { port: devicePort } = await gateway.start();
   const { port: hl7Port } = hl7Gateway ? await hl7Gateway.start() : { port: undefined as number | undefined };
   const { port: httpPort } = await api.start();
@@ -372,11 +406,13 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alerts,
     alertStore,
     profileStore,
+    mwl,
     keys,
     audit,
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {
+      if (mwl) await mwl.stop();
       await dispatcher.stop();
       await api.stop();
       await gateway.stop();

@@ -22,6 +22,7 @@
     "demo:hl7": "tsx scripts/demo-hl7.ts",
     "demo:outbound": "tsx scripts/demo-outbound.ts",
     "demo:dicom": "tsx scripts/demo-dicom.ts",
+    "demo:mwl": "tsx scripts/demo-mwl.ts",
     "demo:db": "DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx scripts/demo.ts",
     "demo:update": "tsx scripts/demo-update.ts",
     "start:supervised": "tsx packages/server/src/supervisor-cli.ts",

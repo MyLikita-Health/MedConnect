@@ -1237,8 +1237,8 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    (`goldens/hl7-adt-admissions.json`, kind `adt` → the `hl7ToAdmission`
    oracle) records the B2c feed contract the same way. Real vendor field
    transcripts replace the synthetic corpus under risk R2.
-10. Test status: `npm test` = 303 (285 pass / 18 DB-gated skip); `npm run
-    test:db` = 303/303.
+10. Test status: `npm test` = 308 (290 pass / 18 DB-gated skip); `npm run
+    test:db` = 308/308.
 
 Remaining B: nothing on the core roadmap — goldens-in-CI for real vendor
 profiles arrive with field access (risk R2); the ADT patient-admission feed
@@ -1430,8 +1430,19 @@ of C1–C6 is composition, not new protocol work):
    merged config file (`worklists.json`, folder-mode startup) and
    `npm run demo:dicom` drives the whole M3.2 loop live: sync → idempotent
    re-sync → modality stores the performed study → poll retires the item.
-   Remaining C5 packaging (still M3.5): source-built plugin for ARM64 hosts
-   and version pinning/upgrade of the derived image.
+   **The monitor is wired into startHub** (`packages/server/src/mwl-monitor.ts`)
+   behind `ORTHANC_URL` (opts.orthanc / env, `MWL_POLL_MS` cadence, default
+   60s): each cycle pushes the order registry's active orders onto the
+   worklist, joins the patient name from the admission registry, retires
+   performed studies and never re-syncs them, and surfaces everything on
+   `hub.mwl` (status + observed performed studies; serialized polls so a
+   slow sync can't double-create). The wiring is pinned by 5 server tests
+   against a mock Orthanc (idempotent sync, performed → retired → no
+   re-create, absent without config, ORTHANC_URL alone enables it, error
+   resilience) and `npm run demo:mwl` proves the loop through the real hub
+   against the live container. Remaining C5 packaging (still M3.5):
+   source-built plugin for ARM64 hosts and version pinning/upgrade of the
+   derived image; routing performed-study metadata onward is M3.3.
 3. **M3.3 — Storage routing (C3)**: hub registers as an Orthanc forwarding
    peer to PACS/archive; study metadata + status flow through the dispatcher
    with DB-driven routing rules.

@@ -248,18 +248,18 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 303 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 308 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
                    #   ORU/ORM serializer + outbound deliverHl7 + connection
                    #   pool, HL7 segment profile layouts (B4) + vendor-
                    #   variant + ADT golden corpora, Orthanc REST adapter
-                   #   (M3.1) + MWL worklist client (M3.2), dispatcher/DLQ,
-                   #   API, security (roles/scopes + authz + audit), signed
-                   #   updates + supervisor (apply/rollback/crash) (18
-                   #   DB-gated skip)
-npm run test:db    # 303 tests: same + PostgreSQL integration (needs db:up)
+                   #   (M3.1) + MWL worklist client + startHub study monitor
+                   #   (M3.2), dispatcher/DLQ, API, security (roles/scopes +
+                   #   authz + audit), signed updates + supervisor
+                   #   (apply/rollback/crash) (18 DB-gated skip)
+npm run test:db    # 308 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -469,7 +469,14 @@ reads → live C-ECHO → full M3.2 worklist loop: sync an order into the
 worklist idempotently, modality stores the performed study, poll retires the
 item → cleanup). The compose image is derived (`docker/orthanc/Dockerfile`)
 so it bundles the REST-based **Worklists plugin** (pinned 0.9.2, AGPLv3+,
-enabled DB-backed via merged config).
+enabled DB-backed via merged config). `npm run demo:mwl` boots the **real
+hub** with its M3.2 study monitor pointed at that Orthanc
+(`ORTHANC_URL`/`ORTHANC_USER`/`ORTHANC_PASSWORD`, default localhost:8042
+orthanc/orthanc): a registry order flows onto the live worklist, the
+modality performs the study, and the monitor's next poll retires it.
+
+Set `ORTHANC_URL` (+ user/password) when starting the hub and `hub.mwl` runs
+the same loop continuously (`MWL_POLL_MS` cadence, default 60s).
 
 ## Alerting (M2 — PRD §33)
 
@@ -585,10 +592,16 @@ pipeline canonicalizes correctly for both it and the reference layout.
   metadata shapes in shared + the `@integration-hub/dicom` Orthanc REST
   adapter plus the **MWL worklist client** (`sync` registry orders into the
   worklist idempotently, `pollPerformed` finds performed studies by
-  accession). The compose `orthanc` service is a derived image that bundles
-  the REST-based **Worklists plugin** (pinned 0.9.2), so `npm run demo:dicom`
-  drives the whole MWL loop live against real Orthanc
-  (`docker compose up -d --build orthanc` — plan §13.16).
+  accession). **The study monitor is wired into startHub**: set `ORTHANC_URL`
+  (optionally `ORTHANC_USER`/`ORTHANC_PASSWORD`/`MWL_POLL_MS`) and the hub
+  pushes active registry orders onto the Orthanc worklist each cycle, joins
+  the patient name from the admission registry, retires performed studies,
+  and surfaces them on `hub.mwl` (serialized polls — never a duplicate
+  create). The compose `orthanc` service is a derived image that bundles the
+  REST-based **Worklists plugin** (pinned 0.9.2), so the whole loop runs live:
+  `npm run demo:dicom` (adapter) and `npm run demo:mwl` (the real hub's
+  monitor) against real Orthanc (`docker compose up -d --build orthanc` —
+  plan §13.16).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry
