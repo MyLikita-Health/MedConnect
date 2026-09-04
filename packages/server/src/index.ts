@@ -163,6 +163,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     await alertStore.upsertRule({ id: 'dest-down', kind: 'destination-down', name: 'Destination down', threshold: 3, channels: ['console'], enabled: true });
     await alertStore.upsertRule({ id: 'dlq-growth', kind: 'dlq', name: 'Dead-letter queue growing', threshold: 3, channels: ['console'], enabled: true });
     await alertStore.upsertRule({ id: 'held-backlog', kind: 'held-backlog', name: 'Results awaiting review', threshold: 3, channels: ['console'], enabled: true });
+    await alertStore.upsertRule({ id: 'profile-drift', kind: 'profile-drift', name: 'Profile drifted', threshold: 1, channels: ['console'], enabled: true });
   }
 
   // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
@@ -243,6 +244,13 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         console.error(`[gateway] device state update failed: ${(err as Error).message}`);
       }
       await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
+    },
+    // Drift alert seam: a bound device delivering under a profile whose
+    // stored version drifted from its goldens fires profile-drift (page); a
+    // non-drifted delivery resolves it. The message itself is still stamped
+    // + FLAGGED — this makes the annotation operational.
+    onDrift: (event) => {
+      alerts.profileDrift(event).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
     },
     onSessionError: (err) => console.error(`[gateway] session error: ${err.message}`),
   });

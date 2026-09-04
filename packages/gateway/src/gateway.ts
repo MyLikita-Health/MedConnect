@@ -38,6 +38,21 @@ export interface ProfileBinding {
  */
 export type ProfileResolver = (deviceId: string) => ProfileBinding | undefined | Promise<ProfileBinding | undefined>;
 
+/**
+ * Drift event (alerting seam): a bound device delivered a message whose
+ * profile version no longer matches its golden-recorded certification
+ * baseline (`drift: true`, with identity + both versions), or a delivery that
+ * is no longer drifted (`drift: false` — clean stamp, no-goldens binding, or
+ * unbound device) which resolves the open drift alert for that device.
+ */
+export interface DriftEvent {
+  deviceId: string;
+  drift: boolean;
+  profileId?: string;
+  version?: number;
+  certifiedVersion?: number;
+}
+
 export interface GatewayOptions {
   host?: string;
   /** TCP port for device connections; 0 picks an ephemeral port (tests). */
@@ -59,6 +74,13 @@ export interface GatewayOptions {
   /** Connection-state callbacks keyed by device id (from the H record). */
   onDeviceState?: (deviceId: string, state: 'connected' | 'disconnected') => void;
   onSessionError?: (error: Error) => void;
+  /**
+   * Drift alert seam: called once per message with the device's drift state
+   * (see DriftEvent). The alerting service turns drift:true into a page and
+   * drift:false into a resolution — drift is still an annotation on the
+   * message itself (FLAGGED timeline), this just makes it operational.
+   */
+  onDrift?: (event: DriftEvent) => void;
 }
 
 export class AstmGateway {
@@ -168,7 +190,21 @@ export class AstmGateway {
           at: new Date().toISOString(),
           note: `profile ${id} v${version} drifted from its certified v${binding.certifiedVersion} (goldens) — verify config before trusting results`,
         });
+        this.opts.onDrift?.({
+          deviceId,
+          drift: true,
+          profileId: id,
+          version,
+          ...(binding.certifiedVersion !== undefined ? { certifiedVersion: binding.certifiedVersion } : {}),
+        });
+      } else {
+        // Bound and at (or without) the certified baseline — the drift
+        // condition for this device no longer holds.
+        this.opts.onDrift?.({ deviceId, drift: false });
       }
+    } else {
+      // No binding (never bound, or unbound/detached) — nothing to flag.
+      this.opts.onDrift?.({ deviceId, drift: false });
     }
     // The pipeline produces MAPPED (or FAILED); the sink owns delivery and the
     // ROUTED/DLQ terminal transitions (plan §5.3).

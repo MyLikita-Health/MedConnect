@@ -228,10 +228,11 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 147 tests: codec, sessions, pipeline, matching/validation,
-                   #   alerts, profiles/conformance, dispatcher/DLQ, API,
-                   #   security (roles/scopes + authz + audit), signed updates +
-                   #   supervisor (apply/rollback/crash) (14 DB-gated skip)
+npm test           # 184 tests: codec, sessions, pipeline, matching/validation,
+                   #   alerts (incl. profile-drift), profiles/conformance +
+                   #   version stamping, dispatcher/DLQ, API, security
+                   #   (roles/scopes + authz + audit), signed updates +
+                   #   supervisor (apply/rollback/crash) (16 DB-gated skip)
 npm run test:db    # 147 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
@@ -425,8 +426,8 @@ releases the held one, and prints the summary.
 ## Alerting (M2 — PRD §33)
 
 Rules watch the events the hub already produces and fan out to channels
-(`console` = the API/UI alert list, `webhook` = HTTP POST). Four rule kinds in
-this milestone, evaluated by `packages/core/src/alerts.ts`:
+(`console` = the API/UI alert list, `webhook` = HTTP POST). Five rule kinds,
+evaluated by `packages/core/src/alerts.ts`:
 
 - **device-offline** — a device connection drops (fires) and returns
   (resolves).
@@ -434,6 +435,14 @@ this milestone, evaluated by `packages/core/src/alerts.ts`:
   reach the threshold; any success clears it.
 - **dlq / held-backlog** — the dead-letter or exception queue sits at/above a
   count; checked on each transition, resolves when the queue drains.
+- **profile-drift** — a bound device delivers a message under a profile whose
+  stored version no longer matches its golden-recorded certification baseline
+  (fires once per device on the first drifted delivery; any later
+  non-drifted delivery — a clean stamp, or the device unbound — resolves).
+  The message is still delivered and stamped `drift: true` with a `FLAGGED`
+  timeline entry; this rule makes that annotation operational, so operators
+  are paged (add a `webhook` channel) instead of noticing red markers later.
+  The `profile-drift` rule is seeded by default; delete it to mute.
 
 A rule+subject fires at most once until resolved (or until its cooldown
 elapses), so operators are not spammed per event. Rules are seeded with
@@ -496,6 +505,10 @@ pipeline canonicalizes correctly for both it and the reference layout.
   replace (paste profile JSON) or delete profiles. Golden files are loaded
   from `goldens/` (or `HUB_GOLDENS_DIR`), embedded with the profile they
   certify.
+- **Certification runbook** — the full field procedure for onboarding a real
+  analyzer (session bring-up, transcript capture, profile + golden
+  authoring, the CI gate, device binding, soak, version discipline) is
+  [`docs/analyzer-certification-runbook.md`](docs/analyzer-certification-runbook.md).
 
 ## Scaffold boundaries (what is intentionally not here)
 

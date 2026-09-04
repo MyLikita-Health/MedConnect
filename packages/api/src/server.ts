@@ -124,7 +124,7 @@ const orderSchema = z.object({
 
 const alertRuleSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(['device-offline', 'destination-down', 'dlq', 'held-backlog']),
+  kind: z.enum(['device-offline', 'destination-down', 'dlq', 'held-backlog', 'profile-drift']),
   name: z.string().min(1),
   subject: z.string().optional(),
   threshold: z.number().int().min(1).max(10000).default(1),

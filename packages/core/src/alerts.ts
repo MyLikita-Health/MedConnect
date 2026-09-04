@@ -1,7 +1,7 @@
 /**
  * Alerting (plan workstream I; PRD §33). Rules are evaluated against events
  * flowing through the hub and fan out to channels (console = the alert store,
- * webhook = HTTP POST). Four rule kinds in this sprint:
+ * webhook = HTTP POST). Five rule kinds:
  *
  *   device-offline    — a device's connection state turned offline (fires);
  *                       back to connected (resolves)
@@ -11,6 +11,11 @@
  *                       on each DLQ transition)
  *   held-backlog      — exception-queue backlog at/above threshold (checked
  *                       on hold/release transitions)
+ *   profile-drift     — a bound device delivered a message under a profile
+ *                       whose stored version no longer matches its golden-
+ *                       recorded certification baseline (fires per device on
+ *                       the first drifted delivery; a subsequent non-drifted
+ *                       delivery resolves)
  *
  * A rule+subject fires at most once until it is resolved (or its cooldown
  * elapses while still open), so operators are not spammed on every event.
@@ -81,6 +86,33 @@ export class AlertService {
         this.opts.log?.(`[alerts] resolved ${rule.id} — ${kind} backlog ${count} < ${rule.threshold}`);
         await this.notifyWebhooks(rule, undefined, `${kind} backlog cleared`);
       }
+    }
+  }
+
+  /**
+   * Profile-version drift (gateway onDrift): a bound device delivered under a
+   * profile whose stored version differs from the version its goldens were
+   * recorded under. Fires `profile-drift` for that device on the first drifted
+   * delivery; any later delivery that is no longer drifted (clean stamp, or
+   * the device was unbound/detached) resolves the open alert. Per-device
+   * subject, so operators are paged once per drifted analyzer, not per message.
+   */
+  async profileDrift(event: {
+    deviceId: string;
+    drift: boolean;
+    profileId?: string;
+    version?: number;
+    certifiedVersion?: number;
+  }): Promise<void> {
+    const { deviceId, drift } = event;
+    if (drift) {
+      const detail =
+        event.profileId !== undefined && event.version !== undefined
+          ? `profile ${event.profileId} v${event.version} drifted from its certified v${event.certifiedVersion} (goldens) — verify config before trusting results`
+          : `delivering under a drifted profile`;
+      await this.fire('profile-drift', deviceId, `${deviceId} ${detail}`, 1);
+    } else {
+      await this.clear('profile-drift', deviceId, `${deviceId} no longer delivering under a drifted profile`);
     }
   }
 

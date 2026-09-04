@@ -2,7 +2,12 @@
  * Alert storage: rules (config) and derived alerts (fire/resolve history).
  * In-memory here; `PostgresAlertStore` (pg-alerts.ts) mirrors the contract.
  */
-export type AlertKind = 'device-offline' | 'destination-down' | 'dlq' | 'held-backlog';
+export type AlertKind =
+  | 'device-offline'
+  | 'destination-down'
+  | 'dlq'
+  | 'held-backlog'
+  | 'profile-drift';
 
 export interface AlertRule {
   id: string;

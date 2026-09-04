@@ -1056,6 +1056,59 @@ flagged instead of silently trusted.
    profile to v2, the same bytes arrived stamped `drift: true` with the
    FLAGGED timeline note.
 
+### 13.13 Analyzer certification runbook: status
+
+Shipped as the field-facing procedure that closes the last M2 gate item's
+*input* gap (real-analyzer certification, risk R2):
+[`docs/analyzer-certification-runbook.md`](../docs/analyzer-certification-runbook.md)
+walks an on-site engineer end-to-end — session bring-up, transcript capture
+via the message viewer (scenario checklist incl. negative cases), profile
+authoring (layout offsets, mappings, the acme-style accession/sample swap),
+golden authoring (partial `expected`, `expectIssues`), the CI gate
+(`goldens.test.ts` under `npm test` / `npm run test:db`), promotion to
+certified, device binding with the exact H-record id, live stamp verification
+(`profile.drift` false), version-bump discipline, a troubleshooting table
+(checksum NAK loops, HELD vs FAILED, drift) and a sign-off checklist
+(≥3 transcripts/scenario, soak, soak report). It documents the milestone's
+honest limits: `connection`/`session` profile fields (checksumIncludesStx,
+frameNumbering, initiator) are modeled but not yet consumed by the codec — a
+checksum-mismatch loop is a hard stop and a support case, not a config tweak
+(workstream L / Phase 4 closes the seam).
+
+Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
+gated on field access (risk R2) only.
+
+### 13.14 Profile-drift alerts: status
+
+Shipped — the version-stamp sprint (§13.12) made drift *visible*; this makes
+it *operational*: a bound device delivering under a profile whose stored
+version drifted from its golden-recorded certification baseline now pages
+operators instead of leaving red ⚠ markers to be noticed later.
+
+1. ✅ Core: new `profile-drift` alert kind (`alert-store.ts`);
+   `AlertService.profileDrift(event)` fires **once per device** on the first
+drifted delivery (message names profile + both versions) and resolves on any
+later non-drifted delivery (clean stamp, no-goldens binding, or device
+unbound/detached). Per-device subject + existing open-alert/cooldown
+semantics mean no per-message paging.
+2. ✅ Gateway: `onDrift` seam (`DriftEvent`) emitted from `handleMessage` —
+   `drift: true` with identity/versions on a drifted delivery, `drift: false`
+   otherwise. The message itself keeps its stamp + `FLAGGED` timeline entry
+   (annotation unchanged); the alert is the operational layer on top.
+3. ✅ Wiring: `startHub` routes `onDrift` → `alerts.profileDrift` and seeds a
+   default `profile-drift` rule (console channel, threshold 1) alongside the
+   other seeded rules — delete the rule to mute. API `alertRuleSchema` accepts
+   the kind; the console alerts panel shows it like any other rule (add a
+   `webhook` channel + URL to page). PG needs no migration (`kind` is text).
+4. Tests: core fire/resolve/no-re-fire/per-device-independence/threshold and
+   subject-scoping/webhook payloads; gateway drift/clean/unbound/no-goldens
+   event matrix; API kind acceptance. Both suites green: `npm test` = 184
+   (168 pass / 16 DB-gated skip); `npm run test:db` = 184/184. Live e2e via
+   `startHub`: stored acme v2 (edited post-certification) + bound ACME-1 →
+   message stamped `drift: true` AND a FIRING `profile-drift` alert for
+   ACME-1; second drifted delivery did not re-fire; restoring stored v1 +
+   clean delivery resolved it (0 firing, RESOLVED in history).
+
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
 gated on field access (risk R2) only.
 

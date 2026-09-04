@@ -99,6 +99,76 @@ test('dlq backlog fires and resolves', async () => {
   assert.equal((await store.listAlerts({ firing: true })).length, 0);
 });
 
+test('profile-drift fires per device on a drifted delivery and resolves on a clean one', async () => {
+  const store = new InMemoryAlertStore();
+  await store.upsertRule(rule({ id: 'pd', kind: 'profile-drift' }));
+  const alerts = new AlertService(store);
+
+  // Drifted delivery → one FIRING alert naming both versions.
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: true, profileId: 'acme-chem-200', version: 2, certifiedVersion: 1 });
+  let firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.subject, 'ACME-1');
+  assert.equal(firing[0]!.kind, 'profile-drift');
+  assert.match(firing[0]!.message, /acme-chem-200 v2 drifted from its certified v1/);
+
+  // Every drifted message would page — but open alerts do not re-fire.
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: true, profileId: 'acme-chem-200', version: 2, certifiedVersion: 1 });
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+
+  // A second device drifts independently → its own alert.
+  await alerts.profileDrift({ deviceId: 'ACME-2', drift: true, profileId: 'acme-chem-200', version: 2, certifiedVersion: 1 });
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 2);
+
+  // A non-drifted delivery (clean stamp / unbound) resolves only its device.
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: false });
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.subject, 'ACME-2');
+  const history = await store.listAlerts();
+  assert.equal(history.filter((a) => a.status === 'RESOLVED').length, 1);
+});
+
+test('profile-drift honors threshold and per-device rule subjects', async () => {
+  const store = new InMemoryAlertStore();
+  await store.upsertRule(rule({ id: 'pd-th', kind: 'profile-drift', threshold: 2 }));
+  await store.upsertRule(rule({ id: 'pd-scope', kind: 'profile-drift', subject: 'OTHER-1', name: 'scoped' }));
+  const alerts = new AlertService(store);
+
+  // Threshold 2 with count 1 → no fire.
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: true, profileId: 'acme-chem-200', version: 2, certifiedVersion: 1 });
+  assert.equal((await store.listAlerts({ firing: true })).length, 0);
+
+  // Rule scoped to OTHER-1 never fires for ACME-1.
+  await alerts.profileDrift({ deviceId: 'OTHER-1', drift: true, profileId: 'p', version: 2, certifiedVersion: 1 });
+  const firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.ruleId, 'pd-scope');
+  assert.equal(firing[0]!.subject, 'OTHER-1');
+});
+
+test('profile-drift webhook posts the fired and resolved payloads', async () => {
+  const posted: unknown[] = [];
+  const store = new InMemoryAlertStore();
+  await store.upsertRule(
+    rule({ id: 'pd', kind: 'profile-drift', channels: ['console', 'webhook'], webhookUrl: 'https://hooks.example/1' }),
+  );
+  const alerts = new AlertService(store, {
+    webhook: async (_url, body) => {
+      posted.push(body);
+    },
+  });
+
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: true, profileId: 'acme-chem-200', version: 2, certifiedVersion: 1 });
+  assert.equal(posted.length, 1);
+  assert.equal((posted[0] as { status: string }).status, 'FIRING');
+  await alerts.profileDrift({ deviceId: 'ACME-1', drift: false });
+  assert.equal(posted.length, 2);
+  assert.equal((posted[1] as { status: string }).status, 'RESOLVED');
+});
+
 test('disabled and kind-mismatched rules are skipped', async () => {
   const store = new InMemoryAlertStore();
   await store.upsertRule(rule({ id: 'off', kind: 'device-offline', enabled: false }));

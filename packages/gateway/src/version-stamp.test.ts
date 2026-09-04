@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { once } from 'node:events';
-import { AstmGateway, type ProfileResolver, type ProfileBinding } from './gateway.js';
+import { AstmGateway, type DriftEvent, type ProfileResolver, type ProfileBinding } from './gateway.js';
 import { AstmClient, type AstmRecord } from '@integration-hub/astm';
 import type { CanonicalMessage, DeviceRecordLayout, MappingTable } from '@integration-hub/shared';
 
@@ -33,13 +33,18 @@ function acmeBinding(profile?: { id: string; version: number }, certifiedVersion
   return { layout: ACME_LAYOUT, mappings: ACME_MAPPINGS, profile, certifiedVersion };
 }
 
-async function runThroughGateway(t: any, resolver?: ProfileResolver): Promise<CanonicalMessage> {
+async function runThroughGateway(
+  t: any,
+  resolver?: ProfileResolver,
+  onDrift?: (event: DriftEvent) => void,
+): Promise<CanonicalMessage> {
   const received: CanonicalMessage[] = [];
   const gateway = new AstmGateway({
     host: '127.0.0.1',
     port: 0,
     sink: { record: (m) => void received.push(m) },
     resolveProfile: resolver,
+    onDrift,
   });
   const { port } = await gateway.start();
   t.after(() => gateway.stop());
@@ -95,6 +100,36 @@ test('a bound profile with no recorded goldens stamps identity without a drift c
 test('an unbound device carries no profile stamp', async (t) => {
   const message = await runThroughGateway(t); // no resolver → reference defaults
   assert.equal(message.profile, undefined);
+});
+
+test('drifted deliveries emit onDrift(drift:true) naming both versions; clean deliveries emit drift:false', async (t) => {
+  // Drifted (stored v2 vs certified v1): one event with profile identity.
+  const drifted: DriftEvent[] = [];
+  const resolver: ProfileResolver = async () => acmeBinding({ id: 'acme-chem-200', version: 2 }, 1);
+  await runThroughGateway(t, resolver, (e) => void drifted.push(e));
+  assert.equal(drifted.length, 1);
+  assert.deepEqual(drifted[0], {
+    deviceId: 'ACME-1',
+    drift: true,
+    profileId: 'acme-chem-200',
+    version: 2,
+    certifiedVersion: 1,
+  });
+
+  // Clean certified delivery: resolves the drift condition for the device.
+  const clean: DriftEvent[] = [];
+  await runThroughGateway(t, async () => acmeBinding({ id: 'acme-chem-200', version: 1 }, 1), (e) => void clean.push(e));
+  assert.deepEqual(clean, [{ deviceId: 'ACME-1', drift: false }]);
+});
+
+test('unbound and no-goldens deliveries also emit drift:false (nothing to flag)', async (t) => {
+  const unbound: DriftEvent[] = [];
+  await runThroughGateway(t, undefined, (e) => void unbound.push(e));
+  assert.deepEqual(unbound, [{ deviceId: 'ACME-1', drift: false }]);
+
+  const noGoldens: DriftEvent[] = [];
+  await runThroughGateway(t, async () => acmeBinding({ id: 'my-custom-analyzer', version: 1 }), (e) => void noGoldens.push(e));
+  assert.deepEqual(noGoldens, [{ deviceId: 'ACME-1', drift: false }]);
 });
 
 test('replay preserves the original profile provenance', async (t) => {
