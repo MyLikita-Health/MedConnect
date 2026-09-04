@@ -197,6 +197,78 @@ test('pipeline-validation FAILED messages go straight to the DLQ', async (t) => 
   assert.ok(!got.timeline.some((e) => e.stage === 'QUEUED'));
 });
 
+test('dispatcher lifecycle events observe holds, releases, DLQ and deliveries', async (t) => {
+  const store = new FakeStore();
+  const events: string[] = [];
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes: new InMemoryRouteStore(),
+    matching: { registry: new InMemoryOrderRegistry() },
+    events: {
+      onHold: async () => {
+        events.push('hold');
+      },
+      onRelease: async () => {
+        events.push('release');
+      },
+      onDlq: async () => {
+        events.push('dlq');
+      },
+      onDelivery: async (e) => {
+        events.push(`delivery:${e.ok}`);
+      },
+    },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  // Unmatched → HELD → released → ROUTED (console destination).
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'HELD');
+  assert.ok(events.includes('hold'));
+  await dispatcher.release('m1');
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+  assert.ok(events.includes('release'));
+  assert.ok(events.includes('delivery:true'));
+});
+
+test('dispatcher reports failed deliveries through events', async (t) => {
+  const target = await startHttp(100); // always fails
+  t.after(() => target.close());
+  const routes = new InMemoryRouteStore();
+  await routes.upsertDestination(httpDestination(`http://127.0.0.1:${target.port}/hook`, 2));
+  await routes.upsertRule({ id: 'r1', destinationId: 'lis-http', priority: 100, enabled: true });
+
+  const store = new FakeStore();
+  const failures: Array<{ destinationId: string; attempt: number }> = [];
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes,
+    events: {
+      onDelivery: async (e) => {
+        if (!e.ok) failures.push({ destinationId: e.destinationId, attempt: e.attempt });
+      },
+      onDlq: async () => {
+        // no-op
+      },
+    },
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'FAILED' && store.messages.get('m1')!.dlqAt !== undefined);
+  assert.equal(failures.length, 2);
+  assert.deepEqual(failures.map((f) => f.attempt), [1, 2]);
+  assert.ok(store.messages.get('m1')!.dlqAt);
+});
+
 test('dedup can be disabled', async (t) => {
   const store = new FakeStore();
   const dispatcher = new Dispatcher({

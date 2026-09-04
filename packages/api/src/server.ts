@@ -10,7 +10,7 @@ import net from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
-import { DEFAULT_RETRY, InMemoryOrderRegistry, InMemoryRouteStore, type OrderRegistry, type RouteStore } from '@integration-hub/core';
+import { DEFAULT_RETRY, InMemoryAlertStore, InMemoryOrderRegistry, InMemoryRouteStore, type AlertStore, type OrderRegistry, type RouteStore } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import { renderUi } from './ui.js';
 
@@ -25,6 +25,8 @@ export interface ApiServerOptions {
   routes?: RouteStore;
   /** Expected-order registry behind patient/order matching (PRD §27). */
   orders?: OrderRegistry;
+  /** Alert rules + derived alerts (PRD §33); defaults to in-memory. */
+  alerts?: AlertStore;
   /** Wired to the gateway so failed messages can be corrected + replayed. */
   replayHandler?: (message: CanonicalMessage) => CanonicalMessage | Promise<CanonicalMessage>;
   /** Wired to the dispatcher so held messages can be released into delivery. */
@@ -58,6 +60,18 @@ const orderSchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled']).default('active'),
 });
 
+const alertRuleSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(['device-offline', 'destination-down', 'dlq', 'held-backlog']),
+  name: z.string().min(1),
+  subject: z.string().optional(),
+  threshold: z.number().int().min(1).max(10000).default(1),
+  cooldownMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).optional(),
+  channels: z.array(z.enum(['console', 'webhook'])).default(['console']),
+  webhookUrl: z.string().url().optional(),
+  enabled: z.boolean().default(true),
+});
+
 const retrySchema = z.object({
   maxAttempts: z.number().int().min(1).max(10).default(DEFAULT_RETRY.maxAttempts),
   backoffMs: z.number().int().min(0).max(60000).default(DEFAULT_RETRY.backoffMs),
@@ -87,10 +101,12 @@ export class ApiServer {
   private app?: FastifyInstance;
   private readonly routes: RouteStore;
   private readonly orders: OrderRegistry;
+  private readonly alerts: AlertStore;
 
   constructor(private opts: ApiServerOptions) {
     this.routes = opts.routes ?? new InMemoryRouteStore();
     this.orders = opts.orders ?? new InMemoryOrderRegistry();
+    this.alerts = opts.alerts ?? new InMemoryAlertStore();
     const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
     this.app = app;
 
@@ -194,6 +210,23 @@ export class ApiServer {
       const released = await this.opts.releaseHandler(id);
       if (!released) return reply.code(409).send({ error: 'message is not in the HELD queue' });
       return reply.code(200).send({ ok: true, id });
+    });
+
+    // Alert rules + alerts (plan workstream I, PRD §33).
+    app.get('/api/v1/alert-rules', async () => this.alerts.listRules());
+    app.post('/api/v1/alert-rules', async (req, reply) => {
+      const rule = alertRuleSchema.parse(req.body);
+      await this.alerts.upsertRule(rule);
+      return reply.code(201).send(rule);
+    });
+    app.delete('/api/v1/alert-rules/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      await this.alerts.deleteRule(id);
+      return reply.code(204).send();
+    });
+    app.get('/api/v1/alerts', async (req) => {
+      const query = z.object({ firing: z.coerce.boolean().optional(), limit: z.coerce.number().int().min(1).max(500).optional() }).parse(req.query);
+      return this.alerts.listAlerts(query);
     });
 
     // Expected-order registry (the LIS interface seam, PRD §27).

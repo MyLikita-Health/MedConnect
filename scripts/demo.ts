@@ -61,7 +61,23 @@ async function main(): Promise<void> {
   });
   if (orderRes.status !== 201) throw new Error(`order registration failed: ${orderRes.status}`);
 
-  // 2. Two matched results (fixed fixture) + one stray result from an unknown
+  // 2. Alerting: the demo focuses on one rule — a growing held-backlog pages
+  //    the operator (PRD §33). Threshold 1 = the first unreviewed result fires.
+  //    The seeded default rules (device offline etc.) are removed so the demo
+  //    assertions are deterministic; the simulator's normal disconnect would
+  //    otherwise fire a legitimate device-offline alert at the end.
+  for (const seeded of ['dev-offline', 'dest-down', 'dlq-growth']) {
+    await fetch(`${base}/alert-rules/${seeded}`, { method: 'DELETE' });
+  }
+  console.log('[demo] adding alert rule: held results awaiting review (threshold 1)');
+  const ruleRes = await fetch(`${base}/alert-rules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'demo-held', kind: 'held-backlog', name: 'Results awaiting review', threshold: 1 }),
+  });
+  if (ruleRes.status !== 201) throw new Error(`alert rule registration failed: ${ruleRes.status}`);
+
+  // 3. Two matched results (fixed fixture) + one stray result from an unknown
   //    patient (random fixture) that cannot be matched → held for review.
   const matched = run(['packages/simulator/src/cli.ts', '--count', '2', '--interval', '500', '--fixed']);
   if ((await exitCode(matched)) !== 0) throw new Error('simulator (fixed) exited with non-zero code');
@@ -72,17 +88,27 @@ async function main(): Promise<void> {
   // queue to drain so the summary shows terminal states only.
   await waitForPending(base, 0);
 
-  // 3. The stray result should sit in the HELD exception queue (never silently
-  //    auto-assigned, never dropped). The operator reviews and releases it.
+  // 4. The stray result sits in the HELD exception queue — and the alert fired.
   const held = (await (await fetch(`${base}/held`)).json()) as Array<{ id: string; status: string; match: { status: string } }>;
   console.log(`\n[held] ${held.length} message(s) in the exception queue`);
   for (const m of held) {
     console.log(`  ${m.id.slice(0, 8)}  ${m.status}  match=${m.match?.status}`);
+  }
+  const firing = (await (await fetch(`${base}/alerts?firing=true`)).json()) as Array<{ kind: string; message: string }>;
+  console.log(`[alerts] ${firing.length} firing`);
+  for (const a of firing) console.log(`  FIRING  ${a.kind} — ${a.message}`);
+
+  // 5. The operator reviews the held result and releases it; the alert resolves.
+  for (const m of held) {
     const release = await fetch(`${base}/messages/${m.id}/release`, { method: 'POST' });
     if (release.status !== 200) throw new Error(`release failed: ${release.status}`);
     console.log(`  → released by operator, re-entering delivery`);
   }
   await waitForPending(base, 0);
+  const after = (await (await fetch(`${base}/alerts?firing=true`)).json()) as unknown[];
+  console.log(`[alerts] ${after.length} firing after review (held backlog cleared)`);
+  if (after.length > 0) throw new Error('expected all demo alerts resolved after review');
+  await fetch(`${base}/alert-rules/demo-held`, { method: 'DELETE' });
 
   const stats = await (await fetch(`${base}/stats`)).json();
   const messages = await (await fetch(`${base}/messages`)).json();

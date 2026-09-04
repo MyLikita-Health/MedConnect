@@ -89,8 +89,8 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 85 tests: codec, sessions, pipeline, matching/validation, dispatcher/DLQ, API (9 DB-gated skip)
-npm run test:db    # 85 tests: same + PostgreSQL integration (needs db:up)
+npm test           # 98 tests: codec, sessions, pipeline, matching/validation, alerts, dispatcher/DLQ, API (11 DB-gated skip)
+npm run test:db    # 98 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -183,6 +183,8 @@ without touching the protocol layer.
 | GET | `/api/v1/held` | Exception queue: messages held for review (PRD §27–28) |
 | POST | `/api/v1/messages/:id/release` | Release a HELD message into delivery |
 | GET/POST/DELETE | `/api/v1/orders` | Expected-order registry — the LIS seam (PRD §27) |
+| GET/POST/DELETE | `/api/v1/alert-rules` | Alert rules (PRD §33) |
+| GET | `/api/v1/alerts?firing=&limit=` | Derived alerts: fire/resolve history |
 | GET/POST/DELETE | `/api/v1/destinations` | Outbound destinations + retry policies (PRD §19) |
 | GET/POST/DELETE | `/api/v1/routes` | Route rules: device/status → destination |
 | GET | `/api/v1/results` | Flattened result rows |
@@ -278,8 +280,34 @@ Try the full loop in one command — `npm run demo` registers the expected
 order (LIS seam), sends two matched results and one stray unmatched sample,
 releases the held one, and prints the summary.
 
+## Alerting (M2 — PRD §33)
+
+Rules watch the events the hub already produces and fan out to channels
+(`console` = the API/UI alert list, `webhook` = HTTP POST). Four rule kinds in
+this milestone, evaluated by `packages/core/src/alerts.ts`:
+
+- **device-offline** — a device connection drops (fires) and returns
+  (resolves).
+- **destination-down** — consecutive failed deliveries to one destination
+  reach the threshold; any success clears it.
+- **dlq / held-backlog** — the dead-letter or exception queue sits at/above a
+  count; checked on each transition, resolves when the queue drains.
+
+A rule+subject fires at most once until resolved (or until its cooldown
+elapses), so operators are not spammed per event. Rules are seeded with
+sensible defaults and are configurable via `GET/POST/DELETE
+/api/v1/alert-rules`; the console lists firing alerts. Webhooks post a JSON
+payload `{ rule, kind, status: FIRING|RESOLVED, ... }` — failures are logged,
+never thrown. The demo shows the full lifecycle: a held result fires
+`held-backlog`, and the alert resolves the moment an operator reviews and
+releases it.
+
 ## Scaffold boundaries (what is intentionally not here)
 
+- Alerting channels beyond console/webhook (email, SMS) and alert *actions*
+  (auto-pause a destination) are future work; per-subject backlog rules exist
+  in the engine but the wiring evaluates backlog checks globally. No alert
+  history retention policy yet (retention controls are PRD §44 work).
 - The in-process delivery worker is not yet a durable external queue — if the
   process dies mid-queue, queued jobs are re-visible as `QUEUED` but not
   auto-resumed. Redis/BullMQ (compose: host port 6380) closes that for the

@@ -37,6 +37,9 @@ export {
   type OrderRegistry,
   type OrderStatus,
 } from './matching.js';
+export { PostgresAlertStore } from './pg-alerts.js';
+export { InMemoryAlertStore, type AlertFilter, type AlertKind, type AlertRecord, type AlertRule, type AlertStore } from './alert-store.js';
+export { AlertService, type AlertServiceOptions } from './alerts.js';
 export { PostgresOrderRegistry } from './pg-registry.js';
 export {
   DEFAULT_UNIT_CATALOG,

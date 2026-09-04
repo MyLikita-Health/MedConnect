@@ -36,6 +36,26 @@ export interface DeliveryStore {
   get?(id: string): CanonicalMessage | undefined | Promise<CanonicalMessage | undefined>;
 }
 
+export interface DeliveryEvent {
+  messageId: string;
+  destinationId: string;
+  attempt: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** Optional lifecycle observers (wired to alerting, plan workstream I). */
+export interface DispatcherEvents {
+  /** One delivery attempt finished (success or failure). */
+  onDelivery?(event: DeliveryEvent): void | Promise<void>;
+  /** A message entered the dead-letter queue. */
+  onDlq?(message: CanonicalMessage, reason: string): void | Promise<void>;
+  /** A message was parked in the HELD exception queue. */
+  onHold?(message: CanonicalMessage, reason: string): void | Promise<void>;
+  /** An operator released a held message into delivery. */
+  onRelease?(messageId: string): void | Promise<void>;
+}
+
 export interface DispatcherOptions {
   store: DeliveryStore;
   dedup: DedupStore;
@@ -51,6 +71,8 @@ export interface DispatcherOptions {
   matching?: { registry: OrderRegistry; config?: MatchingConfig };
   /** Result validation (PRD §28); runs after matching when configured. */
   validation?: { config: Partial<ValidationConfig> };
+  /** Optional lifecycle observers (wired to alerting, plan workstream I). */
+  events?: DispatcherEvents;
   /** Worker poll interval when the queue is empty. */
   pollMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -141,12 +163,14 @@ export class Dispatcher implements MessageSink {
     const destinations = await resolveDestinations(this.opts.routes, message);
     this.queue.push({ message, destinations });
     this.opts.log?.(`[dispatcher] ${id} released into delivery`);
+    await this.opts.events?.onRelease?.(id);
     return true;
   }
 
   private async hold(message: CanonicalMessage, reason: string): Promise<void> {
     await this.opts.store.mark(message.id, 'HELD', `HELD: ${reason}`);
     this.opts.log?.(`[dispatcher] ${message.id} → HELD (${reason})`);
+    await this.opts.events?.onHold?.(message, reason);
   }
 
   start(): void {
@@ -198,6 +222,12 @@ export class Dispatcher implements MessageSink {
             at: iso(),
           });
           delivered = true;
+          await this.opts.events?.onDelivery?.({
+            messageId: message.id,
+            destinationId: destination.id,
+            attempt,
+            ok: true,
+          });
           break;
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
@@ -208,6 +238,13 @@ export class Dispatcher implements MessageSink {
             status: 'FAILED',
             error: lastError,
             at: iso(),
+          });
+          await this.opts.events?.onDelivery?.({
+            messageId: message.id,
+            destinationId: destination.id,
+            attempt,
+            ok: false,
+            error: lastError,
           });
           if (attempt < destination.retry.maxAttempts) {
             await this.sleep(backoffMs(destination.retry, attempt));
@@ -227,6 +264,7 @@ export class Dispatcher implements MessageSink {
   private async dlq(message: CanonicalMessage, reason: string): Promise<void> {
     await this.opts.store.mark(message.id, 'FAILED', `DLQ: ${reason}`, { dlqAt: iso() });
     this.opts.log?.(`[dispatcher] ${message.id} → DLQ (${reason})`);
+    await this.opts.events?.onDlq?.(message, reason);
   }
 
   private sleep(ms: number): Promise<void> {

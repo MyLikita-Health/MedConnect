@@ -711,14 +711,47 @@ are implemented end-to-end; alerting (I), DeviceProfile model + goldens
    matching fixtures); `npm run demo` now registers the expected order,
    sends matched + stray samples, releases the HELD one, prints the summary.
 5. Test status: in-memory suite green (`npm test` = 85: 76 pass / 9
-   DB-gated skip). DB suite (`npm run test:db`, +9 integration cases incl.
-   Postgres matching → HELD → release round-trip) written but **not yet
-   executed** — Docker Desktop was wedged during the sprint (daemon socket
-   unresponsive; `docker compose ps` hangs). Re-run after Docker recovers:
-   `npm run db:up && npm run test:db`.
+   DB-gated skip). DB suite (`npm run test:db`) is green too — 85/85 incl.
+   the Postgres matching → HELD → release round-trip. The DB gate caught
+   two real bugs fixed in a follow-up commit: `match.reason` was dropped by
+   the Postgres store (persisted via migration `0004`), and the order
+   registry selected a `received_at` column the schema never created
+   (created_at is the registration timestamp).
 
-Exit criteria from §8.1 not yet met: alerting live, security review,
-installer/remote update, certified profiles + goldens, GA release.
+### 13.4 M2 sprint 2 — alerting (workstream I): status
+
+Shipped as `M2 sprint 2: alerting` (PRD §33). The milestone's "alerting live"
+item is implemented end-to-end; security review, installer/remote update, and
+DeviceProfile model + goldens (A2/K) remain for later M2 sprints.
+
+1. ✅ Alert engine (`packages/core/src/alerts.ts` + `alert-store.ts`): rules
+   (kind/threshold/subject/cooldown/channels), fire/resolve lifecycle, one
+   open alert per rule+subject, cooldown between firings. Four kinds:
+   device-offline (fires on disconnect, resolves on reconnect),
+   destination-down (consecutive failures), dlq and held-backlog (queue
+   depth checks on transitions).
+2. ✅ Channels: console (alert store → API/UI) and webhook (HTTP POST, JSON
+   FIRING/RESOLVED payloads, failures logged not thrown).
+3. ✅ Dispatcher lifecycle events (`DispatcherOptions.events`: onDelivery /
+   onDlq / onHold / onRelease) keep alerting decoupled from delivery.
+   Server wiring hooks gateway device states + dispatcher events, seeds
+   default rules, and checks backlog counts from the live store.
+4. ✅ Migration `0005_alerting.sql` (`alert_rules`, `alerts`) +
+   `PostgresAlertStore`; API `GET/POST/DELETE /api/v1/alert-rules` and
+   `GET /api/v1/alerts`; console Alerts panel (sidebar, firing list).
+5. Tests: engine suite (fire/resolve/cooldown/webhook/disabled), dispatcher
+   event tests, API tests, PG alert store + full-stack PG tests. Both suites
+   green: `npm test` = 98 (87 pass / 11 DB-gated skip); `npm run test:db`
+   = 98/98. Demo exercises fire → resolve for held-backlog.
+
+Remaining M2 gate items (§8.1): security review; installer + remote update;
+DeviceProfile model + DB + CRUD + conformance gate (§6.3, workstream A2);
+golden-message library + automated conformance in CI (workstream K);
+certified profiles.
+
+---
+
+## 14. Plan maintenance
 
 ---
 

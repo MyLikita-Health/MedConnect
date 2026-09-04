@@ -230,6 +230,34 @@ test('release endpoint returns 501 when no handler is wired', async (t) => {
   assert.equal(res.status, 501);
 });
 
+test('alert-rule endpoints manage rules and the alerts endpoint lists them', async (t) => {
+  const { base } = await startApi(t);
+  const res = await fetch(`${base}/api/v1/alert-rules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'held-r', kind: 'held-backlog', name: 'Held review', threshold: 2 }),
+  });
+  assert.equal(res.status, 201);
+
+  const rules = (await (await fetch(`${base}/api/v1/alert-rules`)).json()) as Array<{ id: string; threshold: number }>;
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0]!.threshold, 2);
+
+  const bad = await fetch(`${base}/api/v1/alert-rules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'x', kind: 'not-a-kind', name: 'x', threshold: 0 }),
+  });
+  assert.equal(bad.status, 400);
+
+  const alerts = (await (await fetch(`${base}/api/v1/alerts?firing=true`)).json()) as unknown[];
+  assert.deepEqual(alerts, []);
+
+  const deleted = await fetch(`${base}/api/v1/alert-rules/held-r`, { method: 'DELETE' });
+  assert.equal(deleted.status, 204);
+  assert.equal(((await (await fetch(`${base}/api/v1/alert-rules`)).json()) as unknown[]).length, 0);
+});
+
 test('results endpoint flattens result rows across messages', async (t) => {
   const { base, store } = await startApi(t);
   store.record(

@@ -40,6 +40,8 @@ export function renderUi(): string {
   .match { font-size:11px; color:var(--muted); }
   .match.MATCHED { color:var(--ok); }
   .match.AMBIGUOUS, .match.UNMATCHED, .match.REJECTED { color:#c084fc; }
+  .alert.FIRING { color:#ff6b6b; }
+  .alert.RESOLVED { color:var(--ok); }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:280px; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all; }
   button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:12px; }
   .muted { color:var(--muted); }
@@ -66,6 +68,10 @@ export function renderUi(): string {
       <h2>Devices</h2>
       <table id="devices"><thead><tr><th>Device</th><th>State</th><th>Last seen</th></tr></thead><tbody></tbody></table>
     </div>
+    <div class="panel">
+      <h2>Alerts <span class="muted" id="alert-count"></span></h2>
+      <table id="alerts"><thead><tr><th>Kind</th><th>State</th><th>Message</th><th>Fired</th></tr></thead><tbody></tbody></table>
+    </div>
   </section>
   <section>
     <div class="panel">
@@ -81,10 +87,11 @@ let selectedId = null;
 
 async function refresh() {
   try {
-    const [health, stats, devices, messages] = await Promise.all([
+    const [health, stats, devices, alerts, messages] = await Promise.all([
       fetch('/api/v1/health').then(r => r.json()),
       fetch('/api/v1/stats').then(r => r.json()),
       fetch('/api/v1/devices').then(r => r.json()),
+      fetch('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
       fetch('/api/v1/messages?limit=100').then(r => r.json()),
     ]);
     const h = document.getElementById('health');
@@ -92,6 +99,7 @@ async function refresh() {
     h.className = 'badge ' + (health.status === 'ok' ? 'ok' : 'off');
     renderStats(stats);
     renderDevices(devices);
+    renderAlerts(alerts);
     renderMessages(messages);
     if (selectedId) renderDetail(selectedId);
   } catch {
@@ -99,6 +107,17 @@ async function refresh() {
     h.textContent = 'offline';
     h.className = 'badge off';
   }
+}
+
+function renderAlerts(alerts) {
+  document.getElementById('alert-count').textContent = '(' + alerts.length + ' firing)';
+  document.getElementById('alerts').querySelector('tbody').innerHTML =
+    alerts.map(a =>
+      '<tr><td>' + esc(a.kind) + '</td>' +
+      '<td><span class="alert ' + esc(a.status) + '">' + esc(a.status) + '</span></td>' +
+      '<td>' + esc(a.message) + '</td>' +
+      '<td class="muted">' + new Date(a.firedAt).toLocaleTimeString() + '</td></tr>'
+    ).join('') || '<tr><td colspan="4" class="muted">No firing alerts.</td></tr>';
 }
 
 function renderStats(s) {
