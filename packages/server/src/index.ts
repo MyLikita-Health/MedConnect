@@ -8,6 +8,7 @@
  */
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
+import { Hl7Gateway } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
@@ -20,6 +21,11 @@ export interface HubTls {
 
 export interface HubOptions {
   devicePort?: number;
+  /**
+   * Port for the inbound HL7 v2 MLLP listener (env HL7_PORT). When unset the
+   * HL7 gateway is not started — the hub speaks ASTM only.
+   */
+  hl7Port?: number;
   httpPort?: number;
   host?: string;
   /** PEM key+cert: TLS-terminate BOTH the API (https) and device listener. */
@@ -52,6 +58,8 @@ export interface HubOptions {
 
 export interface Hub {
   gateway: AstmGateway;
+  /** Present when hl7Port is configured (inbound HL7 v2 listener). */
+  hl7?: Hl7Gateway;
   api: ApiServer;
   store: StoreBackend;
   devices: DeviceBackend;
@@ -63,7 +71,7 @@ export interface Hub {
   /** API-key auth + audit (present unless authDisabled). */
   keys?: KeyStore;
   audit?: AuditStore;
-  ports: { device: number; http: number };
+  ports: { device: number; hl7?: number; http: number };
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool };
   stop(): Promise<void>;
@@ -225,6 +233,17 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     };
   };
 
+  // Device-state seam shared by both gateways: auto-register wire devices in
+  // the registry (keyed by protocol) and feed the device-offline alerts.
+  const onDeviceState = (protocol: 'ASTM' | 'HL7') => async (deviceId: string, state: 'connected' | 'disconnected') => {
+    try {
+      await devices.upsertFromConnection({ id: deviceId, protocol, transport: 'tcp', state });
+    } catch (err) {
+      console.error(`[gateway] device state update failed: ${(err as Error).message}`);
+    }
+    await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
+  };
+
   const gateway = new AstmGateway({
     host,
     port: opts.devicePort ?? 0,
@@ -232,19 +251,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     mappings,
     ...(tls ? { tls } : {}),
     resolveProfile,
-    onDeviceState: async (deviceId, state) => {
-      try {
-        await devices.upsertFromConnection({
-          id: deviceId,
-          protocol: 'ASTM',
-          transport: 'tcp',
-          state,
-        });
-      } catch (err) {
-        console.error(`[gateway] device state update failed: ${(err as Error).message}`);
-      }
-      await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
-    },
+    onDeviceState: onDeviceState('ASTM'),
     // Drift alert seam: a bound device delivering under a profile whose
     // stored version drifted from its goldens fires profile-drift (page); a
     // non-drifted delivery resolves it. The message itself is still stamped
@@ -254,6 +261,21 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     },
     onSessionError: (err) => console.error(`[gateway] session error: ${err.message}`),
   });
+
+  // Workstream B: the inbound HL7 v2 leg. Same dispatcher sink, mappings,
+  // TLS and device-state seams as the ASTM gateway — an ORU^R01 over MLLP
+  // flows through the exact same lifecycle (dedup → match → HELD → route).
+  const hl7Gateway = opts.hl7Port !== undefined
+    ? new Hl7Gateway({
+        host,
+        port: opts.hl7Port ?? 0,
+        sink: dispatcher,
+        mappings,
+        ...(tls ? { tls } : {}),
+        onDeviceState: onDeviceState('HL7'),
+        onSessionError: (err) => console.error(`[gateway] HL7 session error: ${err.message}`),
+      })
+    : undefined;
 
   // M2 installer/update: when a state dir is configured, the update agent
   // reads/writes release state there so the supervisor (which owns the hub
@@ -284,7 +306,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   });
 
   const { port: devicePort } = await gateway.start();
+  const { port: hl7Port } = hl7Gateway ? await hl7Gateway.start() : { port: undefined as number | undefined };
   const { port: httpPort } = await api.start();
+  if (hl7Gateway && hl7Port !== undefined) {
+    console.log(`[gateway] HL7 v2 (MLLP) listening on tcp://${host}:${hl7Port} — ORU^R01 in, app ACK out`);
+  }
 
   if (tls) {
     console.log('[tls]     API + device listener are TLS-terminated (HTTPS / TLS on both endpoints)');
@@ -292,6 +318,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
 
   return {
     gateway,
+    ...(hl7Gateway ? { hl7: hl7Gateway } : {}),
     api,
     store,
     devices,
@@ -302,12 +329,13 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     profileStore,
     keys,
     audit,
-    ports: { device: devicePort, http: httpPort },
+    ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     stop: async () => {
       await dispatcher.stop();
       await api.stop();
       await gateway.stop();
+      if (hl7Gateway) await hl7Gateway.stop();
       if (pool) await closeDbPool(pool);
     },
   };

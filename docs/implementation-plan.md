@@ -614,7 +614,7 @@ M3 imaging only with a committed radiology pilot.
 | D4 | Edge hardware baseline | mini-PC spec; OS support (Windows/Linux) | M1 |
 | D5 | Tenancy model escalation | shared+RLS vs schema-per-tenant for large customers | M4 |
 | D6 | Cloud hosting | self-hosted vs hyperscaler; region (data residency) | M3 |
-| D7 | HL7 parser lib selection | **`hl7v2` (panates, MIT) — recommended**; runner-up `node-hl7-client`/-`server` (MIT, but Node≥22 + server-shaped); `hl7` (amida) + `L7Node/hl7` dead; all candidates low-adoption → conformance spike (goldens) before lock-in (§13.15) | B kickoff |
+| D7 | HL7 parser lib selection | **RESOLVED — adopt `hl7v2` (panates, MIT)**: v1.9.0 + `hl7v2-dictionary` declared as deps of `@integration-hub/hl7` (B1/B2a shipped on it). Spike evidence (`packages/hl7/src/parser-substrate.test.ts`): parses ORU/ADT 2.3.1–2.5.1; dictionary-correct unescape + repetition reads; typed `HL7Error` on garbage, tolerant of truncated input; quirk — `toHL7String()` normalizes datatypes, so output is never byte-round-tripped (own model builds it). Runners-up rejected: `node-hl7-client`/-`server` (Node≥22, server-shaped, would duplicate our MLLP), `hl7` (amida) + `L7Node/hl7` dead. | **Resolved** (B kickoff) |
 | D8 | Licensing/commercial model detail | per-facility vs device-based vs OEM (PRD §61) | M2 |
 | D9 | Marketplace timing vs M5 pull | demand check with distributors | M4 |
 | D10 | Orthanc bundled vs customer-provided default | packaging/commercial impact | M3 |

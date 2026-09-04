@@ -13,6 +13,7 @@
   "dependencies": {
     "@integration-hub/api": "*",
     "@integration-hub/gateway": "*",
+    "@integration-hub/hl7": "*",
     "@integration-hub/shared": "*"
   }
 }

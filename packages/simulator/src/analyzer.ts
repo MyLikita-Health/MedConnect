@@ -28,7 +28,7 @@ export interface TransmittedMessage {
   summary: { patientId: string; orderId: string; tests: number };
 }
 
-interface TestTemplate {
+export interface TestTemplate {
   code: string;
   name: string;
   unit: string;
@@ -38,7 +38,7 @@ interface TestTemplate {
   decimals: number;
 }
 
-const TEST_POOL: TestTemplate[] = [
+export const TEST_POOL: TestTemplate[] = [
   { code: 'GLU', name: 'Glucose', unit: 'mg/dL', ref: '70-110', min: 70, max: 110, decimals: 1 },
   { code: 'CREA', name: 'Creatinine', unit: 'mg/dL', ref: '0.6-1.3', min: 0.6, max: 1.3, decimals: 1 },
   { code: 'UREA', name: 'Urea', unit: 'mg/dL', ref: '15-40', min: 15, max: 40, decimals: 0 },
@@ -49,7 +49,7 @@ const TEST_POOL: TestTemplate[] = [
   { code: 'PLT', name: 'Platelets', unit: '10^3/uL', ref: '150-450', min: 150, max: 450, decimals: 0 },
 ];
 
-const PATIENTS = [
+export const PATIENTS = [
   { id: 'PID-1001', name: 'Adeyemi^Tunde', dob: '19850312', gender: 'M' },
   { id: 'PID-1002', name: 'Okafor^Chioma', dob: '19921107', gender: 'F' },
   { id: 'PID-1003', name: 'Balogun^Femi', dob: '19760823', gender: 'M' },
@@ -145,7 +145,7 @@ export class AnalyzerSimulator {
   }
 }
 
-function randomResult(test: TestTemplate): { value: string; flag: string } {
+export function randomResult(test: TestTemplate): { value: string; flag: string } {
   // ~15% abnormal results, flagged accordingly.
   const abnormal = Math.random() < 0.15;
   const high = abnormal && Math.random() < 0.6;
@@ -169,7 +169,7 @@ function summarize(records: AstmRecord[]): TransmittedMessage['summary'] {
   };
 }
 
-function formatTimestamp(d: Date): string {
+export function formatTimestamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
@@ -188,10 +188,10 @@ function pickN<T>(arr: T[], n: number): T[] {
   return out;
 }
 
-function randInt(min: number, max: number): number {
+export function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
