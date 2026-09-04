@@ -13,6 +13,8 @@ export interface MockOrthanc {
   items: Map<string, Record<string, unknown>>;
   /** Accessions with a study landed in Orthanc (POST /tools/find answers them). */
   performed: Set<string>;
+  /** When true every request answers 500 — simulates an unreachable Orthanc. */
+  down: boolean;
   creates: number;
   deletes: string[];
   close(): Promise<void>;
@@ -26,6 +28,7 @@ export function startMockOrthanc(): Promise<MockOrthanc> {
       base: '',
       items,
       performed,
+      down: false,
       creates: 0,
       deletes: [],
       close: () => new Promise((r) => server.close(() => r())),
@@ -44,6 +47,10 @@ export function startMockOrthanc(): Promise<MockOrthanc> {
           res.end(JSON.stringify(payload));
         };
 
+        if (mock.down) {
+          json(500, { message: 'mock Orthanc down' });
+          return;
+        }
         if (req.method === 'GET' && path === '/worklists/' && url.searchParams.get('format') === 'Short') {
           json(200, [...items.keys()].map((id) => ({ ID: id })));
           return;

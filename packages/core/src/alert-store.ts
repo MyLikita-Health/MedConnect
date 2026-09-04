@@ -7,7 +7,8 @@ export type AlertKind =
   | 'destination-down'
   | 'dlq'
   | 'held-backlog'
-  | 'profile-drift';
+  | 'profile-drift'
+  | 'orthanc-down';
 
 export interface AlertRule {
   id: string;

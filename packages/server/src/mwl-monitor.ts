@@ -38,6 +38,13 @@ export interface MwlMonitorOptions {
    * next cycle re-syncs the item and routes again (never a lost study event).
    */
   onPerformed?: (performed: MwlPerformedStudy[]) => void | Promise<void>;
+  /**
+   * Alerting seam (workstream I): called with each poll's outcome — a failed
+   * poll raises the `orthanc-down` alert (consecutive count, subject = the
+   * monitor's baseUrl), a successful poll clears it. Errors are logged, never
+   * allowed to fail the poll itself.
+   */
+  alerts?: { orthancPoll: (ok: boolean, error?: string) => void | Promise<void> };
   log?: (line: string) => void;
 }
 
@@ -188,6 +195,10 @@ export class MwlMonitor {
         this.retired.add(p.order.accession);
       }
 
+      // The poll succeeded — Orthanc answered, so any open orthanc-down alert
+      // (raised by consecutive failures) is cleared.
+      await this.reportAlert(true);
+
       const ms = Date.now() - started;
       const summary = `[mwl] sync+poll: ${result.created.length} created, ${result.queued.length} queued, ${result.failed.length} failed · ${result.performed.length} performed (${ms}ms)`;
       if (result.failed.length === 0) {
@@ -203,7 +214,18 @@ export class MwlMonitor {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       this.log(`[mwl] poll failed: ${msg}`);
+      await this.reportAlert(false, msg);
       return undefined;
+    }
+  }
+
+  /** Feed the alerting seam without ever failing the poll on its errors. */
+  private async reportAlert(ok: boolean, error?: string): Promise<void> {
+    if (!this.opts.alerts) return;
+    try {
+      await this.opts.alerts.orthancPoll(ok, error);
+    } catch (err) {
+      this.log(`[mwl] alert update failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

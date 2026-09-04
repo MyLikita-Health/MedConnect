@@ -1,12 +1,14 @@
 /**
  * Alerting (plan workstream I; PRD §33). Rules are evaluated against events
  * flowing through the hub and fan out to channels (console = the alert store,
- * webhook = HTTP POST). Five rule kinds:
+ * webhook = HTTP POST). Six rule kinds:
  *
  *   device-offline    — a device's connection state turned offline (fires);
  *                       back to connected (resolves)
  *   destination-down  — consecutive failed deliveries to one destination
  *                       reached the threshold (fires); any success resolves
+ *   orthanc-down      — consecutive failed MWL polls to one Orthanc reached
+ *                       the threshold (fires); any successful poll resolves
  *   dlq               — dead-letter-queue backlog at/above threshold (checked
  *                       on each DLQ transition)
  *   held-backlog      — exception-queue backlog at/above threshold (checked
@@ -61,6 +63,24 @@ export class AlertService {
   async deliverySucceeded(destinationId: string): Promise<void> {
     this.consecutive.delete(`destination-down:${destinationId}`);
     await this.clear('destination-down', destinationId, `${destinationId} accepting deliveries again`);
+  }
+
+  /**
+   * One Orthanc MWL poll outcome (MwlMonitor). Consecutive failures raise
+   * `orthanc-down` (subject = the Orthanc base URL, so each monitored Orthanc
+   * alerts independently); any successful poll clears it. Mirrors the
+   * destination-down consecutive-count semantics — one flake does not page.
+   */
+  async orthancPoll(baseUrl: string, ok: boolean, error?: string): Promise<void> {
+    if (ok) {
+      this.consecutive.delete(`orthanc-down:${baseUrl}`);
+      await this.clear('orthanc-down', baseUrl, `${baseUrl} reachable again — MWL sync resumed`);
+      return;
+    }
+    const key = `orthanc-down:${baseUrl}`;
+    const count = (this.consecutive.get(key) ?? 0) + 1;
+    this.consecutive.set(key, count);
+    await this.fire('orthanc-down', baseUrl, `Orthanc MWL poll failed (${count}×): ${error ?? 'poll failed'}`, count);
   }
 
   /**

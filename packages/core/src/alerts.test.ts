@@ -68,6 +68,54 @@ test('destination-down rules scoped to another subject do not fire', async () =>
   assert.equal((await store.listAlerts({ firing: true })).length, 0);
 });
 
+test('orthanc-down fires after consecutive poll failures and resolves on success', async () => {
+  const store = new InMemoryAlertStore();
+  await store.upsertRule(rule({ id: 'oc', kind: 'orthanc-down', subject: 'http://orthanc:8042', threshold: 2 }));
+  const alerts = new AlertService(store);
+
+  await alerts.orthancPoll('http://orthanc:8042', false, 'ECONNREFUSED');
+  assert.equal((await store.listAlerts({ firing: true })).length, 0, 'one flake does not page');
+  await alerts.orthancPoll('http://orthanc:8042', false, 'ECONNREFUSED');
+  let firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.kind, 'orthanc-down');
+  assert.equal(firing[0]!.count, 2);
+  assert.match(firing[0]!.message, /failed \(2×\)/);
+
+  // Still down — open alerts do not re-fire.
+  await alerts.orthancPoll('http://orthanc:8042', false, 'ECONNREFUSED');
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+
+  // A successful poll resolves it — and resets the consecutive counter.
+  await alerts.orthancPoll('http://orthanc:8042', true);
+  assert.equal((await store.listAlerts({ firing: true })).length, 0);
+  await alerts.orthancPoll('http://orthanc:8042', false, 'timeout');
+  assert.equal((await store.listAlerts({ firing: true })).length, 0, 'one failure after recovery is not enough');
+});
+
+test('orthanc-down alerts are scoped per Orthanc base URL', async () => {
+  const store = new InMemoryAlertStore();
+  await store.upsertRule(rule({ id: 'oc', kind: 'orthanc-down', threshold: 1 }));
+  const alerts = new AlertService(store);
+
+  await alerts.orthancPoll('http://a:8042', false, 'down');
+  let firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.subject, 'http://a:8042');
+
+  // A second Orthanc alerts independently …
+  await alerts.orthancPoll('http://b:8042', false, 'down');
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 2);
+
+  // … and resolving one leaves the other firing.
+  await alerts.orthancPoll('http://a:8042', true);
+  firing = await store.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.subject, 'http://b:8042');
+});
+
 test('held-backlog fires at threshold and resolves below it', async () => {
   const store = new InMemoryAlertStore();
   await store.upsertRule(rule({ id: 'hb', kind: 'held-backlog', threshold: 2 }));

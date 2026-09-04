@@ -108,3 +108,37 @@ test('a failed poll records lastError instead of throwing', async (t) => {
   assert.equal(result, undefined);
   assert.match(hub.mwl!.status().lastError ?? '', /failed/i);
 });
+
+test('consecutive failed polls raise the orthanc-down alert; a successful poll clears it', async (t) => {
+  const orthanc = await startMockOrthanc();
+  t.after(() => orthanc.close());
+  const hub = await startHubWithOrthanc(t, orthanc.base);
+  await hub.orders.register({ id: 'ACC-404', patientId: 'P-4', tests: ['GLUCOSE'], status: 'active', receivedAt: iso() });
+  // startHubWithOrthanc skips the default seeds — bring the orthanc-down rule.
+  await hub.alertStore.upsertRule({ id: 'oc-down', kind: 'orthanc-down', name: 'Orthanc MWL unreachable', threshold: 2, channels: ['console'], enabled: true });
+
+  // Settle the boot poll (startHub fires one immediately) while Orthanc is up
+  // so the consecutive-failure counter starts from a clean baseline.
+  await hub.mwl!.poll();
+
+  orthanc.down = true;
+  await hub.mwl!.poll(); // 1st consecutive failure — threshold not reached
+  assert.equal((await hub.alertStore.listAlerts({ firing: true })).length, 0);
+  await hub.mwl!.poll(); // 2nd — fires, subject = the Orthanc base URL
+  let firing = await hub.alertStore.listAlerts({ firing: true });
+  assert.equal(firing.length, 1);
+  assert.equal(firing[0]!.kind, 'orthanc-down');
+  assert.equal(firing[0]!.subject, orthanc.base);
+  assert.equal(firing[0]!.count, 2);
+  assert.match(firing[0]!.message, /failed \(2×\)/);
+
+  await hub.mwl!.poll(); // still down — open alert does not re-fire
+  assert.equal((await hub.alertStore.listAlerts({ firing: true })).length, 1);
+
+  orthanc.down = false;
+  await hub.mwl!.poll(); // recovery — poll succeeds, alert resolves
+  assert.equal((await hub.alertStore.listAlerts({ firing: true })).length, 0);
+  const history = await hub.alertStore.listAlerts();
+  assert.equal(history.filter((a) => a.status === 'RESOLVED').length, 1);
+  assert.equal(hub.mwl!.status().lastError, undefined);
+});

@@ -495,13 +495,18 @@ pixels to PACS/archive.
 ## Alerting (M2 — PRD §33)
 
 Rules watch the events the hub already produces and fan out to channels
-(`console` = the API/UI alert list, `webhook` = HTTP POST). Five rule kinds,
+(`console` = the API/UI alert list, `webhook` = HTTP POST). Six rule kinds,
 evaluated by `packages/core/src/alerts.ts`:
 
 - **device-offline** — a device connection drops (fires) and returns
   (resolves).
 - **destination-down** — consecutive failed deliveries to one destination
   reach the threshold; any success clears it.
+- **orthanc-down** — consecutive failed MWL polls to one Orthanc reach the
+  threshold (subject = the Orthanc base URL, so each monitored Orthanc alerts
+  independently); any successful poll clears it. Seeded by default
+  (threshold 3, console) — a single flake does not page, and recovery
+  resolves automatically.
 - **dlq / held-backlog** — the dead-letter or exception queue sits at/above a
   count; checked on each transition, resolves when the queue drains.
 - **profile-drift** — a bound device delivers a message under a profile whose

@@ -1440,7 +1440,13 @@ of C1–C6 is composition, not new protocol work):
    against a mock Orthanc (idempotent sync, performed → retired → no
    re-create, absent without config, ORTHANC_URL alone enables it, error
    resilience) and `npm run demo:mwl` proves the loop through the real hub
-   against the live container. Remaining C5 packaging (still M3.5):
+   against the live container. **Orthanc reachability is alerted** (workstream
+   I): consecutive failed polls raise a new `orthanc-down` alert kind
+   (subject = the Orthanc base URL; threshold 3 seeded by default, console
+   channel — add a webhook channel to page), and any successful poll resolves
+   it — pinned by core alerts tests + a server test driving startHub against
+   a mock Orthanc that fails then recovers. Remaining C5 packaging (still
+   M3.5):
    source-built plugin for ARM64 hosts and version pinning/upgrade of the
    derived image.
 3. ✅ **M3.3 — Storage routing (C3)**: performed-study metadata + status

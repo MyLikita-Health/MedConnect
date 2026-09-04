@@ -210,6 +210,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     await alertStore.upsertRule({ id: 'dlq-growth', kind: 'dlq', name: 'Dead-letter queue growing', threshold: 3, channels: ['console'], enabled: true });
     await alertStore.upsertRule({ id: 'held-backlog', kind: 'held-backlog', name: 'Results awaiting review', threshold: 3, channels: ['console'], enabled: true });
     await alertStore.upsertRule({ id: 'profile-drift', kind: 'profile-drift', name: 'Profile drifted', threshold: 1, channels: ['console'], enabled: true });
+    // M3.2 — Orthanc MWL down: fires after 3 consecutive failed polls (a
+    // single flake does not page); any successful poll resolves it.
+    await alertStore.upsertRule({ id: 'orthanc-down', kind: 'orthanc-down', name: 'Orthanc MWL unreachable', threshold: 3, channels: ['console'], enabled: true });
   }
 
   // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
@@ -415,6 +418,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
           }
         }
       },
+      // M3.2 alerting (workstream I): consecutive failed polls raise the
+      // `orthanc-down` alert (subject = this Orthanc's base URL), any
+      // successful poll clears it — surfaced in the console + webhook channels
+      // like every other alert.
+      alerts: { orthancPoll: (ok, error) => void alerts.orthancPoll(orthancUrl, ok, error) },
       log: (line) => console.log(line),
     });
     mwl.start();
