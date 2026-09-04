@@ -444,9 +444,18 @@ pipeline canonicalizes correctly for both it and the reference layout.
   with the profile's layout + code mappings (per-device mappings override the
   global table). Register: `POST /api/v1/devices` with `profileId`
   (validated against the profile store; migration `0008` adds the FK, and
-  deleting a profile detaches devices rather than deleting them). The console
-  badges bound devices with their profile. Unbound devices and the simulator
-  keep the generic reference behavior.
+  deleting a profile detaches devices rather than deleting them). Unbound
+  devices and the simulator keep the generic reference behavior.
+- **Console Device profiles section** — the console lists profiles with
+  certified (green) vs draft (amber) badges and a per-profile **conformance
+  view**: `GET /api/v1/profiles/:id/conformance` re-runs a stored profile's
+  *current* config against its recorded golden transcripts, showing passed ✓
+  n/m expanded to per-case failures when an edit has drifted the profile
+  away from what it was certified for. Profiles without recorded goldens
+  report "no goldens" (a draft, not a failure). Engineer/admin can add,
+  replace (paste profile JSON) or delete profiles. Golden files are loaded
+  from `goldens/` (or `HUB_GOLDENS_DIR`), embedded with the profile they
+  certify.
 
 ## Scaffold boundaries (what is intentionally not here)
 

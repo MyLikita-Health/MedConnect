@@ -951,6 +951,38 @@ gated on field access (risk R2); profile **versioning** on change is modeled
 *configuration* (A4) is shipped; adapter *packaging/ecosystem* (install -
 adapter flow, workstream L, Phase 4) is out of M2 scope.
 
+### 13.10 Console Device profiles section + stored conformance: status
+
+Shipped as the console's Device profiles panel (workstream K surfacing):
+list/CRUD profiles with certified-vs-draft badges and a per-profile golden
+conformance view, backed by a new read endpoint that re-runs a *stored*
+profile's current config against its recorded goldens.
+
+1. ✅ Core (`packages/core/src/conformance.ts`): `loadGoldenForProfile` +
+   `runStoredConformance` — golden files embed their profile, so the lookup
+   matches embedded `profile.id` (the reference profile lives in
+   `reference.json` even though its id is `astm-reference`), and the library
+   directory resolves via `HUB_GOLDENS_DIR` (default: repo/image `goldens/`).
+2. ✅ API: `GET /api/v1/profiles/:id/conformance` (`api:read`, 404 on
+   unknown profile) — returns `available:false` when no golden records the
+   profile (a draft, not a failure), else the full case-by-case run.
+3. ✅ Console: Device profiles panel — name/id/manufacturer, certified
+   (green) vs draft (amber) badge, version, per-profile conformance summary
+   (passed ✓ n/m) expandable to per-case failures with the actual drift, a
+   JSON view, and add/replace + delete (engineer/admin; delete warns that
+   bound devices detach). Conformance results are cached per refresh cycle.
+4. ✅ Packaging: `Dockerfile` copies `goldens/` so the endpoint works in the
+   container.
+5. Tests: loader unit (embedded-id lookup incl. the reference.json naming
+   case; certified profiles pass; goldens-less profile reports unavailable;
+   an edited-away layout fails its own transcripts) + API integration
+   (auth/role matrix, stored-pass, no-goldens, 404). This caught a real
+   drift: the seeded `REFERENCE_PROFILE` lacked the code mappings its own
+   golden file was recorded under — the seed now equals its certified
+   config, which is exactly the invariant the view enforces. Both suites
+   green: `npm test` = 165 (150 pass / 15 DB-gated skip); `npm run test:db`
+   = 165/165.
+
 ---
 
 ## 14. Plan maintenance

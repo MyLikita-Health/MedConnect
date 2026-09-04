@@ -76,6 +76,7 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/routes': 'api:read',
   'GET /api/v1/profiles': 'api:read',
   'GET /api/v1/profiles/:id': 'api:read',
+  'GET /api/v1/profiles/:id/conformance': 'api:read',
   'GET /api/v1/alert-rules': 'api:read',
   'GET /api/v1/alerts': 'api:read',
   'GET /api/v1/orders': 'api:read',

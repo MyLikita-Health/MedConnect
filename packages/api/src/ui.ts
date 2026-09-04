@@ -40,6 +40,11 @@ export function renderUi(): string {
   .match { font-size:11px; color:var(--muted); }
   .match.MATCHED { color:var(--ok); }
   .match.AMBIGUOUS, .match.UNMATCHED, .match.REJECTED { color:#c084fc; }
+  .prof-status.certified { color:var(--ok); }
+  .prof-status.draft { color:var(--warn); }
+  .conf.ok { color:var(--ok); }
+  .conf.bad { color:var(--err); }
+  .conf.none { color:var(--muted); }
   .alert.FIRING { color:#ff6b6b; }
   .alert.RESOLVED { color:var(--ok); }
   pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px; overflow:auto; max-height:280px; font-size:12px; margin:0; white-space:pre-wrap; word-break:break-all; }
@@ -87,6 +92,16 @@ export function renderUi(): string {
       <table id="devices"><thead><tr><th>Device</th><th>State</th><th>Last seen</th></tr></thead><tbody></tbody></table>
     </div>
     <div class="panel">
+      <h2>Device profiles <span class="muted">certified config = adapter (A4)</span></h2>
+      <table id="profiles"><thead><tr><th>Profile</th><th>Status</th><th>Version</th><th>Conformance</th><th></th></tr></thead><tbody></tbody></table>
+      <div id="profile-add" style="display:none;margin-top:10px">
+        <h2 style="margin-bottom:4px">Add / replace profile (paste profile JSON)</h2>
+        <textarea id="profile-json" rows="6" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px;font-family:inherit;font-size:12px" placeholder='{"id":"my-device","name":"…","manufacturer":"…","model":"…","protocol":"ASTM","transport":"tcp","version":1,"layout":{},"mappings":{},"status":"draft"}'></textarea>
+        <button onclick="addProfile()">Save profile</button>
+        <span class="muted" id="profile-add-result"></span>
+      </div>
+    </div>
+    <div class="panel">
       <h2>Alerts <span class="muted" id="alert-count"></span></h2>
       <table id="alerts"><thead><tr><th>Kind</th><th>State</th><th>Message</th><th>Fired</th></tr></thead><tbody></tbody></table>
     </div>
@@ -114,6 +129,7 @@ export function renderUi(): string {
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let selectedId = null;
+let confCache = {};
 let hubKey = localStorage.getItem('hub.key') || '';
 let meRole = null;
 let signInVisible = false;
@@ -181,12 +197,13 @@ function canAct() {
 
 async function refresh() {
   try {
-    const [health, stats, devices, alerts, messages] = await Promise.all([
+    const [health, stats, devices, alerts, messages, profiles] = await Promise.all([
       api('/api/v1/health').then(r => r.json()),
       api('/api/v1/stats').then(r => r.json()),
       api('/api/v1/devices').then(r => r.json()),
       api('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
       api('/api/v1/messages?limit=100').then(r => r.json()),
+      api('/api/v1/profiles').then(r => r.json()),
     ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -197,6 +214,7 @@ async function refresh() {
     renderDevices(devices);
     renderAlerts(alerts);
     renderMessages(messages);
+    renderProfiles(profiles);
     if (selectedId) renderDetail(selectedId);
     renderUpdates();
   } catch {
@@ -289,6 +307,75 @@ async function renderDetail(id) {
       '<div><h2>Canonical payload</h2><pre>' + esc(JSON.stringify(m.payload, null, 2)) + '</pre></div>' +
       '<div><h2>Timeline</h2><ul class="timeline">' + timeline + '</ul></div>' +
     '</div>';
+}
+
+function renderProfiles(profiles) {
+  document.getElementById('profiles').querySelector('tbody').innerHTML = profiles.map(p =>
+    '<tr>' +
+    '<td>' + esc(p.name) + '<br/><span class="muted">' + esc(p.id) + ' · ' + esc(p.manufacturer || '—') + ' ' + esc(p.model || '') + '</span>' +
+    (p.layout && (p.layout.order || p.layout.result || p.layout.patient) ? '' : '<br/><span class="muted">(reference layout)</span>') +
+    '</td>' +
+    '<td><span class="prof-status ' + esc(p.status) + '">' + esc(p.status) + '</span></td>' +
+    '<td class="muted">v' + esc(p.version) + '</td>' +
+    '<td id="conf-' + esc(p.id) + '"><span class="conf none">loading…</span></td>' +
+    '<td style="white-space:nowrap">' +
+      '<details class="prof-detail" style="display:inline-block"><summary class="muted" style="cursor:pointer">JSON</summary><pre style="max-height:180px">' + esc(JSON.stringify(p, null, 2)) + '</pre></details> ' +
+      (manageProfiles() ? '<button onclick="deleteProfile(\\'' + esc(p.id) + '\\')" style="background:transparent;border:1px solid var(--err);color:var(--err)">Delete</button>' : '') +
+    '</td></tr>'
+  ).join('') || '<tr><td colspan="5" class="muted">No profiles. Add one below (engineer/admin).</td></tr>';
+  document.getElementById('profile-add').style.display = manageProfiles() ? 'block' : 'none';
+  // Fetch conformance per profile (async; small set).
+  for (const p of profiles) {
+    if (confCache[p.id]) continue;
+    confCache[p.id] = true;
+    api('/api/v1/profiles/' + encodeURIComponent(p.id) + '/conformance').then(r => r.json()).then(conf => {
+      const el = document.getElementById('conf-' + esc(p.id));
+      if (!el) return;
+      if (!conf.available) { el.innerHTML = '<span class="conf none">no goldens</span>'; return; }
+      const ok = conf.run && conf.run.failed === 0 && conf.run.cases.length > 0;
+      el.innerHTML = conf.run && conf.run.cases.length > 0
+        ? '<details style="display:inline-block"><summary class="conf ' + (ok ? 'ok' : 'bad') + '" style="cursor:pointer">' +
+          (ok ? 'passed ✓' : 'FAILED ✗') + ' (' + conf.run.passed + '/' + conf.run.cases.length + ')' + '</summary>' +
+          '<ul class="timeline">' + conf.run.cases.map(c =>
+            '<li><b class="conf ' + (c.pass ? 'ok' : 'bad') + '">' + (c.pass ? '✓' : '✗') + '</b> ' + esc(c.name) +
+            (c.failures.length ? '<br/><span class="err">' + esc(c.failures.join(' · ')) + '</span>' : '') + '</li>'
+          ).join('') + '</ul></details>'
+        : '<span class="conf ' + (ok ? 'ok' : 'bad') + '">' + (ok ? 'passed ✓' : 'no cases') + '</span>';
+    }).catch(() => {});
+  }
+}
+
+function manageProfiles() {
+  return meRole === 'admin' || meRole === 'engineer';
+}
+
+async function addProfile() {
+  const result = document.getElementById('profile-add-result');
+  const raw = document.getElementById('profile-json').value.trim();
+  try {
+    const profile = JSON.parse(raw);
+    const res = await api('/api/v1/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    const body = await res.json();
+    if (!res.ok) { result.textContent = 'rejected: ' + (body.error || JSON.stringify(body.issues || body)); result.className = 'err'; return; }
+    result.textContent = 'saved ' + body.id + ' (v' + body.version + ')';
+    result.className = '';
+    document.getElementById('profile-json').value = '';
+  } catch (err) {
+    result.textContent = 'invalid JSON: ' + err.message;
+    result.className = 'err';
+  }
+  await refresh();
+}
+
+async function deleteProfile(id) {
+  if (!confirm('Delete profile ' + id + '? Devices bound to it detach (they fall back to the reference layout).')) return;
+  const res = await api('/api/v1/profiles/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!res.ok) alert('delete failed: ' + res.status);
+  await refresh();
 }
 
 async function renderUpdates() {

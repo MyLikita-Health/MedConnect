@@ -34,6 +34,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json ./
 COPY packages ./packages
+COPY goldens ./goldens
 COPY --from=build /app/node_modules ./node_modules
 
 EXPOSE 3000 5000

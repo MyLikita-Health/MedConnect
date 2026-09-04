@@ -17,6 +17,7 @@ import {
   InMemoryProfileStore,
   InMemoryRouteStore,
   parseDeviceProfile,
+  runStoredConformance,
   type AlertStore,
   type OrderRegistry,
   type ProfileStore,
@@ -363,6 +364,15 @@ export class ApiServer {
       const profile = await this.profiles.get(id);
       if (!profile) return reply.code(404).send({ error: 'profile not found' });
       return profile;
+    });
+
+    // Golden conformance for a stored profile (workstream K): re-runs the
+    // profile's CURRENT config against its recorded golden transcripts.
+    app.get('/api/v1/profiles/:id/conformance', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const profile = await this.profiles.get(id);
+      if (!profile) return reply.code(404).send({ error: 'profile not found' });
+      return runStoredConformance(profile);
     });
     app.delete('/api/v1/profiles/:id', async (req, reply) => {
       const { id } = req.params as { id: string };

@@ -61,12 +61,15 @@ export {
 } from './profiles.js';
 export { PostgresProfileStore } from './pg-profiles.js';
 export {
+  loadGoldenForProfile,
   runConformance,
+  runStoredConformance,
   type ConformanceCaseResult,
   type ConformanceRunResult,
   type GoldenCase,
   type GoldenExpectation,
   type GoldenFile,
+  type StoredConformanceResult,
 } from './conformance.js';
 export {
   UpdateAgent,

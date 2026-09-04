@@ -116,6 +116,9 @@ export const REFERENCE_PROFILE: DeviceProfile = {
     order: { sampleId: 2, accession: 3, test: 4 },
     result: { test: 2, value: 3, unit: 4, referenceRange: 5, flag: 6, status: 8 },
   },
+  // Recorded in reference.json — a certified profile's config must equal the
+  // config its goldens were recorded under, or stored profiles drift.
+  mappings: { GLU: 'GLUCOSE', GLUC: 'GLUCOSE', CREA: 'CREATININE', HGB: 'HEMOGLOBIN' },
   capabilities: ['results-up'],
   status: 'certified',
   certifiedAt: '2026-09-04T00:00:00.000Z',

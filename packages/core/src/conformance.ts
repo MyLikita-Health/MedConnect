@@ -7,6 +7,9 @@
  * run behind the "certified device profile" claim. Goldens live in
  * `goldens/*.json` and are executed as a CI test suite (`goldens.test.ts`).
  */
+import { readFile, readdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { astmToCanonical } from '@integration-hub/gateway';
 import type { DeviceProfile, LabPayload, ParsedRecord } from '@integration-hub/shared';
 import { defaultLayoutFor } from '@integration-hub/shared';
@@ -55,6 +58,57 @@ export interface ConformanceRunResult {
   cases: ConformanceCaseResult[];
   passed: number;
   failed: number;
+}
+
+/**
+ * Location of the recorded golden library: HUB_GOLDENS_DIR when set, else
+ * the repo's `goldens/` directory (resolved from this module, so it works in
+ * the Docker image too where goldens/ is copied alongside packages/).
+ */
+export function goldensDir(): string {
+  return process.env.HUB_GOLDENS_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'goldens');
+}
+
+export interface StoredConformanceResult {
+  /** False when no golden file records this profile (nothing to run). */
+  available: boolean;
+  profileId: string;
+  /** Golden library file the profile's record lives in (e.g. reference.json). */
+  goldenFile?: string;
+  run?: ConformanceRunResult;
+  reason?: string;
+}
+
+/**
+ * Load the golden file that records `profileId` (golden files embed the
+ * profile, so the lookup matches embedded profile.id — the reference profile
+ * lives in reference.json even though its id is astm-reference).
+ */
+export async function loadGoldenForProfile(
+  profileId: string,
+  dir = goldensDir(),
+): Promise<{ file: string; golden: GoldenFile } | undefined> {
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+  for (const file of files.sort()) {
+    const golden = JSON.parse(await readFile(join(dir, file), 'utf8')) as GoldenFile;
+    if (golden.profile.id === profileId) return { file, golden };
+  }
+  return undefined;
+}
+
+/**
+ * Re-run a stored profile against its recorded goldens (the console's
+ * per-profile certification view). Uses the profile's CURRENT config — an
+ * edited profile that no longer passes its recorded transcript shows up as
+ * failed here, which is exactly the drift a console should surface.
+ */
+export async function runStoredConformance(profile: DeviceProfile, dir = goldensDir()): Promise<StoredConformanceResult> {
+  const found = await loadGoldenForProfile(profile.id, dir);
+  if (!found) {
+    return { available: false, profileId: profile.id, reason: 'no recorded goldens for this profile' };
+  }
+  const run = runConformance(profile, found.golden.goldens);
+  return { available: true, profileId: profile.id, goldenFile: found.file, run };
 }
 
 /**
