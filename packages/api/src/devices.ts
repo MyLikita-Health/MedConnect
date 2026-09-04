@@ -4,7 +4,7 @@
  * gateway updates connection state.
  */
 export type DeviceState = 'connected' | 'disconnected' | 'unknown';
-export type DeviceProtocol = 'ASTM' | 'HL7' | 'FHIR';
+export type DeviceProtocol = 'ASTM' | 'HL7' | 'FHIR' | 'DICOM';
 export type DeviceTransport = 'tcp' | 'serial' | 'api';
 
 export interface DeviceRecord {

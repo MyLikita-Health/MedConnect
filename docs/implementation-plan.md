@@ -1504,7 +1504,16 @@ of C1–C6 is composition, not new protocol work):
    non-DLQ rejected, re-DLQ on persistent failure), a DB-gated PG test
    (dlq_at actually clears in the row), a server test through the real API
    (DLQ'd study → rule fixed → retry → webhook ROUTED), and the UI smoke.
-   Remaining from C6: modality/Orthanc health surfaced as devices.
+   C6 now closed by two follow-ons: **study → detail routing view** — clicking
+   an imaging-study row opens the message-detail route as the full routing
+   view (canonical study metadata — accession, Study UID, storage link into
+   Orthanc — beside the routing outcome: status, destination(s), routing
+   timeline, DLQ retry) — and **Orthanc health as a device**: every monitor
+   poll outcome flips the `orthanc` device row (protocol DICOM · transport
+   api) connected/disconnected + bumps lastSeen in the SAME device-state
+   registry the wire gateways auto-register into, so the Devices panel shows
+   the imaging server's health like any modality (PRD §32–33). Modality-level
+   health derived from Orthanc's modality list stays a later extension.
 5. **M3.5 — Orthanc lifecycle (C5)**: compose packaging + upgrade path, the
    §7.5.5 AGPL boundary doc, optional customer-provided Orthanc — **decision
    D10** (bundled vs customer-provided) resolves here.

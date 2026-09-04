@@ -349,9 +349,13 @@ without touching the protocol layer.
    the current route rules — a fixed destination now routes) with
    `POST /api/v1/messages/:id/retry` or retired with `…/discard` (PRD §23);
    HELD messages are reviewed and released with
-   `POST /api/v1/messages/:id/release`. The console's radiology panels
-   (M3.4) surface the Orthanc worklist, performed-study routing status, and a
-   per-study Retry on `FAILED` imaging messages.
+   `POST /api/v1/messages/:id/release`. The console's Radiology panel
+   (M3.4) surfaces the Orthanc worklist + performed-study routing status;
+   clicking a study row opens its message-detail routing view (canonical
+   study metadata — storage link into Orthanc — beside the status,
+   destinations and routing timeline, with per-study Retry on `FAILED`), and
+   the Devices panel shows Orthanc itself as a device whose
+   connected/disconnected state + lastSeen track the standing monitor poll.
 
 ## REST API (PRD §36)
 

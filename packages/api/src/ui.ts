@@ -572,7 +572,7 @@ export function renderUi(): string {
         <h3>Imaging studies <span class="section-sub" id="imaging-summary"></span></h3>
         <div class="tbl-wrap">
           <table id="imaging">
-            <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th></th></tr></thead>
+            <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th>Routing</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -782,6 +782,8 @@ function renderDevices(devices) {
     devices.map(d =>
       '<tr>' +
       '<td><span class="dev-name">' + esc(d.name) + '</span><br/><span class="dev-id">' + esc(d.id) + '</span>' +
+      ((d.protocol && d.protocol !== 'ASTM') || (d.transport && d.transport !== 'tcp')
+        ? '<br/><span class="dev-id">' + esc(d.protocol ?? '—') + ' · ' + esc(d.transport ?? '—') + '</span>' : '') +
       (d.profileId ? '<br/><span class="badge role" style="margin-top:3px;font-size:10px">profile:' + esc(d.profileId) + '</span>' : '') + '</td>' +
       '<td><span class="pill ' + esc(d.state) + '">' + esc(d.state) + '</span></td>' +
       '<td class="dim mono">' + (d.lastSeen ? new Date(d.lastSeen).toLocaleTimeString() : '—') + '</td></tr>'
@@ -869,14 +871,19 @@ function renderImaging(view) {
   document.getElementById('imaging').querySelector('tbody').innerHTML =
     (body.messages || []).map(m => {
       const img = m.imaging || {};
+      // Whole row opens the message-detail route (its study + routing view);
+      // the FAILED retry button acts without navigating.
       const retry = canAct() && m.status === 'FAILED'
-        ? '<button class="ghost" style="font-size:11px;padding:2px 8px" onclick="retryMessage(\\'' + m.id + '\\')" title="Requeue under the current route rules">↩ Retry</button>' : '';
-      return '<tr>' +
+        ? '<button class="ghost" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation(); retryMessage(\\'' + m.id + '\\')" title="Requeue under the current route rules">↩ Retry</button>' : '';
+      const action = m.status === 'FAILED' && canAct()
+        ? retry
+        : '<button class="ghost" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation(); openDetail(\\'' + m.id + '\\')">Routing ↪</button>';
+      return '<tr class="clickable" onclick="openDetail(\\'' + m.id + '\\')" title="Open the full routing view">' +
         '<td class="col-id mono">' + esc(img.accession || '—') + '</td>' +
         '<td><span class="pill ' + esc(m.status) + '">' + esc(m.status) + '</span></td>' +
         '<td class="dim mono">' + (img.performedAt ? new Date(img.performedAt).toLocaleTimeString() : '—') + '</td>' +
         '<td class="dim">' + esc((img.study && img.study.studyDescription) || (img.study && img.study.orthancId || '').slice(0, 12) || '—') + '</td>' +
-        '<td style="white-space:nowrap">' + retry + '</td></tr>';
+        '<td style="white-space:nowrap">' + action + '</td></tr>';
     }).join('') || '<tr class="empty-row"><td colspan="5">No imaging studies yet — perform a study and the monitor routes it here.</td></tr>';
 }
 
@@ -900,6 +907,10 @@ function renderMessages(messages) {
 async function openDetail(id) {
   selectedId = id;
   await renderDetail(id);
+  // The detail panel lives in the messages section, which may be below the
+  // fold when opening from the Radiology panel — surface it.
+  const panel = document.getElementById('detail');
+  if (panel) panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 async function renderDetail(id) {
@@ -941,6 +952,54 @@ async function renderDetail(id) {
       '</div>'
     : '<span class="muted" style="font-size:12px">read-only — actions hidden</span>';
 
+  // Key-value row inside a detail table (label column, wrapped value).
+  const kv = (k, v) =>
+    '<tr><td class="dim" style="width:150px;text-transform:uppercase;font-size:10px;letter-spacing:.06em;vertical-align:top;padding-top:9px">' + esc(k) + '</td><td style="word-break:break-word">' + v + '</td></tr>';
+
+  const img = m.imaging;
+  const isImaging = !!(img && img.kind === 'imaging');
+
+  // Imaging (M3.4 radiology) messages are hub-originated study events — no
+  // wire payload to parse, so the detail shows the study's canonical metadata
+  // + its routing outcome instead of lab records/payload.
+  let studyGrid = '';
+  let eventJson = '';
+  let timelineBlock = '<div><h2>Timeline</h2><ul class="timeline">' + timeline + '</ul></div>';
+  if (isImaging) {
+    const s = img.study || {};
+    const patientName = s.patient && (s.patient.name || s.patient.patientId);
+    const storage = s.storageUrl
+      ? '<a href="' + esc(s.storageUrl) + '" target="_blank" rel="noopener" class="mono" style="font-size:11px;word-break:break-all">' + esc(s.storageUrl) + ' ↗</a>'
+      : '<span class="muted">—</span>';
+    const queued = (m.timeline || []).find((t) => t.stage === 'QUEUED');
+    const dests = queued && queued.note && queued.note.includes('destination(s):')
+      ? queued.note.split('destination(s):')[1].trim()
+      : '—';
+    studyGrid =
+      '<div class="grid2" style="margin-top:14px">' +
+        '<div><h2>Performed study</h2><div class="tbl-wrap"><table class="kv"><tbody>' +
+          kv('Accession', '<span class="mono">' + esc(img.accession || '—') + '</span>') +
+          kv('Description', esc(s.studyDescription || '—')) +
+          kv('Study UID', '<span class="mono" style="word-break:break-all">' + esc(s.studyInstanceUid || s.orthancId || '—') + '</span>') +
+          kv('Study date', esc(s.studyDate || '—')) +
+          kv('Patient', esc(patientName || (s.patient && s.patient.patientId) || '—')) +
+          kv('Performed at', new Date(img.performedAt).toLocaleString()) +
+          kv('Storage', storage) +
+        '</tbody></table></div></div>' +
+        '<div><h2>Routing</h2><div class="tbl-wrap"><table class="kv"><tbody>' +
+          kv('Status', '<span class="pill ' + esc(m.status) + '">' + esc(m.status) + '</span>') +
+          kv('Device', esc(m.deviceId ?? '—')) +
+          kv('Protocol', esc(m.protocol ?? '—') + ' · ' + esc(m.direction ?? '—')) +
+          kv('Destination(s)', '<span class="mono" style="font-size:11px">' + esc(dests) + '</span>') +
+          kv('Received', new Date(m.receivedAt).toLocaleString()) +
+          kv('Message id', '<span class="mono" style="word-break:break-all">' + esc(m.id) + '</span>') +
+        '</tbody></table></div></div>' +
+      '</div>';
+    eventJson =
+      '<div><h2>Study event (imaging payload)</h2><pre>' + esc(JSON.stringify(img, null, 2)) + '</pre></div>';
+    timelineBlock = '<div style="margin-top:14px"><h2>Routing timeline</h2><ul class="timeline">' + timeline + '</ul></div>';
+  }
+
   panel.innerHTML =
     '<div class="detail-header">' +
       '<h2 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;font-weight:600;color:var(--text)">Message <span class="col-id">' + esc(m.id.slice(0, 8)) + '</span></h2>' +
@@ -948,14 +1007,20 @@ async function renderDetail(id) {
     '</div>' +
     '<p class="detail-meta">' + esc(m.protocol) + ' · ' + esc(m.direction) + ' · device <strong>' + esc(m.deviceId ?? '—') + '</strong> · ' + new Date(m.receivedAt).toLocaleString() + '</p>' +
     errors + match + profile + actions +
-    '<div class="grid2">' +
-      '<div><h2>Raw message</h2><pre>' + esc(m.raw) + '</pre></div>' +
-      '<div><h2>Parsed records</h2><div class="tbl-wrap"><table><thead><tr><th>T</th><th>Fields</th></tr></thead><tbody>' + records + '</tbody></table></div></div>' +
-    '</div>' +
-    '<div class="grid2">' +
-      '<div><h2>Canonical payload</h2><pre>' + esc(JSON.stringify(m.payload, null, 2)) + '</pre></div>' +
-      '<div><h2>Timeline</h2><ul class="timeline">' + timeline + '</ul></div>' +
-    '</div>';
+    studyGrid +
+    (isImaging
+      ? '<div class="grid2">' +
+          '<div><h2>Raw message</h2><pre>' + esc(m.raw) + '</pre></div>' +
+          eventJson +
+        '</div>' + timelineBlock
+      : '<div class="grid2">' +
+          '<div><h2>Raw message</h2><pre>' + esc(m.raw) + '</pre></div>' +
+          '<div><h2>Parsed records</h2><div class="tbl-wrap"><table><thead><tr><th>T</th><th>Fields</th></tr></thead><tbody>' + records + '</tbody></table></div></div>' +
+        '</div>' +
+        '<div class="grid2">' +
+          '<div><h2>Canonical payload</h2><pre>' + esc(JSON.stringify(m.payload, null, 2)) + '</pre></div>' +
+          timelineBlock +
+        '</div>');
 }
 
 /* ── Profiles ──────────────────────────────────────────────────────── */

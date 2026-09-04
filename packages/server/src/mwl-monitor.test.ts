@@ -109,6 +109,36 @@ test('a failed poll records lastError instead of throwing', async (t) => {
   assert.match(hub.mwl!.status().lastError ?? '', /failed/i);
 });
 
+test('poll outcomes surface Orthanc health as a device in the Devices registry (M3 C6)', async (t) => {
+  const orthanc = await startMockOrthanc();
+  t.after(() => orthanc.close());
+  const hub = await startHubWithOrthanc(t, orthanc.base);
+
+  // Settle the boot poll (startHub fires one immediately) with Orthanc up, so
+  // the device row reflects a completed poll rather than an in-flight one.
+  await hub.mwl!.poll();
+  const dev = (await hub.devices.list()).find((d) => d.id === 'orthanc');
+  assert.ok(dev, 'the Orthanc device row is auto-registered');
+  assert.equal(dev!.name, 'Orthanc');
+  assert.equal(dev!.protocol, 'DICOM');
+  assert.equal(dev!.transport, 'api');
+  assert.equal(dev!.state, 'connected');
+  assert.ok(dev!.lastSeen, 'lastSeen is bumped by the poll');
+
+  // Orthanc goes down → the next poll flips the row to disconnected (same
+  // registry the wire devices live in — the Devices panel shows it).
+  orthanc.down = true;
+  await hub.mwl!.poll();
+  assert.equal((await hub.devices.list()).find((d) => d.id === 'orthanc')!.state, 'disconnected');
+
+  // Recovery → connected again, without re-registering a second row.
+  orthanc.down = false;
+  await hub.mwl!.poll();
+  const list = await hub.devices.list();
+  assert.equal(list.filter((d) => d.id === 'orthanc').length, 1);
+  assert.equal(list.find((d) => d.id === 'orthanc')!.state, 'connected');
+});
+
 test('consecutive failed polls raise the orthanc-down alert; a successful poll clears it', async (t) => {
   const orthanc = await startMockOrthanc();
   t.after(() => orthanc.close());

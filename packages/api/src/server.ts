@@ -169,7 +169,7 @@ const registerDeviceSchema = z.object({
   name: z.string().min(1),
   manufacturer: z.string().optional(),
   model: z.string().optional(),
-  protocol: z.enum(['ASTM', 'HL7', 'FHIR']).optional(),
+  protocol: z.enum(['ASTM', 'HL7', 'FHIR', 'DICOM']).optional(),
   transport: z.enum(['tcp', 'serial', 'api']).optional(),
   host: z.string().optional(),
   port: z.number().int().positive().optional(),

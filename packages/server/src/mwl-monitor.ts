@@ -45,6 +45,14 @@ export interface MwlMonitorOptions {
    * allowed to fail the poll itself.
    */
   alerts?: { orthancPoll: (ok: boolean, error?: string) => void | Promise<void> };
+  /**
+   * Health seam (M3 C6 — Orthanc surfaced as a device): called with each
+   * poll's outcome so the wiring can flip the Orthanc device row
+   * (connected/disconnected) and bump its lastSeen, exactly like the gateway
+   * device-state seam does for wire devices. Errors are logged, never allowed
+   * to fail the poll itself.
+   */
+  onPollOutcome?: (outcome: { ok: boolean; error?: string }) => void | Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -196,8 +204,9 @@ export class MwlMonitor {
       }
 
       // The poll succeeded — Orthanc answered, so any open orthanc-down alert
-      // (raised by consecutive failures) is cleared.
-      await this.reportAlert(true);
+      // (raised by consecutive failures) is cleared, and the health seam marks
+      // the Orthanc device connected.
+      await this.reportOutcome(true);
 
       const ms = Date.now() - started;
       const summary = `[mwl] sync+poll: ${result.created.length} created, ${result.queued.length} queued, ${result.failed.length} failed · ${result.performed.length} performed (${ms}ms)`;
@@ -214,18 +223,27 @@ export class MwlMonitor {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       this.log(`[mwl] poll failed: ${msg}`);
-      await this.reportAlert(false, msg);
+      await this.reportOutcome(false, msg);
       return undefined;
     }
   }
 
-  /** Feed the alerting seam without ever failing the poll on its errors. */
-  private async reportAlert(ok: boolean, error?: string): Promise<void> {
-    if (!this.opts.alerts) return;
-    try {
-      await this.opts.alerts.orthancPoll(ok, error);
-    } catch (err) {
-      this.log(`[mwl] alert update failed: ${err instanceof Error ? err.message : String(err)}`);
+  /** Feed the alerting + health seams without ever failing the poll on their
+   *  errors — a broken alert channel (or device registry) never kills a sync. */
+  private async reportOutcome(ok: boolean, error?: string): Promise<void> {
+    if (this.opts.alerts) {
+      try {
+        await this.opts.alerts.orthancPoll(ok, error);
+      } catch (err) {
+        this.log(`[mwl] alert update failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (this.opts.onPollOutcome) {
+      try {
+        await this.opts.onPollOutcome({ ok, ...(error !== undefined ? { error } : {}) });
+      } catch (err) {
+        this.log(`[mwl] health update failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 

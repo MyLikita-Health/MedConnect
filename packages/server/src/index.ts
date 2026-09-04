@@ -423,6 +423,26 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       // successful poll clears it — surfaced in the console + webhook channels
       // like every other alert.
       alerts: { orthancPoll: (ok, error) => void alerts.orthancPoll(orthancUrl, ok, error) },
+      // M3 C6 — Orthanc health as a device (PRD §32–33): every poll outcome
+      // flips the `orthanc` device row (connected/disconnected + lastSeen) in
+      // the same registry the gateways auto-register wire devices into, so the
+      // Devices panel shows the imaging server's health like any modality.
+      // The device id matches the deviceId imaging messages carry, and the
+      // orthanc-down alert (above) holds the failure detail + thresholds.
+      onPollOutcome: ({ ok }) =>
+        void (async () => {
+          try {
+            await devices.upsertFromConnection({
+              id: 'orthanc',
+              name: 'Orthanc',
+              protocol: 'DICOM',
+              transport: 'api',
+              state: ok ? 'connected' : 'disconnected',
+            });
+          } catch (err) {
+            console.error(`[mwl] device state update failed: ${(err as Error).message}`);
+          }
+        })(),
       log: (line) => console.log(line),
     });
     mwl.start();
