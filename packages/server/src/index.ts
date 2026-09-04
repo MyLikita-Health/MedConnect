@@ -8,7 +8,7 @@
  */
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
-import { Hl7Gateway } from '@integration-hub/hl7';
+import { deliverHl7, Hl7Gateway } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
@@ -186,6 +186,14 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       config: { strategies: [['patientId', 'orderId'], ['patientId', 'sampleId']], onUnmatched: opts.matchOnUnmatched ?? 'hold' },
     },
     validation: { config: defaultValidationConfig(mappings) },
+    // B3.3 — outbound HL7: deliver `hl7` destinations over MLLP (the
+    // integration core stays protocol-blind; this is the only HL7-aware wire).
+    // A non-AA application ACK throws → the dispatcher retries per policy,
+    // then DLQs with the MSA-3 reason — never silently dropped.
+    deliver: async (destination, message) => {
+      if (destination.kind !== 'hl7' || !destination.hl7) throw new Error(`cannot deliver kind ${destination.kind} over HL7`);
+      await deliverHl7(destination.hl7, message, { debug: (line) => console.log(`[outbound:hl7] ${line}`) });
+    },
     events: {
       onDelivery: async (event) => {
         if (event.ok) await alerts.deliverySucceeded(event.destinationId);

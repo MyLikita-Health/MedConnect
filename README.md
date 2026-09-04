@@ -28,15 +28,17 @@ gate item: the facility **installer** (Docker image) plus **signed remote
 updates** with supervisor-driven apply, health-gate and rollback (PRD §42–43).
 Tests use Node's built-in test runner.
 
-**Workstream B — the HL7 v2 lab engine** is mid-flight (inbound ORU/ADT/ORM
-+ outbound ORM/ORU over MLLP, PRD §13–15): the inbound leg (ORU over MLLP →
-`Hl7Gateway` → dispatcher) and the **ORM order feed** (B2c — the LIS seam
-that replaces manual `POST /api/v1/orders`) are shipped, as are the outbound
-serializer (`canonicalToOru`/`canonicalToOrm`) and the `hl7` destination
-kind + config/migration (B3.1/B3.2, with the parser buy resolved as D7).
-Kickoff survey + status: plan §13.15. Remaining: B3.3 (deliverer seam +
-outbound connection manager) and B4 (HL7 segment profiles + goldens). After
-B: imaging/DICOM (M3), then FHIR/webhooks and multi-tenancy.
+**Workstream B — the HL7 v2 lab engine** is nearly complete (inbound
+ORU/ADT/ORM + outbound ORM/ORU over MLLP, PRD §13–15): the inbound leg (ORU
+over MLLP → `Hl7Gateway` → dispatcher), the **ORM order feed** (B2c — the
+LIS seam that replaces manual `POST /api/v1/orders`), and the outbound store-
+and-forward leg (B3.1–B3.3: `canonicalToOru`/`canonicalToOrm`, the `hl7`
+destination kind + config/migration, and `deliverHl7` wiring results/orders
+to a real MLLP peer with AA/AR/AE → retry/DLQ) are all shipped, with the
+parser buy resolved as D7. Kickoff survey + status: plan §13.15. Remaining:
+B4 (HL7 segment profiles + goldens), deferred until a real vendor's
+variants exist. After B: imaging/DICOM (M3), then FHIR/webhooks and
+multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -238,14 +240,14 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 248 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 256 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
-                   #   Hl7Gateway + ORM order feed + ORU/ORM serializer,
-                   #   dispatcher/DLQ, API, security (roles/scopes + authz +
-                   #   audit), signed updates + supervisor (apply/rollback/
-                   #   crash) (17 DB-gated skip)
-npm run test:db    # 248 tests: same + PostgreSQL integration (needs db:up)
+                   #   Hl7Gateway + ORM order feed + ORU/ORM serializer +
+                   #   outbound deliverHl7, dispatcher/DLQ, API, security
+                   #   (roles/scopes + authz + audit), signed updates +
+                   #   supervisor (apply/rollback/crash) (17 DB-gated skip)
+npm run test:db    # 256 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -264,7 +266,8 @@ packages/
                                         records, session (host) + client (device)
   hl7/        @integration-hub/hl7      HL7 v2 (workstream B): MLLP framing +
                                         sessions/ACK, ORU translator + ORM order
-                                        feed, ORU/ORM serializer, inbound Hl7Gateway
+                                        feed, ORU/ORM serializer, inbound
+                                        Hl7Gateway + outbound deliverHl7
   gateway/    @integration-hub/gateway  TCP listener, per-connection ASTM session,
                                         pipeline: parse → validate → map → route,
                                         default test-code mappings (PRD §17–18)
@@ -436,7 +439,10 @@ The clinical gate lives in the dispatcher, behind the same seam:
 
 Try the full loop in one command — `npm run demo` registers the expected
 order (LIS seam), sends two matched results and one stray unmatched sample,
-releases the held one, and prints the summary.
+releases the held one, and prints the summary. The HL7 variants:
+`npm run demo:hl7` (inbound ORU over MLLP, same HELD→release loop) and
+`npm run demo:outbound` (results store-and-forward to a mock LIS over MLLP
+via an `hl7` destination + route rule).
 
 ## Alerting (M2 — PRD §33)
 
@@ -538,11 +544,12 @@ pipeline canonicalizes correctly for both it and the reference layout.
 - User *accounts* with passwords/JWT sessions, LDAP, 2FA and per-facility
   scoping are future RBAC layers (API keys + roles are the v1 surface, PRD
   §34–35).
-- **HL7 outbound delivery + segment profiles remain (workstream B3.3/B4)** —
-  inbound ORU + the ORM order feed are live; the `hl7` destination kind and
-  the ORU/ORM serializer exist, but delivery over MLLP (the dispatcher
-  deliverer seam + a held-open outbound connection manager, plan §6.4 order
-  download) and HL7 segment profiles + goldens are still open.
+- **HL7 segment profiles remain (workstream B4)** — inbound ORU + ORM order
+  feed + outbound MLLP delivery are live (`demo:outbound`); the `hl7`
+  destination kind delivers per-connection v1 (a held-open outbound
+  connection manager with reconnect is the documented refinement). HL7
+  segment profiles + goldens are deferred until a real vendor's variant
+  requirements exist (plan §13.15).
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap);
   ADT patient-admission feeds are still open. A hub without the HL7 port

@@ -1114,10 +1114,10 @@ gated on field access (risk R2) only.
 
 ### 13.15 Workstream B — HL7 v2 lab engine: kickoff survey + status
 
-**Status (B1–B3.2 + B2c shipped, Sept 2026).** The survey below (written
+**Status (B1–B3.3 + B2c shipped, Sept 2026).** The survey below (written
 pre-build) mapped B onto this codebase; the inbound leg is real, the LIS
-seam closes over the wire, and the outbound serializer + destination kind
-are in:
+seam closes over the wire, and the outbound leg delivers results to a real
+MLLP peer:
 
 1. ✅ **B1 — MLLP framing + sessions + application ACK** (D7 parser adoption,
    framing/ACK, wire sessions): `@integration-hub/hl7` ships `MllpServer` /
@@ -1179,14 +1179,28 @@ adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
    the order and the matching ORU **ROUTED** with `MATCHED` (control: same
    ORU without the feed → HELD `UNMATCHED`). ADT patient-admission feeds
    remain a future B2c extension.
-7. Test status: `npm test` = 248 (231 pass / 17 DB-gated skip); `npm run
-   test:db` = 248/248.
+7. ✅ **B3.3 — outbound delivery (first real outbound beyond HTTP)**: the
+   Dispatcher gains an injected `deliver` seam (`DispatcherOptions.deliver`;
+   core stays protocol-blind — the built-in handles console/http, anything
+   else throws → retry → DLQ without one). `startHub` wires
+   `deliverHl7` (`packages/hl7/src/deliver.ts`): canonical → ORU^R01
+   (results) / ORM^O01 (order-only) via the B3.1 serializer → MLLP connect →
+   await the application ACK — AA resolves (attempt OK), **AE/AR throw with
+   the MSA-3 reason** → per-destination retry/backoff → DLQ (the reason
+   surfaces in the timeline; never silently dropped). Connection per delivery
+   v1 (held-open sessions/reconnect = the documented connection-manager
+   refinement). E2E (`packages/server/src/hl7-outbound.test.ts`): inbound
+   ORU → route → mock LIS over MLLP → ROUTED; an AE-rejecting LIS → 3
+   attempts → FAILED/DLQ with the reason. `npm run demo:outbound` runs the
+   live loop (hub + in-process mock LIS + destination/route + simulator →
+   LIS received).
+8. Test status: `npm test` = 256 (239 pass / 17 DB-gated skip); `npm run
+   test:db` = 256/256.
 
-Remaining B: **B3.3** the dispatcher `deliver` seam for `hl7` — an injected
-protocol-blind `deliver` (core stays kind-agnostic) wired in `startHub` to
-connect via `MllpClient`, await the application ACK (AA = delivered; AE/AR =
-throw → retry/DLQ), plus the outbound connection manager + e2e/demo;
-**B4** HL7 segment profiles + goldens-in-CI.
+Remaining B: **B4** HL7 segment profiles + goldens-in-CI (defer until a
+real vendor's variant requirements exist), plus the outbound
+connection-manager refinement (held-open MLLP sessions with reconnect) if a
+peer demands it.
 
 ---
 
@@ -1284,10 +1298,11 @@ FHIR) actually arrives.
 `startHub`, `simulate:hl7`/`demo:hl7`, status above); (2) ✅ **B3.1 + B3.2**
 **done** — serializer + `hl7` destination kind/config/migration; (3) ✅
 **B2c done** — inbound ORM^O01 → `OrderRegistry` feed closes the LIS seam;
-(4) ⬜ B3.3 deliverer seam + connection manager (first real outbound beyond
-HTTP; order download §6.4); (5) ⬜ B4 profile generalization + HL7
-conformance last. Each step keeps both suites green (`npm test` / `npm run
-test:db`) and demo-able in memory and Postgres.
+(4) ✅ **B3.3 done** — injectable `deliver` seam + `deliverHl7` (store-and-
+forward to an MLLP LIS, `demo:outbound`); (5) ⬜ B4 profile generalization
++ HL7 conformance last (deferred until a real vendor's variants exist). Each
+step keeps both suites green (`npm test` / `npm run test:db`) and demo-able
+in memory and Postgres.
 
 ---
 

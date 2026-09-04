@@ -73,6 +73,16 @@ export interface DispatcherOptions {
   validation?: { config: Partial<ValidationConfig> };
   /** Optional lifecycle observers (wired to alerting, plan workstream I). */
   events?: DispatcherEvents;
+  /**
+   * Protocol-specific delivery (workstream B3): a function that delivers one
+   * canonical message to one destination and resolves on success / throws on
+   * failure. The integration core stays **protocol-blind** — kinds other than
+   * the built-in `console`/`http` are only deliverable when the process wires
+   * such a function (the hub wires an MLLP deliverer for kind `hl7`). When
+   * absent, an `hl7` (or unknown) destination throws on delivery → retry →
+   * DLQ, exactly like today.
+   */
+  deliver?: (destination: Destination, message: CanonicalMessage) => void | Promise<void>;
   /** Worker poll interval when the queue is empty. */
   pollMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -213,7 +223,7 @@ export class Dispatcher implements MessageSink {
       let lastError = '';
       for (let attempt = 1; attempt <= destination.retry.maxAttempts; attempt++) {
         try {
-          await deliver(destination, message);
+          await deliverMessage(this.opts.deliver, destination, message);
           await this.opts.store.recordAttempt({
             messageId: message.id,
             destinationId: destination.id,
@@ -287,6 +297,19 @@ function iso(): string {
 
 /** Deliver a message to one destination. */
 export async function deliver(destination: Destination, message: CanonicalMessage): Promise<void> {
+  await deliverMessage(undefined, destination, message);
+}
+
+/**
+ * Internal: built-in kinds first, then the injectable protocol deliverer (so
+ * a wired process can deliver `hl7` destinations while the core itself stays
+ * kind-agnostic).
+ */
+async function deliverMessage(
+  protocolDeliver: DispatcherOptions['deliver'],
+  destination: Destination,
+  message: CanonicalMessage,
+): Promise<void> {
   if (destination.kind === 'console') return; // already persisted in the store
   if (destination.kind === 'http') {
     if (!destination.url) throw new Error(`destination ${destination.id} has no url`);
@@ -297,6 +320,10 @@ export async function deliver(destination: Destination, message: CanonicalMessag
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} from ${destination.url}`);
+    return;
+  }
+  if (protocolDeliver) {
+    await protocolDeliver(destination, message);
     return;
   }
   throw new Error(`unknown destination kind: ${destination.kind}`);

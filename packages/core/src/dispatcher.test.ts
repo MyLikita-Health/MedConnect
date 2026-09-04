@@ -377,6 +377,65 @@ test('release() refuses messages that are not held', async (t) => {
   assert.equal(await dispatcher.release('nope'), false);
 });
 
+test('an injected deliver is used for protocol destinations instead of the built-in', async (t) => {
+  const routes = new InMemoryRouteStore();
+  await routes.upsertDestination({
+    id: 'lis-mllp',
+    kind: 'hl7',
+    name: 'LIS MLLP',
+    hl7: { host: '127.0.0.1', port: 6661 },
+    enabled: true,
+    retry: { maxAttempts: 3, backoffMs: 1, backoffFactor: 2, jitter: false },
+  });
+  await routes.upsertRule({ id: 'r1', destinationId: 'lis-mllp', priority: 100, enabled: true });
+
+  const delivered: Array<{ destination: Destination; message: CanonicalMessage }> = [];
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({
+    store,
+    dedup: new InMemoryDedupStore(),
+    routes,
+    deliver: async (destination, message) => void delivered.push({ destination, message }),
+    pollMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]!.destination.id, 'lis-mllp');
+  assert.equal(delivered[0]!.message.id, 'm1');
+});
+
+test('an hl7 destination without an injected deliver exhausts retries into the DLQ', async (t) => {
+  const routes = new InMemoryRouteStore();
+  await routes.upsertDestination({
+    id: 'lis-mllp',
+    kind: 'hl7',
+    name: 'LIS MLLP',
+    hl7: { host: '10.9.9.9', port: 6661 },
+    enabled: true,
+    retry: { maxAttempts: 3, backoffMs: 1, backoffFactor: 2, jitter: false },
+  });
+  await routes.upsertRule({ id: 'r1', destinationId: 'lis-mllp', priority: 100, enabled: true });
+
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({ store, dedup: new InMemoryDedupStore(), routes, pollMs: 5, sleep: () => Promise.resolve() });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'FAILED' && store.messages.get('m1')!.dlqAt !== undefined);
+
+  const got = store.messages.get('m1')!;
+  assert.ok(got.dlqAt);
+  assert.deepEqual(store.attempts.filter((a) => a.messageId === 'm1').map((a) => a.status), ['FAILED', 'FAILED', 'FAILED']);
+  assert.ok(got.timeline.some((e) => e.note?.includes('unknown destination kind: hl7')));
+});
+
 test('validation errors hold the message in the exception queue', async (t) => {
   const store = new FakeStore();
   const registry = new InMemoryOrderRegistry();

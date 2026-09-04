@@ -20,6 +20,7 @@
     "simulate:hl7": "tsx packages/simulator/src/cli-hl7.ts",
     "demo": "tsx scripts/demo.ts",
     "demo:hl7": "tsx scripts/demo-hl7.ts",
+    "demo:outbound": "tsx scripts/demo-outbound.ts",
     "demo:db": "DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx scripts/demo.ts",
     "demo:update": "tsx scripts/demo-update.ts",
     "start:supervised": "tsx packages/server/src/supervisor-cli.ts",
