@@ -614,7 +614,7 @@ M3 imaging only with a committed radiology pilot.
 | D4 | Edge hardware baseline | mini-PC spec; OS support (Windows/Linux) | M1 |
 | D5 | Tenancy model escalation | shared+RLS vs schema-per-tenant for large customers | M4 |
 | D6 | Cloud hosting | self-hosted vs hyperscaler; region (data residency) | M3 |
-| D7 | HL7 parser lib selection | evaluate MIT/Apache options | M0 |
+| D7 | HL7 parser lib selection | **`hl7v2` (panates, MIT) — recommended**; runner-up `node-hl7-client`/-`server` (MIT, but Node≥22 + server-shaped); `hl7` (amida) + `L7Node/hl7` dead; all candidates low-adoption → conformance spike (goldens) before lock-in (§13.15) | B kickoff |
 | D8 | Licensing/commercial model detail | per-facility vs device-based vs OEM (PRD §61) | M2 |
 | D9 | Marketplace timing vs M5 pull | demand check with distributors | M4 |
 | D10 | Orthanc bundled vs customer-provided default | packaging/commercial impact | M3 |
@@ -1111,6 +1111,104 @@ semantics mean no per-message paging.
 
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
 gated on field access (risk R2) only.
+
+### 13.15 Workstream B — HL7 v2 lab engine: kickoff survey
+
+Next code workstream (not started). B is the biggest remaining Phase-1
+capability: today the platform speaks ASTM inbound and HTTP/console outbound
+only — there is no MLLP framing, no HL7 parser/serializer, and no translator
+anywhere in `packages/` (the `Protocol` union in `message.ts`, the zod
+`device_profileSchema.protocol` enum, and this plan are the only places HL7
+exists). The good news from the codebase survey: **everything downstream of
+canonicalization is already protocol-blind**, so B is "build a sibling protocol
+layer mirroring `@integration-hub/astm` + two new connection points", not a
+core rework. Survey findings, mapped onto the B1–B4 deliverables:
+
+**Reuse as-is (no changes needed).** The canonical model (`LabPayload` in
+`packages/shared/src/model.ts`) maps 1:1 onto PID / ORC+OBR / OBX — the PRD
+§67 invariant was built for exactly this. `ParsedRecord {type, fields}`
+(`message.ts`) is segment-agnostic, so HL7 segments drop straight into the
+message store, viewer and replay unchanged. `buildMessage()` is already
+protocol-parameterized. Dedup → matching → validation → HELD → route →
+retry/DLQ (`Dispatcher`, `packages/core`) consumes `CanonicalMessage` via
+`MessageSink` and never inspects the wire protocol, so an inbound ORU^R01 that
+reaches canonical form gets the full lifecycle, audit and alerting an ASTM
+message gets today — including matching against the **expected-order registry
+(the LIS seam)**. `DuplexLike` (`packages/astm/src/transport.ts`) means MLLP
+framing works over TCP/TLS/serial/mocks without new transport code. The
+retry/backoff/`destination-down` machinery and the PG `destinations` table
+(`kind` stored as text) make a new outbound kind additive — no migration.
+Profile binding, version stamping and drift alerts attach to any device that
+delivers a message; an HL7 inbound peer is just a device with a profile.
+
+**B1 — MLLP transport (small; new).** An MLLP frame codec (VT `0x0B` … FS
+`0x1C` CR `0x0D` — an order of magnitude simpler than ASTM E1381 framing) plus
+an inbound listener (mirror of `AstmGateway.handleConnection` → `AstmSession`
+→ `onMessage`) and an outbound client. Distinct from ASTM: an
+**application-ACK layer** (MSH-ACK accept/reject with error text); reject
+reasons must surface in the message timeline/attempts and the UI, never
+vanish.
+
+**B2 — translators (the real work).**
+1. `hl7ToCanonical(segments, profile)` — mirror of `astmToCanonical`:
+   MSH→device identity, PID→patient, ORC/OBR→order, OBX→results (units, ref
+   ranges, flags, statuses via the `ResultStatus` subset already in `model.ts`).
+2. Inbound **ORU^R01** → pipeline → identical downstream path (results-up).
+3. Inbound **ORM^O01 / ADT^A01/A04/A08** — these have **no canonical target
+today**: the model is lab-payload-only, so this needs a decision (a patient/
+order-focused canonical message kind, or — the scaffold-scoped option —
+translating ORM directly into the **`OrderRegistry`**, today hand-filled via
+`POST /api/v1/orders`). The latter closes the README's "wire it to a real LIS
+master feed" gap and makes E6 matching real without new message plumbing.
+4. **A parser.** The §3.2 decision matrix says *buy* a mature MIT/Apache lib.
+   The open decision (log it as D-n): which lib, and whether `astm`/`gateway`
+   staying zero-dependency means the lib dependency lives in a new package
+   (recommended) rather than `gateway`.
+
+**B3 — outbound (host-to-device / host-to-LIS).**
+1. `canonicalToHl7` serializer: canonical → ORM^O01 (**order download** — plan
+   §6.4; the `orders-down` capability exists in `DeviceCapability` but nothing
+   sends today) and ORU^R01 (results to an LIS).
+2. New destination kind `hl7` (host/port + sending-facility fields for
+   MSH-4/6, segment variants) in the destination zod schema (`server.ts`) and
+   `resolveDestinations`; the dispatcher's `deliver()` is the only other touch
+   point — retries, attempts and DLQ are reused.
+3. A small outbound **connection manager** (held-open MLLP sockets with
+   reconnect) — the dispatcher treats delivery as stateless today (HTTP
+   fetch), and MLLP peers expect persistent connections.
+
+**B4 — HL7 profiles (genuine model surgery).** `DeviceRecordLayout` is
+ASTM-position-shaped (1-based P/O/R field numbers) and cannot describe HL7
+segment variants. B4 generalizes the profile "layout" to segment-level field
+mapping (PID component for the id, delimiter overrides, OBX-5/6 quirks). This
+is where the *current* profiles code needs extension rather than addition —
+defer until a real vendor's variant requirements exist.
+
+**Tooling to mirror (mechanical, pattern established):** an HL7 simulator
+sibling to `AnalyzerSimulator`, golden files + a generalized
+`runConformance` (today it imports `astmToCanonical` directly), an
+`npm run simulate:hl7`/demo story, and e2e + DB-gated tests in the existing
+suites.
+
+**Two structural forks to decide first.** (1) **Package boundary**: a new
+`@integration-hub/hl7` package (framing, parse/serialize, ACK, segment
+layouts) mirroring `@integration-hub/astm` preserves the gateway's
+zero-dependency layering; an `hl7/` dir inside `gateway` breaks it the moment
+a parser lib is bought. (2) **Adapter registry vs. sibling gateway**: §6.1
+wants a protocol-agnostic `AdapterRegistry`/`DeviceAdapter`, but today
+`startHub` constructs an `AstmGateway` and profile resolution lives inside it.
+Recommended: a sibling `Hl7Gateway` (MLLP server) sharing the resolver /
+version-stamp / `onDrift` seams first — it gets B2 testable now — and
+generalize to the §6.1 registry when a third inbound protocol (orders-down or
+FHIR) actually arrives.
+
+**Suggested sequencing.** (1) B1 + B2-inbound-ORU end-to-end (new `hl7`
+package, `Hl7Gateway` feeding the existing `Dispatcher`) — a real
+"analyzer middleware speaks HL7" demo with zero core changes; (2) B3 outbound
+ORM/ORU as a destination kind — first real outbound beyond HTTP; (3) inbound
+ORM/ADT → `OrderRegistry` feed — closes the LIS seam; (4) B4 profile
+generalization + HL7 conformance last. Every step keeps both suites green
+(`npm test` / `npm run test:db`) and demo-able in memory and Postgres.
 
 ---
 

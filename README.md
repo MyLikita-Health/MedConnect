@@ -28,6 +28,12 @@ gate item: the facility **installer** (Docker image) plus **signed remote
 updates** with supervisor-driven apply, health-gate and rollback (PRD §42–43).
 Tests use Node's built-in test runner.
 
+**Next up is workstream B — the HL7 v2 lab engine** (inbound ORU/ADT/ORM +
+outbound ORM/ORU over MLLP, PRD §13–15): kickoff survey in plan §13.15,
+the MLLP framing + application-ACK substrate scaffolded as
+`@integration-hub/hl7`, and the parser-library buy tracked as plan decision
+D7. After B: imaging/DICOM (M3), then FHIR/webhooks and multi-tenancy.
+
 ## Quickstart (in-memory, no services needed)
 
 ```bash
@@ -228,12 +234,12 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 184 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 204 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
-                   #   version stamping, dispatcher/DLQ, API, security
-                   #   (roles/scopes + authz + audit), signed updates +
-                   #   supervisor (apply/rollback/crash) (16 DB-gated skip)
-npm run test:db    # 147 tests: same + PostgreSQL integration (needs db:up)
+                   #   version stamping, HL7 MLLP framing + ACK, dispatcher/DLQ,
+                   #   API, security (roles/scopes + authz + audit), signed
+                   #   updates + supervisor (apply/rollback/crash) (16 DB-gated skip)
+npm run test:db    # 204 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -250,6 +256,8 @@ packages/
                                         envelope, statuses, MessageSink contract
   astm/       @integration-hub/astm     ASTM E1381 framing + checksums, E1394
                                         records, session (host) + client (device)
+  hl7/        @integration-hub/hl7      HL7 v2 (workstream B, B1 started): MLLP
+                                        framing, minimal message model, MSH^ACK
   gateway/    @integration-hub/gateway  TCP listener, per-connection ASTM session,
                                         pipeline: parse → validate → map → route,
                                         default test-code mappings (PRD §17–18)
@@ -522,8 +530,13 @@ pipeline canonicalizes correctly for both it and the reference layout.
   cloud deployment; the edge keeps the SQL-outbox shape (plan §4.2, §13.1.5).
 - User *accounts* with passwords/JWT sessions, LDAP, 2FA and per-facility
   scoping are future RBAC layers (API keys + roles are the v1 surface, PRD
-  §34–35). Still missing: HL7 v2, DICOM, FHIR, webhooks, multi-tenancy —
-  natural next layers (PRD §13–15, §37, §41).
+  §34–35).
+- **HL7 v2 is next (workstream B)** — the hub speaks ASTM inbound + HTTP/
+  console outbound only. The engine plan (MLLP transport, ORU/ADT/ORM
+  translators, outbound ORM/ORU serializer, HL7 segment profiles) is in plan
+  §13.15; MLLP framing + application ACK are scaffolded in
+  `@integration-hub/hl7`; the parser-library buy is decision D7. Beyond B:
+  DICOM/Orthanc (M3), FHIR + webhooks, multi-tenancy (PRD §13–15, §37, §41).
 - Patient/order matching runs against the expected-order registry (the LIS
   seam, `POST /api/v1/orders`) — wiring it to a real LIS master feed (HL7 ORM
   or ADT) is inbound HL7 work, still open. Result-plausibility seeds assume
