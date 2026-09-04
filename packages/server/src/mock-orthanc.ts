@@ -15,6 +15,10 @@ export interface MockOrthanc {
   performed: Set<string>;
   /** When true every request answers 500 — simulates an unreachable Orthanc. */
   down: boolean;
+  /** DICOM modality config names (GET /modalities answers these). */
+  modalities: string[];
+  /** Modalities whose C-ECHO fails (POST /modalities/{name}/echo → 500). */
+  echoFail: Set<string>;
   creates: number;
   deletes: string[];
   close(): Promise<void>;
@@ -29,6 +33,8 @@ export function startMockOrthanc(): Promise<MockOrthanc> {
       items,
       performed,
       down: false,
+      modalities: [],
+      echoFail: new Set<string>(),
       creates: 0,
       deletes: [],
       close: () => new Promise((r) => server.close(() => r())),
@@ -49,6 +55,19 @@ export function startMockOrthanc(): Promise<MockOrthanc> {
 
         if (mock.down) {
           json(500, { message: 'mock Orthanc down' });
+          return;
+        }
+        if (req.method === 'GET' && path === '/modalities') {
+          json(200, Object.fromEntries(mock.modalities.map((name) => [name, {}])));
+          return;
+        }
+        const echoName = path.match(/^\/modalities\/([^/]+)\/echo$/)?.[1];
+        if (req.method === 'POST' && echoName) {
+          if (mock.echoFail.has(echoName)) {
+            json(500, { message: `C-ECHO to ${echoName} failed` });
+          } else {
+            json(200, {});
+          }
           return;
         }
         if (req.method === 'GET' && path === '/worklists/' && url.searchParams.get('format') === 'Short') {

@@ -353,9 +353,12 @@ without touching the protocol layer.
    (M3.4) surfaces the Orthanc worklist + performed-study routing status;
    clicking a study row opens its message-detail routing view (canonical
    study metadata — storage link into Orthanc — beside the status,
-   destinations and routing timeline, with per-study Retry on `FAILED`), and
-   the Devices panel shows Orthanc itself as a device whose
-   connected/disconnected state + lastSeen track the standing monitor poll.
+   destinations and routing timeline, with per-study Retry on `FAILED`). The
+   Devices panel shows the imaging side of the hub like any wire device:
+   Orthanc itself (connected/disconnected + lastSeen from the standing MWL
+   poll) and every DICOM modality it has configured — each mirrored from a
+   standing C-ECHO probe (ModalityMonitor, `MODALITY_POLL_MS`), with
+   `device-offline` alerts firing when a modality stops answering.
 
 ## REST API (PRD §36)
 

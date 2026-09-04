@@ -12,6 +12,7 @@ import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
 import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
 import { ImagingRouter } from './imaging-router.js';
+import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
@@ -66,14 +67,18 @@ export interface HubOptions {
     baseUrl: string;
     username?: string;
     password?: string;
-    pollMs?: number;
+    pollMs?: number;  /**
+   * Forward performed studies to this Orthanc peer (M3.3 storage routing;
+   * env ORTHANC_FORWARD_PEER — the peer must be configured in Orthanc, e.g.
+   * via the adapter's configurePeer). Pixels move Orthanc→PACS; the hub
+   * only triggers + records the routing.
+   */
+  forwardPeer?: string;
     /**
-     * Forward performed studies to this Orthanc peer (M3.3 storage routing;
-     * env ORTHANC_FORWARD_PEER — the peer must be configured in Orthanc, e.g.
-     * via the adapter's configurePeer). Pixels move Orthanc→PACS; the hub
-     * only triggers + records the routing.
+     * Modality C-ECHO cadence (env MODALITY_POLL_MS; default 30s). Orthanc's
+     * configured DICOM modalities are mirrored into the device registry.
      */
-    forwardPeer?: string;
+    modalityPollMs?: number;
   };
 }
 
@@ -93,6 +98,11 @@ export interface Hub {
   profileStore: ProfileStore;
   /** Present when Orthanc is configured: the M3.2 MWL study monitor. */
   mwl?: MwlMonitor;
+  /**
+   * Present when Orthanc is configured: C-ECHOes Orthanc's modalities into
+   * device rows + device-offline alerts (M3 C6 modality health).
+   */
+  modalities?: ModalityMonitor;
   /**
    * Present when Orthanc is configured: routes performed studies through the
    * dispatcher (M3.3 storage routing — dedup → DB-driven rules → delivery).
@@ -381,6 +391,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   // but they dedup, follow the DB-driven route rules, retry and DLQ exactly
   // like any message. The accession is retired only after routing succeeds.
   let mwl: MwlMonitor | undefined;
+  let modalities: ModalityMonitor | undefined;
   let imaging: ImagingRouter | undefined;
   if (orthancUrl) {
     const orthancAdapter = new DicomOrthancAdapter({ baseUrl: orthancUrl, username: orthancUser, password: orthancPass });
@@ -447,6 +458,51 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     });
     mwl.start();
     console.log(`[mwl]    Orthanc study monitor enabled — ${orthancUrl} (sync+poll every ${orthancPollMs}ms; performed studies route through the dispatcher${forwardPeer ? ` and forward to peer ${forwardPeer}` : ''})`);
+
+    // M3 C6 — Orthanc-registered modalities as devices: the DICOM modalities
+    // Orthanc has configured are mirrored into the device registry and the
+    // device-offline alerting, one row per modality (protocol DICOM, same
+    // auto-registration seam the wire gateways use). C-ECHO runs on its own
+    // cadence (modality probes are independent of the MWL sync). Rows for
+    // auto-registered DICOM devices that are no longer configured are dropped,
+    // so the Devices panel tracks Orthanc's actual modality list — the
+    // manually-registered `orthanc` row (id 'orthanc') and any API-registered
+    // devices are left alone.
+    const envModalityPollMs = Number(process.env.MODALITY_POLL_MS);
+    const modalityPollMs = opts.orthanc?.modalityPollMs ?? (Number.isFinite(envModalityPollMs) && envModalityPollMs > 0 ? envModalityPollMs : 30_000);
+    modalities = new ModalityMonitor({
+      baseUrl: orthancUrl,
+      username: orthancUser,
+      password: orthancPass,
+      adapter: orthancAdapter,
+      pollMs: modalityPollMs,
+      onStates: async (states) => {
+        const seen = new Set<string>();
+        for (const s of states) {
+          seen.add(s.name);
+          try {
+            await devices.upsertFromConnection({ id: s.name, name: s.name, protocol: 'DICOM', transport: 'tcp', state: s.state });
+          } catch (err) {
+            console.error(`[modality] device state update failed: ${(err as Error).message}`);
+          }
+          await alerts.deviceState(s.name, s.state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
+        }
+        // Reconcile: drop auto-registered DICOM rows whose modality vanished
+        // from Orthanc's config (never the orthanc row itself).
+        try {
+          for (const d of await devices.list()) {
+            if (d.id !== 'orthanc' && d.autoRegistered && d.protocol === 'DICOM' && !seen.has(d.id)) {
+              await devices.remove(d.id);
+            }
+          }
+        } catch (err) {
+          console.error(`[modality] device reconcile failed: ${(err as Error).message}`);
+        }
+      },
+      log: (line) => console.log(line),
+    });
+    modalities.start();
+    console.log(`[modality] Orthanc modality health monitor enabled — C-ECHO ${modalityPollMs}ms cadence`);
   }
 
   const api = new ApiServer({
@@ -507,6 +563,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alertStore,
     profileStore,
     mwl,
+    modalities,
     imaging,
     keys,
     audit,
@@ -514,6 +571,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     db: pool ? { pool } : undefined,
     stop: async () => {
       if (mwl) await mwl.stop();
+      if (modalities) await modalities.stop();
       if (imaging) await imaging.dispatcher.stop();
       await dispatcher.stop();
       await api.stop();

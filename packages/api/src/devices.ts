@@ -116,6 +116,10 @@ export class DeviceRegistry {
     }
     return { total: this.devices.size, connected, offline };
   }
+
+  remove(id: string): boolean {
+    return this.devices.delete(id);
+  }
 }
 
 export function slugify(name: string): string {

@@ -56,4 +56,7 @@ export interface DeviceBackend {
   get(id: string): DeviceRecord | undefined | Promise<DeviceRecord | undefined>;
   list(): DeviceRecord[] | Promise<DeviceRecord[]>;
   stats(): DeviceStats | Promise<DeviceStats>;
+  /** Drop a device row — e.g. an auto-registered Orthanc modality that is no
+   *  longer configured. Returns false when no such device exists. */
+  remove(id: string): boolean | Promise<boolean>;
 }

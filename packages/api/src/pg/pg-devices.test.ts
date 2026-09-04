@@ -69,3 +69,30 @@ test('device profile binding round-trips; unknown profile ids are rejected by th
   // Clean slate for sibling tests.
   await pool.query('DELETE FROM devices');
 });
+
+test('auto-registered rows (DICOM modality health) upsert and remove cleanly', { skip: skipReason }, async () => {
+  if (!pool) return skipTest('no pool');
+  const devices = new PostgresDeviceRegistry(pool);
+  await pool.query("DELETE FROM devices WHERE id IN ('ct-9', 'mr-9')");
+
+  // The modality monitor's seam upserts per C-ECHO outcome (protocol DICOM).
+  const ct9 = await devices.upsertFromConnection({ id: 'ct-9', name: 'CT9', protocol: 'DICOM', transport: 'tcp', state: 'connected' });
+  assert.equal(ct9.state, 'connected');
+  assert.equal(ct9.protocol, 'DICOM');
+  assert.ok(ct9.autoRegistered);
+  assert.ok(ct9.lastSeen);
+
+  // A later echo failure flips the SAME row (upsert, never a duplicate).
+  await devices.upsertFromConnection({ id: 'ct-9', name: 'CT9', protocol: 'DICOM', transport: 'tcp', state: 'disconnected' });
+  const rows = await devices.list();
+  assert.equal(rows.filter((d) => d.id === 'ct-9').length, 1);
+  assert.equal(rows.find((d) => d.id === 'ct-9')?.state, 'disconnected');
+
+  // Config removal drops the row; unknown ids report false.
+  assert.equal(await devices.remove('ct-9'), true);
+  assert.equal(await devices.get('ct-9'), undefined);
+  assert.equal(await devices.remove('ct-9'), false);
+  assert.equal(await devices.remove('mr-9'), false);
+
+  await pool.query("DELETE FROM devices WHERE id = 'ct-9'");
+});

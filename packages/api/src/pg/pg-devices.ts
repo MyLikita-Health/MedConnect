@@ -115,6 +115,11 @@ export class PostgresDeviceRegistry implements DeviceBackend {
     }
     return { total, connected, offline };
   }
+
+  async remove(id: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(`DELETE FROM devices WHERE id = $1`, [id]);
+    return (rowCount ?? 0) > 0;
+  }
 }
 
 function rowToDevice(row: DeviceRow): DeviceRecord {

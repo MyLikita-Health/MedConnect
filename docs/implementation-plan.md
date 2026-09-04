@@ -1510,10 +1510,17 @@ of C1–C6 is composition, not new protocol work):
    Orthanc — beside the routing outcome: status, destination(s), routing
    timeline, DLQ retry) — and **Orthanc health as a device**: every monitor
    poll outcome flips the `orthanc` device row (protocol DICOM · transport
-   api) connected/disconnected + bumps lastSeen in the SAME device-state
+   api) connected/disconnected + bumps lastSeen in   the SAME device-state
    registry the wire gateways auto-register into, so the Devices panel shows
-   the imaging server's health like any modality (PRD §32–33). Modality-level
-   health derived from Orthanc's modality list stays a later extension.
+   the imaging server's health like any modality (PRD §32–33).
+   Modality-level health ships the same way: a ModalityMonitor
+   (C-ECHO every MODALITY_POLL_MS, default 30s) lists the DICOM modalities
+   Orthanc has configured and probes each — every outcome flips that
+   modality's device row (protocol DICOM) and feeds the existing
+   device-offline alerting, so the Devices panel tracks the whole modality
+   list, and rows auto-drop when a modality is removed from Orthanc's config
+   (registry remove added to both the memory + PG backends). A down Orthanc
+   (list failure) reports nothing and the last-known rows stand.
 5. **M3.5 — Orthanc lifecycle (C5)**: compose packaging + upgrade path, the
    §7.5.5 AGPL boundary doc, optional customer-provided Orthanc — **decision
    D10** (bundled vs customer-provided) resolves here.
