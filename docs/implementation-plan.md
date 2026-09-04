@@ -1112,17 +1112,62 @@ semantics mean no per-message paging.
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
 gated on field access (risk R2) only.
 
-### 13.15 Workstream B — HL7 v2 lab engine: kickoff survey
+### 13.15 Workstream B — HL7 v2 lab engine: kickoff survey + status
 
-Next code workstream (not started). B is the biggest remaining Phase-1
-capability: today the platform speaks ASTM inbound and HTTP/console outbound
-only — there is no MLLP framing, no HL7 parser/serializer, and no translator
-anywhere in `packages/` (the `Protocol` union in `message.ts`, the zod
-`device_profileSchema.protocol` enum, and this plan are the only places HL7
-exists). The good news from the codebase survey: **everything downstream of
-canonicalization is already protocol-blind**, so B is "build a sibling protocol
-layer mirroring `@integration-hub/astm` + two new connection points", not a
-core rework. Survey findings, mapped onto the B1–B4 deliverables:
+**Status (B1–B2b shipped, Sept 2026).** The survey below (written pre-build)
+mapped B onto this codebase; the inbound leg is now real:
+
+1. ✅ **B1 — MLLP framing + sessions + application ACK** (D7 parser adoption,
+   framing/ACK, wire sessions): `@integration-hub/hl7` ships `MllpServer` /
+   `MllpSession` (per-connection decode → `onMessage` → AA/AE/AR in message
+   order, TCP or TLS), `MllpClient` (send + await ACK), `wrapMessage` /
+   `MllpDecoder`, and `buildAck` (MSH^ACK, MSA-2 echoes the original
+   control id). Parser decision **D7 resolved — `hl7v2` (panates, MIT)
+adopted**, declared with `hl7v2-dictionary`; the spike's golden corpus
+   (`parser-substrate.test.ts`) pins the substrate contract (ORU/ADT
+   2.3.1–2.5.1, dictionary-correct unescape/repetition reads, typed
+   `HL7Error` on garbage) and records the design constraint that
+   `toHL7String()` normalizes datatypes — output is never byte-round-
+   tripped through it.
+2. ✅ **B2a — ORU^R01 → canonical translator** (`hl7ToCanonical`): PID/OBR
+   (+ORC fallback)/OBX map to `LabPayload` mirroring `astmToCanonical`
+   semantics (incl. code mapping + `originalTestCode`); any issue returns
+   `payload: null` + reasons — never dropped. V1 limits documented: ORU-only
+   triggers, single order group (multi-OBR flagged), no SPM so `sampleId`
+   unset.
+3. ✅ **B2b — inbound wiring** (`Hl7Gateway` in `@integration-hub/hl7`):
+   MLLP in → raw parse (viewer records) → device id from the MSH sender →
+   translate → dispatcher sink → ACK (AA on accept, AR + reasons when the
+   content cannot be canonicalized but is still persisted FAILED, AE on a
+   persistence failure). `startHub` starts it alongside `AstmGateway` when
+   `hl7Port`/`HL7_PORT`/`--hl7-port` is set (opt-in), sharing the dispatcher
+   sink, mappings, TLS and the device-state/device-offline alert seam.
+   Simulator: `Hl7OruSimulator` + `npm run simulate:hl7`; `npm run
+   demo:hl7` runs the full loop (register order → 2 matched + 1 stray ORU →
+   HELD review → release → all ROUTED, AA acks). Dispatcher integration
+   tests prove HL7 reaches ROUTED and resends are deduped exactly like
+   ASTM.
+4. Test status: `npm test` = 230 (214 pass / 16 DB-gated skip); suites green
+   incl. the new hl7 package + server integration tests.
+
+Remaining B: **B2c** inbound ORM/ADT → `OrderRegistry` feed (closes the LIS
+seam, replaces manual `POST /api/v1/orders`); **B3** outbound —
+`canonicalToHl7` serializer + an `hl7` destination kind + outbound connection
+manager (first real outbound beyond HTTP; order download §6.4); **B4** HL7
+segment profiles + goldens-in-CI.
+
+---
+
+The survey below was written at kickoff, before any of the above shipped. B
+was the biggest remaining Phase-1 capability: the platform spoke ASTM inbound
+and HTTP/console outbound only — no MLLP framing, no HL7 parser/serializer,
+and no translator anywhere in `packages/` (the `Protocol` union in
+`message.ts`, the zod `device_profileSchema.protocol` enum, and this plan
+were the only places HL7 existed). The good news from the codebase survey:
+**everything downstream of canonicalization was already protocol-blind**, so
+B is "build a sibling protocol layer mirroring `@integration-hub/astm` + two
+new connection points", not a core rework. Survey findings, mapped onto the
+B1–B4 deliverables:
 
 **Reuse as-is (no changes needed).** The canonical model (`LabPayload` in
 `packages/shared/src/model.ts`) maps 1:1 onto PID / ORC+OBR / OBX — the PRD
@@ -1202,13 +1247,14 @@ version-stamp / `onDrift` seams first — it gets B2 testable now — and
 generalize to the §6.1 registry when a third inbound protocol (orders-down or
 FHIR) actually arrives.
 
-**Suggested sequencing.** (1) B1 + B2-inbound-ORU end-to-end (new `hl7`
-package, `Hl7Gateway` feeding the existing `Dispatcher`) — a real
-"analyzer middleware speaks HL7" demo with zero core changes; (2) B3 outbound
-ORM/ORU as a destination kind — first real outbound beyond HTTP; (3) inbound
-ORM/ADT → `OrderRegistry` feed — closes the LIS seam; (4) B4 profile
-generalization + HL7 conformance last. Every step keeps both suites green
-(`npm test` / `npm run test:db`) and demo-able in memory and Postgres.
+**Suggested sequencing.** (1) ✅ **done** — B1 + B2-inbound-ORU end-to-end
+(`@integration-hub/hl7` framing/sessions/translator + `Hl7Gateway` in
+`startHub`, `simulate:hl7`/`demo:hl7`, status above); (2) ⬜ B3 outbound
+ORM/ORU as an `hl7` destination kind — first real outbound beyond HTTP;
+(3) ⬜ inbound ORM/ADT → `OrderRegistry` feed — closes the LIS seam;
+(4) ⬜ B4 profile generalization + HL7 conformance last. Each step keeps both
+suites green (`npm test` / `npm run test:db`) and demo-able in memory and
+Postgres.
 
 ---
 
