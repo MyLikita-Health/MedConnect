@@ -47,7 +47,8 @@ replace them under risk R2). Kickoff survey + status: plan §13.15. Next:
 **imaging/DICOM (M3)** — kickoff survey + the M3.1 Orthanc adapter scaffold,
 the M3.2 MWL worklist client, and M3.3 storage routing (performed studies
 through the dispatcher + Orthanc peer forwarding to a PACS archive) are in
-(plan §13.16) — then M3.4 console/failure, FHIR/webhooks, multi-tenancy.
+(plan §13.16) — M3.4 console/failure (DLQ retry + radiology console) is in
+too — then M3.5 packaging, FHIR/webhooks, multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -344,10 +345,13 @@ without touching the protocol layer.
    retry/backoff and every attempt is recorded. Success ends `ROUTED`;
    exhausted retries (or pipeline-validation failures) go to the
    **dead-letter queue** (`FAILED` + `dlqAt`) — never dropped. The viewer
-   shows the whole timeline; DLQ messages can be replayed with
-   `POST /api/v1/messages/:id/replay` or retired with `…/discard` (PRD §23);
+   shows the whole timeline; DLQ messages can be **retried** (requeued under
+   the current route rules — a fixed destination now routes) with
+   `POST /api/v1/messages/:id/retry` or retired with `…/discard` (PRD §23);
    HELD messages are reviewed and released with
-   `POST /api/v1/messages/:id/release`.
+   `POST /api/v1/messages/:id/release`. The console's radiology panels
+   (M3.4) surface the Orthanc worklist, performed-study routing status, and a
+   per-study Retry on `FAILED` imaging messages.
 
 ## REST API (PRD §36)
 
@@ -361,6 +365,7 @@ without touching the protocol layer.
 | GET | `/api/v1/messages?status=&deviceId=&dlq=&limit=` | Messages, newest first (PRD §24) |
 | GET | `/api/v1/messages/:id` | Message detail incl. raw, parsed, canonical, timeline |
 | POST | `/api/v1/messages/:id/replay` | Re-run a message through the pipeline |
+| POST | `/api/v1/messages/:id/retry` | Retry a DLQ'd message under current route rules (M3.4; 409 if not DLQ'd) |
 | POST | `/api/v1/messages/:id/discard` | Retire a DLQ message (terminal `DISCARDED`) |
 | GET | `/api/v1/dlq` | Dead-letter queue (PRD §23) |
 | GET | `/api/v1/held` | Exception queue: messages held for review (PRD §27–28) |
@@ -607,7 +612,7 @@ pipeline canonicalizes correctly for both it and the reference layout.
   library (`goldens/hl7-b4-vendor-variants.json`, `goldens/hl7-adt-admissions.json`)
   and run under `npm test` by the HL7 conformance runner; real vendor field
   transcripts replace the synthetic corpus under risk R2 (plan §13.15).
-  The **imaging side is live (M3.1 + M3.2 + M3.3)** — canonical imaging
+  The **imaging side is live (M3.1 → M3.4)** — canonical imaging
   metadata shapes in shared + the `@integration-hub/dicom` Orthanc REST
   adapter plus the **MWL worklist client** (`sync` registry orders into the
   worklist idempotently, `pollPerformed` finds performed studies by
@@ -626,7 +631,14 @@ pipeline canonicalizes correctly for both it and the reference layout.
   `npm run demo:dicom` (adapter), `npm run demo:mwl` (the real hub's monitor)
   and `npm run demo:routing` (metadata routed + pixels archived against two
   real containers) — `docker compose up -d --build orthanc && docker compose
-  up -d pacs` (plan §13.16).
+  up -d pacs` (plan §13.16). **M3.4 failure handling + radiology console**: a
+  dead-lettered study is retried under the CURRENT route rules
+  (`POST /api/v1/messages/:id/retry` — dispatcher requeue, no dedup wall,
+  DLQ marker cleared; imaging events retry through `hub.imaging`, lab
+  through the main dispatcher), and the console shows the **Orthanc
+  worklist** (sync totals + live items + poll errors) and **performed-study
+  routing** (ROUTED/DUPLICATE/FAILED counts with per-study Retry) whenever
+  `ORTHANC_URL` is set.
 - The expected-order registry now fills from the wire: inbound **ORM^O01**
   registers orders (B2c, closes the "real LIS master feed" gap), and
   **ADT^A01/A04/A08 patient admissions** register in the admission registry

@@ -17,11 +17,12 @@ class FakeStore implements DeliveryStore {
     this.messages.set(message.id, structuredClone(message));
   }
 
-  async mark(id: string, status: MessageStatus, note?: string, fields?: { dlqAt?: string; duplicateOf?: string; match?: MessageMatch }): Promise<void> {
+  async mark(id: string, status: MessageStatus, note?: string, fields?: { dlqAt?: string; clearDlq?: boolean; duplicateOf?: string; match?: MessageMatch }): Promise<void> {
     const message = this.messages.get(id);
     if (!message) throw new Error(`mark: unknown message ${id}`);
     message.status = status;
     if (fields?.dlqAt) message.dlqAt = fields.dlqAt;
+    if (fields?.clearDlq) delete message.dlqAt;
     if (fields?.duplicateOf) message.duplicateOf = fields.duplicateOf;
     if (fields?.match) message.match = fields.match;
     message.timeline.push({ stage: status, at: new Date().toISOString(), note });
@@ -158,6 +159,84 @@ test('dispatcher sends to DLQ after attempts are exhausted', async (t) => {
   assert.deepEqual(store.attempts.filter((a) => a.messageId === 'm1').map((a) => a.status), ['FAILED', 'FAILED', 'FAILED']);
   assert.ok(got.errors.length >= 0); // DLQ note lives in the timeline
   assert.ok(got.timeline.some((e) => e.note?.includes('DLQ')));
+});
+
+test('retry re-enters a DLQ message and routes once the destination is fixed', async (t) => {
+  const broken = await startHttp(100); // always 503
+  t.after(() => broken.close());
+  const healthy = await startHttp(0); // 200 immediately
+  t.after(() => healthy.close());
+  const routes = new InMemoryRouteStore();
+  const brokenDest = httpDestination(`http://127.0.0.1:${broken.port}/hook`, 2);
+  await routes.upsertDestination(brokenDest);
+  await routes.upsertRule({ id: 'r1', destinationId: 'lis-http', priority: 100, enabled: true });
+
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({ store, dedup: new InMemoryDedupStore(), routes, pollMs: 5, sleep: () => Promise.resolve() });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'FAILED' && store.messages.get('m1')!.dlqAt !== undefined);
+  assert.ok(store.messages.get('m1')!.dlqAt);
+
+  // The operator fixes the routing: drop the broken destination rule, point
+  // the message at a healthy one — retry resolves CURRENT rules (no dedup wall).
+  await routes.deleteRule('r1');
+  await routes.upsertDestination(httpDestination(`http://127.0.0.1:${healthy.port}/hook`, 2));
+  await routes.upsertRule({ id: 'r2', destinationId: 'lis-http', priority: 100, enabled: true });
+
+  assert.equal(await dispatcher.retry('m1'), true);
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+  const routed = store.messages.get('m1')!;
+  assert.equal(routed.status, 'ROUTED');
+  assert.equal(routed.dlqAt, undefined, 'the DLQ marker is cleared on retry');
+  assert.ok(healthy.requests.length >= 1);
+  assert.ok(routed.timeline.some((e) => e.note?.includes('retried from the DLQ')));
+});
+
+test('retry rejects messages that are not dead-lettered failures', async (t) => {
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({ store, dedup: new InMemoryDedupStore(), routes: new InMemoryRouteStore(), pollMs: 5, sleep: () => Promise.resolve() });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  // A delivered (ROUTED) message is not retryable — nothing to re-run.
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'ROUTED');
+  assert.equal(await dispatcher.retry('m1'), false);
+
+  // A pipeline-FAILED message parked in the DLQ IS retryable; an unknown id is not.
+  const failed = message('m2', undefined, 'FAILED');
+  failed.errors = ['Missing order identifier'];
+  await dispatcher.record(failed);
+  await waitFor(() => store.messages.get('m2')!.dlqAt !== undefined);
+  assert.equal(await dispatcher.retry('m2'), true);
+  await waitFor(() => store.messages.get('m2')?.status === 'ROUTED');
+  assert.equal(await dispatcher.retry('ghost'), false);
+});
+
+test('retry of a still-broken destination re-DLQs instead of silently dropping', async (t) => {
+  const broken = await startHttp(100);
+  t.after(() => broken.close());
+  const routes = new InMemoryRouteStore();
+  await routes.upsertDestination(httpDestination(`http://127.0.0.1:${broken.port}/hook`, 2));
+  await routes.upsertRule({ id: 'r1', destinationId: 'lis-http', priority: 100, enabled: true });
+
+  const store = new FakeStore();
+  const dispatcher = new Dispatcher({ store, dedup: new InMemoryDedupStore(), routes, pollMs: 5, sleep: () => Promise.resolve() });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message('m1'));
+  await waitFor(() => store.messages.get('m1')?.status === 'FAILED');
+  assert.equal(await dispatcher.retry('m1'), true);
+  // The destination is still down — the retried message goes back to the DLQ
+  // with a fresh attempt budget, never silently dropped.
+  await waitFor(() => store.messages.get('m1')?.status === 'FAILED');
+  const got = store.messages.get('m1')!;
+  assert.ok(got.dlqAt);
+  assert.ok(got.timeline.some((e) => e.note?.includes('retried from the DLQ')));
 });
 
 test('duplicates are detected and marked, not delivered twice', async (t) => {

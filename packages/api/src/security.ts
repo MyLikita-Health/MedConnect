@@ -89,6 +89,7 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/audit': 'audit:read',
   // Message lifecycle actions (operator and up)
   'POST /api/v1/messages/:id/replay': 'messages:write',
+  'POST /api/v1/messages/:id/retry': 'messages:write',
   'POST /api/v1/messages/:id/discard': 'messages:write',
   'POST /api/v1/messages/:id/release': 'messages:write',
   // Device + integration configuration (engineer and up)

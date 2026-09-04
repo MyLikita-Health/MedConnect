@@ -177,6 +177,69 @@ test('an hl7 destination on an imaging message fails into the DLQ (no HL7 v2 for
   assert.match(failed.errors.join(' ') + failed.timeline.map((e) => e.note ?? '').join(' '), /unknown destination kind|hl7/i);
 });
 
+test('M3.4 replay: a dead-lettered study retries through the API and routes once the rule is fixed', async (t) => {
+  const orthanc = await startMockOrthanc();
+  t.after(() => orthanc.close());
+  const hub = await startHubWithOrthanc(t, orthanc.base);
+
+  // A misconfigured rule DLQs the study (hl7 has no imaging form)…
+  await hub.routes.upsertDestination({
+    id: 'lis',
+    kind: 'hl7',
+    name: 'LIS over MLLP',
+    hl7: { host: '127.0.0.1', port: 1 },
+    enabled: true,
+    retry: { maxAttempts: 1, backoffMs: 0, backoffFactor: 1, jitter: false },
+  });
+  await hub.routes.upsertRule({ id: 'img-to-lis', destinationId: 'lis', deviceId: 'orthanc', priority: 1, enabled: true });
+
+  await performStudy(hub, orthanc, 'ACC-405');
+  await waitFor(async () => (await hub.store.list({ deviceId: 'orthanc' }))[0]?.status === 'FAILED', 'study DLQs');
+  const failed = (await hub.store.list({ deviceId: 'orthanc' }))[0]!;
+  assert.ok(failed.dlqAt);
+
+  // … the operator fixes routing (webhook now receives imaging events)…
+  const received: CanonicalMessage[] = [];
+  const webhook = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      received.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as CanonicalMessage);
+      res.writeHead(200);
+      res.end('ok');
+    });
+  });
+  await new Promise<void>((resolve) => webhook.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => webhook.close(() => resolve())));
+  await hub.routes.deleteRule('img-to-lis');
+  await hub.routes.upsertDestination({
+    id: 'archive-webhook',
+    kind: 'http',
+    name: 'Archive webhook',
+    url: `http://127.0.0.1:${(webhook.address() as AddressInfo).port}/studies`,
+    enabled: true,
+    retry: { maxAttempts: 1, backoffMs: 0, backoffFactor: 1, jitter: false },
+  });
+  await hub.routes.upsertRule({ id: 'img-archive', destinationId: 'archive-webhook', deviceId: 'orthanc', priority: 1, enabled: true });
+
+  // … and replays the failed study through the API — it routes under the
+  // CURRENT rules (no dedup wall, no re-canonicalization needed).
+  const res = await fetch(`http://127.0.0.1:${hub.ports.http}/api/v1/messages/${failed.id}/retry`, { method: 'POST' });
+  assert.equal(res.status, 200, `retry accepted (${await res.text()})`);
+  await waitFor(() => received.length === 1, 'the retried study reaches the webhook');
+  assert.equal(received[0]!.imaging?.accession, 'ACC-405');
+  await waitFor(async () => (await hub.store.list({ deviceId: 'orthanc' }))[0]?.status === 'ROUTED', 'retried study ROUTED');
+  const routed = (await hub.store.list({ deviceId: 'orthanc' }))[0]!;
+  assert.equal(routed.dlqAt, undefined, 'the DLQ marker is cleared');
+  assert.ok(routed.timeline.some((e) => e.note?.includes('retried from the DLQ')));
+
+  // Retrying a message that is not dead-lettered is a 409, unknown id a 404.
+  const notDlq = await fetch(`http://127.0.0.1:${hub.ports.http}/api/v1/messages/${routed.id}/retry`, { method: 'POST' });
+  assert.equal(notDlq.status, 409);
+  const missing = await fetch(`http://127.0.0.1:${hub.ports.http}/api/v1/messages/ghost/retry`, { method: 'POST' });
+  assert.equal(missing.status, 404);
+});
+
 test('full chain: an ORM order over MLLP syncs to the worklist; the performed study flows back as a routed hub message', async (t) => {
   // Real startHub: MLLP gateway (B2c orders feed) + the MWL monitor + the
   // imaging dispatcher. Nothing is registered programmatically — the LIS

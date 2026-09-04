@@ -1486,9 +1486,25 @@ of C1–C6 is composition, not new protocol work):
      (performed-study messages by status — ROUTED/DUPLICATE/FAILED — from
      the store; both `api:read`). Operators watch worklist sync + study
      routing without console logs.
-4. **M3.4 — Failure handling + radiology console (C4/C6)**: failed studies in
-   the exception queue with replay; modality/Orthanc health as devices;
-   console views (modality list, worklist status, failed studies, routing).
+4. ✅ **M3.4 — Failure handling + radiology console (C4/C6)**: failed studies
+   get a real replay path. `Dispatcher.retry(id)` requeues a dead-lettered
+   (FAILED + dlq) message under the CURRENT route rules — no dedup wall (a
+   requeue is operator-initiated, unlike `record`), the DLQ marker clears on
+   requeue (store `MarkFields.clearDlq`, memory + PG) and a still-broken
+   destination re-DLQs with a fresh attempt budget. Exposed as
+   `POST /api/v1/messages/:id/retry` (messages:write; 409 when not DLQ'd),
+   wired in startHub to the right dispatcher by message kind — imaging
+   messages are hub-originated with no records to re-canonicalize, so they
+   retry through the imaging dispatcher (`hub.imaging`) rather than the lab
+   gateway replay. The console (ui.ts) gains the radiology panels — Orthanc
+   worklist (status + live items) and performed-study routing (per-status
+   counts + Retry on FAILED rows), hidden when ORTHANC_URL is off — and a
+   FAILED message detail shows “Retry from DLQ” instead of the lab-only
+   replay. Pinned by core dispatcher tests (retry routes after a rule fix,
+   non-DLQ rejected, re-DLQ on persistent failure), a DB-gated PG test
+   (dlq_at actually clears in the row), a server test through the real API
+   (DLQ'd study → rule fixed → retry → webhook ROUTED), and the UI smoke.
+   Remaining from C6: modality/Orthanc health surfaced as devices.
 5. **M3.5 — Orthanc lifecycle (C5)**: compose packaging + upgrade path, the
    §7.5.5 AGPL boundary doc, optional customer-provided Orthanc — **decision
    D10** (bundled vs customer-provided) resolves here.
@@ -1501,10 +1517,11 @@ fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
 route with failure injection — the M3 exit drill.
 
 **Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL
-(✅ shipped) → M3.3 storage routing (✅ shipped) → M3.4 console+failure →
-M3.5 packaging; every slice keeps `npm test` / `npm run test:db` green; the
-§8.1 radiology-pilot gate closes M3. **Status: kickoff survey + M3.1 + M3.2 +
-M3.3 done**; failure handling + radiology console (M3.4) is next.
+(✅ shipped) → M3.3 storage routing (✅ shipped) → M3.4 console+failure
+(✅ shipped) → M3.5 packaging; every slice keeps `npm test` /
+`npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
+**Status: kickoff survey + M3.1 → M3.4 done**; M3.5 packaging next (C5
+source-built plugin for ARM64 hosts, version pinning, AGPL boundary doc).
 
 ---
 

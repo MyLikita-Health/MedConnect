@@ -451,6 +451,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     updates,
     replayHandler: (message) => gateway.replay(message),
     releaseHandler: (id) => dispatcher.release(id),
+    // M3.4 — dead-letter retry: requeue under the CURRENT route rules. Imaging
+    // messages are hub-originated (no records to re-canonicalize), so they
+    // retry through the imaging dispatcher; lab messages through the lab one.
+    retryHandler: async (id) => {
+      const message = await store.get(id);
+      if (!message) return false;
+      if (message.imaging) return imaging ? imaging.dispatcher.retry(id) : false;
+      return dispatcher.retry(id);
+    },
   });
 
   const { port: devicePort } = await gateway.start();

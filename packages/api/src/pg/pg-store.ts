@@ -113,7 +113,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
     await this.pool.query(
       `UPDATE messages
        SET status = $2,
-           dlq_at = COALESCE($3, dlq_at),
+           dlq_at = CASE WHEN $12 THEN NULL ELSE COALESCE($3, dlq_at) END,
            duplicate_of = COALESCE($4, duplicate_of),
            match_status = COALESCE($6, match_status),
            matched_order_id = COALESCE($7, matched_order_id),
@@ -135,6 +135,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
         fields?.match?.strategy ?? null,
         fields?.match?.at ?? null,
         fields?.match?.reason ?? null,
+        fields?.clearDlq ?? false,
       ],
     );
   }

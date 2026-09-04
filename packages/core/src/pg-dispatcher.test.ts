@@ -20,6 +20,7 @@ const M1 = '11111111-1111-4111-8111-111111111111';
 const D1 = '22222222-2222-4222-8222-222222222222';
 const D2 = '33333333-3333-4333-8333-333333333333';
 const DLQ1 = '44444444-4444-4444-8444-444444444444';
+const RT1 = '45454545-4545-4545-8545-454545454545';
 const HELD1 = '55555555-5555-4555-8555-555555555555';
 
 let pool: Pool | undefined;
@@ -156,6 +157,49 @@ test('Postgres dispatcher exhausts retries into the DLQ with attempt history', {
 
   // Cleanup so sibling suites stay isolated.
   await r.deleteDestination('down-lis');
+});
+
+test('Postgres dispatcher retries a DLQ message under current rules and clears dlq_at', { skip: skipReason }, async (t) => {
+  if (!pool || !store || !routes) return skipTest('no pool');
+  const s = store;
+  const r = routes;
+  await r.upsertDestination({
+    id: 'down-lis-rt',
+    kind: 'http',
+    name: 'Down LIS',
+    url: 'http://127.0.0.1:1/hook',
+    enabled: true,
+    retry: { maxAttempts: 2, backoffMs: 1, backoffFactor: 2, jitter: false },
+  });
+  await r.upsertRule({ id: 'pg-rule-rt', destinationId: 'down-lis-rt', priority: 100, enabled: true });
+
+  const dispatcher = new Dispatcher({ store: s, dedup: new PostgresDedupStore(pool), routes: r, pollMs: 5, sleep: () => Promise.resolve() });
+  dispatcher.start();
+  t.after(() => dispatcher.stop());
+
+  await dispatcher.record(message(RT1));
+  await waitFor(async () => (await s.get(RT1))?.status === 'FAILED');
+
+  // The operator fixes routing: drop the broken rule — retry resolves the
+  // CURRENT rules and the PG row's dlq_at must actually clear (CASE WHEN $12).
+  await r.deleteRule('pg-rule-rt');
+  await r.deleteDestination('down-lis-rt');
+  assert.equal(await dispatcher.retry(RT1), true);
+  await waitFor(async () => (await s.get(RT1))?.status === 'ROUTED');
+
+  const got = await s.get(RT1);
+  assert.equal(got?.status, 'ROUTED');
+  assert.equal(got?.dlqAt, undefined);
+  const { rows } = await pool.query<{ dlq_at: Date | null }>('SELECT dlq_at FROM messages WHERE id = $1', [RT1]);
+  assert.equal(rows[0]?.dlq_at, null, 'dlq_at is cleared in the row');
+  assert.equal((await s.list({ status: 'FAILED', dlq: true })).some((m) => m.id === RT1), false);
+
+  // Cleanup so sibling suites stay isolated.
+  await pool.query('DELETE FROM results WHERE message_id = $1', [RT1]);
+  await pool.query('DELETE FROM orders WHERE message_id = $1', [RT1]);
+  await pool.query('DELETE FROM patients WHERE id = $1', ['pg-pat-' + RT1]);
+  await pool.query('DELETE FROM messages WHERE id = $1', [RT1]);
+  await pool.query('DELETE FROM message_attempts WHERE message_id = $1', [RT1]);
 });
 
 test('Postgres route store round-trips an hl7 destination config', { skip: skipReason }, async () => {

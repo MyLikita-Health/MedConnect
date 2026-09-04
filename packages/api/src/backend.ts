@@ -14,6 +14,8 @@ export type DeviceKind = 'memory' | 'postgres';
 
 export interface MarkFields {
   dlqAt?: string;
+  /** Clear the DLQ marker (an operator retried a dead-lettered message). */
+  clearDlq?: boolean;
   duplicateOf?: string;
   /** Patient/order matching outcome (PRD §27, E6). */
   match?: MessageMatch;

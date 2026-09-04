@@ -122,6 +122,12 @@ export interface ApiServerOptions {
   /** Wired to the dispatcher so held messages can be released into delivery. */
   releaseHandler?: (id: string) => boolean | Promise<boolean>;
   /**
+   * Wired to the dispatcher( s) so dead-lettered messages can be retried:
+   * requeued under the current route rules (M3.4 imaging failure handling;
+   * lab messages too). Returns false when the message is not DLQ'd.
+   */
+  retryHandler?: (id: string) => boolean | Promise<boolean>;
+  /**
    * API-key store. When provided, every /api/v1 route (except health) is
    * behind key auth + per-role scopes (ROUTE_SCOPES) and every mutating
    * action is written to the audit store. When omitted, auth is disabled
@@ -459,6 +465,18 @@ export class ApiServer {
       if (!message) return reply.code(404).send({ error: 'message not found' });
       const released = await this.opts.releaseHandler(id);
       if (!released) return reply.code(409).send({ error: 'message is not in the HELD queue' });
+      return reply.code(200).send({ ok: true, id });
+    });
+
+    // Dead-letter retry (M3.4): requeue a FAILED message under the CURRENT
+    // route rules — an operator fixed the destination, so delivery now routes.
+    app.post('/api/v1/messages/:id/retry', async (req, reply) => {
+      if (!this.opts.retryHandler) return reply.code(501).send({ error: 'retry not wired' });
+      const { id } = req.params as { id: string };
+      const message = await this.opts.store.get(id);
+      if (!message) return reply.code(404).send({ error: 'message not found' });
+      const retried = await this.opts.retryHandler(id);
+      if (!retried) return reply.code(409).send({ error: 'message is not a dead-lettered failure' });
       return reply.code(200).send({ ok: true, id });
     });
 

@@ -68,6 +68,7 @@ export class MessageStore implements MessageSink {
     if (!message) return;
     message.status = status;
     if (fields?.dlqAt) message.dlqAt = fields.dlqAt;
+    if (fields?.clearDlq) delete message.dlqAt;
     if (fields?.duplicateOf) message.duplicateOf = fields.duplicateOf;
     if (fields?.match) message.match = fields.match;
     message.timeline.push({ stage: status, at: new Date().toISOString(), note });

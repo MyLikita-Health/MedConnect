@@ -29,7 +29,7 @@ export interface DeliveryStore {
     id: string,
     status: MessageStatus,
     note?: string,
-    fields?: { dlqAt?: string; duplicateOf?: string; match?: MessageMatch },
+    fields?: { dlqAt?: string; clearDlq?: boolean; duplicateOf?: string; match?: MessageMatch },
   ): void | Promise<void>;
   recordAttempt(attempt: MessageAttempt): void | Promise<void>;
   /** Used by `release()` to re-enter a held message into delivery. */
@@ -174,6 +174,28 @@ export class Dispatcher implements MessageSink {
     this.queue.push({ message, destinations });
     this.opts.log?.(`[dispatcher] ${id} released into delivery`);
     await this.opts.events?.onRelease?.(id);
+    return true;
+  }
+
+  /**
+   * Operator action on the dead-letter queue (PRD §23): re-enters a FAILED
+   * (DLQ'd) message into delivery under the CURRENT route rules — e.g. after
+   * a destination came back up or a bad rule was fixed, the retry routes
+   * instead of re-failing. Unlike `record()` this deliberately skips dedup
+   * (operator-initiated re-delivery, like `release`). The DLQ marker is
+   * cleared on requeue; if delivery fails again the message re-DLQs. Returns
+   * false when the message is not a dead-lettered failure.
+   */
+  async retry(id: string): Promise<boolean> {
+    if (!this.opts.store.get) return false;
+    const message = await this.opts.store.get(id);
+    if (!message || message.status !== 'FAILED' || !message.dlqAt) return false;
+    await this.opts.store.mark(id, 'QUEUED', 'retried from the DLQ by operator', { clearDlq: true });
+    message.status = 'QUEUED';
+    delete message.dlqAt;
+    const destinations = await resolveDestinations(this.opts.routes, message);
+    this.queue.push({ message, destinations });
+    this.opts.log?.(`[dispatcher] ${id} retried from the DLQ into delivery`);
     return true;
   }
 

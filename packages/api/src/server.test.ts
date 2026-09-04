@@ -87,6 +87,13 @@ test('replay endpoint returns 501 when no handler is wired', async (t) => {
   assert.equal(res.status, 501);
 });
 
+test('dead-letter retry endpoint returns 501 when no handler is wired (M3.4)', async (t) => {
+  const { base, store } = await startApi(t);
+  store.record(message({ id: 'm1' }));
+  const res = await fetch(`${base}/api/v1/messages/m1/retry`, { method: 'POST' });
+  assert.equal(res.status, 501);
+});
+
 test('device registration endpoint creates and lists devices', async (t) => {
   const { base } = await startApi(t);
   const res = await fetch(`${base}/api/v1/devices`, {
