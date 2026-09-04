@@ -18,7 +18,7 @@ import type {
 import type { MarkFields, StoreBackend } from '../backend.js';
 import type { MessageFilter, StoreStats } from '../store.js';
 
-const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at`;
+const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at, match_reason`;
 
 interface MessageRow {
   id: string;
@@ -39,6 +39,7 @@ interface MessageRow {
   matched_patient_id: string | null;
   match_strategy: string | null;
   match_at: Date | string | null;
+  match_reason: string | null;
 }
 
 export class PostgresMessageStore implements MessageSink, StoreBackend {
@@ -116,6 +117,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
            matched_patient_id = COALESCE($8, matched_patient_id),
            match_strategy = COALESCE($9, match_strategy),
            match_at = COALESCE($10, match_at),
+           match_reason = COALESCE($11, match_reason),
            timeline = timeline || $5::jsonb
        WHERE id = $1`,
       [
@@ -129,6 +131,7 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
         fields?.match?.matchedPatientId ?? null,
         fields?.match?.strategy ?? null,
         fields?.match?.at ?? null,
+        fields?.match?.reason ?? null,
       ],
     );
   }
@@ -270,6 +273,7 @@ function rowToMessage(row: MessageRow): CanonicalMessage {
           matchedOrderId: row.matched_order_id ?? undefined,
           matchedPatientId: row.matched_patient_id ?? undefined,
           strategy: row.match_strategy ?? undefined,
+          reason: row.match_reason ?? undefined,
           at: new Date(row.match_at ?? new Date()).toISOString(),
         }
       : undefined,

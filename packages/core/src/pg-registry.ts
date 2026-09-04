@@ -12,7 +12,7 @@ interface OrderRow {
   sample_id: string | null;
   tests: unknown;
   status: string;
-  received_at: Date | string;
+  created_at: Date | string;
 }
 
 export class PostgresOrderRegistry implements OrderRegistry {
@@ -30,7 +30,7 @@ export class PostgresOrderRegistry implements OrderRegistry {
       clauses.push(`sample_id = $${params.length}`);
     }
     const { rows } = await this.pool.query<OrderRow>(
-      `SELECT id, patient_id, sample_id, tests, status, received_at
+      `SELECT id, patient_id, sample_id, tests, status, created_at
        FROM order_registry WHERE ${clauses.join(' AND ')}`,
       params,
     );
@@ -57,8 +57,8 @@ export class PostgresOrderRegistry implements OrderRegistry {
 
   async list(): Promise<ExpectedOrder[]> {
     const { rows } = await this.pool.query<OrderRow>(
-      `SELECT id, patient_id, sample_id, tests, status, received_at
-       FROM order_registry ORDER BY received_at DESC`,
+      `SELECT id, patient_id, sample_id, tests, status, created_at
+       FROM order_registry ORDER BY created_at DESC`,
     );
     return rows.map(rowToOrder);
   }
@@ -71,6 +71,7 @@ function rowToOrder(row: OrderRow): ExpectedOrder {
     sampleId: row.sample_id ?? undefined,
     tests: (row.tests as string[]) ?? [],
     status: row.status as ExpectedOrder['status'],
-    receivedAt: new Date(row.received_at).toISOString(),
+    // created_at is when the LIS registered the expected order.
+    receivedAt: new Date(row.created_at).toISOString(),
   };
 }
