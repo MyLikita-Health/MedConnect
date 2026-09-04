@@ -63,6 +63,7 @@ export function renderUi(): string {
 <header>
   <h1>Integration Hub <span class="muted">// management console</span></h1>
   <span class="badge" id="health">connecting…</span>
+  <span class="badge" id="version" style="display:none"></span>
   <span class="badge role" id="role" style="display:none"></span>
   <span style="flex:1"></span>
   <button id="keybtn" style="display:none" onclick="showSignIn()">API key</button>
@@ -88,6 +89,18 @@ export function renderUi(): string {
     <div class="panel">
       <h2>Alerts <span class="muted" id="alert-count"></span></h2>
       <table id="alerts"><thead><tr><th>Kind</th><th>State</th><th>Message</th><th>Fired</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="panel" id="updates-panel" style="display:none">
+      <h2>Software updates</h2>
+      <p id="upd-running" class="muted"></p>
+      <p id="upd-note" class="muted"></p>
+      <table id="upd-history"><thead><tr><th>When</th><th>Event</th><th>Version</th><th>Detail</th></tr></thead><tbody></tbody></table>
+      <div id="upd-actions" style="display:none;margin-top:8px">
+        <button onclick="updCheck()">Check for updates</button>
+        <button onclick="updApply()">Apply available</button>
+        <button onclick="updRollback()">Roll back</button>
+      </div>
+      <p class="muted" id="upd-result" style="margin-bottom:0"></p>
     </div>
   </section>
   <section>
@@ -178,11 +191,14 @@ async function refresh() {
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
     h.className = 'badge ' + (health.status === 'ok' ? 'ok' : 'off');
+    const vEl = document.getElementById('version');
+    if (health.version) { vEl.textContent = 'v' + health.version; vEl.style.display = 'inline-block'; }
     renderStats(stats);
     renderDevices(devices);
     renderAlerts(alerts);
     renderMessages(messages);
     if (selectedId) renderDetail(selectedId);
+    renderUpdates();
   } catch {
     const h = document.getElementById('health');
     h.textContent = 'offline';
@@ -273,6 +289,55 @@ async function renderDetail(id) {
       '<div><h2>Timeline</h2><ul class="timeline">' + timeline + '</ul></div>' +
     '</div>';
 }
+
+async function renderUpdates() {
+  const panel = document.getElementById('updates-panel');
+  if (!hubKey) { panel.style.display = 'none'; return; }
+  try {
+    const s = await api('/api/v1/updates/status').then(r => r.json());
+    panel.style.display = 'block';
+    const cur = s.current && s.current.release ? s.current.release : s.running;
+    const running = cur ? '<b>v' + esc(cur.version) + '</b>' + (s.current && !s.current.healthy ? ' <span class="status FAILED">transitioning…</span>' : '') : '—';
+    document.getElementById('upd-running').innerHTML = 'Running: ' + running +
+      (s.current && s.current.appliedAt ? ' <span class="muted">(' + new Date(s.current.appliedAt).toLocaleTimeString() + ')</span>' : '');
+    let note = '';
+    if (s.desired) note = '<span class="status DELIVERING">' + esc(s.desired.kind) + ' staged:</span> v' + esc(s.desired.release.version) + ' — the supervisor will swap + health-gate it.';
+    else if (!s.enabled) note = 'not configured (HUB_STATE_DIR / UPDATE_SOURCE / UPDATE_PUBLIC_KEY)';
+    else if (s.supervisor && s.supervisor.alive) note = 'supervised (pid ' + esc(s.supervisor.pid) + ') — signed updates auto-apply with rollback.';
+    else note = 'no supervisor watching — staged updates wait until one attaches.';
+    document.getElementById('upd-note').innerHTML = note;
+    const rows = (s.history || []).slice(0, 6).map(x =>
+      '<tr><td class="muted">' + new Date(x.at).toLocaleTimeString() + '</td>' +
+      '<td><span class="status ' + esc(x.event === 'failed' ? 'FAILED' : 'ok') + '">' + esc(x.event) + '</span></td>' +
+      '<td>' + esc(x.version || '—') + '</td><td class="muted">' + esc(x.reason || '') + '</td></tr>').join('');
+    document.getElementById('upd-history').querySelector('tbody').innerHTML = rows ||
+      '<tr><td colspan="4" class="muted">No update events recorded.</td></tr>';
+    const manage = meRole === 'admin';
+    document.getElementById('upd-actions').style.display = manage && s.enabled ? 'block' : 'none';
+  } catch {
+    panel.style.display = 'none';
+  }
+}
+
+async function updPost(action, label) {
+  const result = document.getElementById('upd-result');
+  result.textContent = '';
+  try {
+    const res = await api('/api/v1/updates/' + action, { method: 'POST' });
+    const body = await res.json();
+    if (!res.ok) { result.textContent = label + ' failed: ' + (body.error || res.status); result.className = 'err'; return; }
+    result.textContent = body.staged ? (label + ' staged — ' + (body.release ? 'v' + body.release.version : '') + '; the supervisor applies it.').trim() : (body.reason || label + ' done');
+    result.className = '';
+  } catch (err) {
+    result.textContent = label + ' failed: ' + err.message;
+    result.className = 'err';
+  }
+  await refresh();
+}
+
+function updCheck() { updPost('check', 'Check'); }
+function updApply() { updPost('apply', 'Apply'); }
+function updRollback() { updPost('rollback', 'Rollback'); }
 
 async function replayMessage(id) {
   await api('/api/v1/messages/' + id + '/replay', { method: 'POST' });

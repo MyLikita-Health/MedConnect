@@ -40,5 +40,24 @@ services:
       timeout: 3s
       retries: 10
 
+  # The hub itself, containerized (the facility installer unit — plan §4.2
+  # "Ships as Docker compose"; Dockerfile at repo root). The image tag is the
+  # release the signed-update machinery swaps. Run: npm run up:stack
+  hub:
+    build:
+      context: .
+    image: medconnect-hub:0.1.0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://hub:hub@db:5432/hub
+      HOST: 0.0.0.0
+      HUB_ADMIN_KEY: ihk_docker_demo_001
+    ports:
+      - "3000:3000"
+      # Device port: macOS AirPlay owns the wildcard 5000, so map to host 5001.
+      - "5001:5000"
+
 volumes:
   pgdata:

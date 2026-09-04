@@ -37,13 +37,14 @@ export type ApiScope =
   | 'devices:write' // register devices
   | 'config:write' // destinations/routes, profiles, alert rules, expected orders
   | 'keys:manage' // create/list/delete API keys
-  | 'audit:read'; // view the audit log
+  | 'audit:read' // view the audit log
+  | 'updates:manage'; // check/apply/rollback hub releases (signed)
 
 export const API_KEY_ROLES: readonly ApiKeyRole[] = ['admin', 'engineer', 'operator', 'viewer'];
 
 /** Per-role scope grants (PRD §34 RBAC). `admin` gets everything. */
 export const ROLE_SCOPES: Record<ApiKeyRole, readonly ApiScope[]> = {
-  admin: ['api:read', 'messages:write', 'devices:write', 'config:write', 'keys:manage', 'audit:read'],
+  admin: ['api:read', 'messages:write', 'devices:write', 'config:write', 'keys:manage', 'audit:read', 'updates:manage'],
   engineer: ['api:read', 'messages:write', 'devices:write', 'config:write'],
   operator: ['api:read', 'messages:write'],
   viewer: ['api:read'],
@@ -101,6 +102,12 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   // Key management (admin)
   'POST /api/v1/keys': 'keys:manage',
   'DELETE /api/v1/keys/:id': 'keys:manage',
+  // Release info (read) + signed updates (admin)
+  'GET /api/v1/version': 'api:read',
+  'GET /api/v1/updates/status': 'api:read',
+  'POST /api/v1/updates/check': 'updates:manage',
+  'POST /api/v1/updates/apply': 'updates:manage',
+  'POST /api/v1/updates/rollback': 'updates:manage',
 };
 
 // ---------------------------------------------------------------------------

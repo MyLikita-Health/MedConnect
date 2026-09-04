@@ -9,7 +9,7 @@
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 export interface HubOptions {
@@ -31,6 +31,15 @@ export interface HubOptions {
   adminKey?: string;
   /** Disable API auth entirely (AUTH_DISABLED=1; local/dev only). */
   authDisabled?: boolean;
+  /**
+   * Signed-update state dir (env HUB_STATE_DIR). When set (and the hub runs
+   * under the supervisor) the update agent + /api/v1/updates/* are live.
+   */
+  stateDir?: string;
+  /** Signed-manifest source: https URL, .json path, or dir (env UPDATE_SOURCE). */
+  updateSource?: string;
+  /** PEM update public key (env UPDATE_PUBLIC_KEY) that must sign manifests. */
+  updatePublicKey?: string;
 }
 
 export interface Hub {
@@ -70,6 +79,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
 
   const authDisabled = opts.authDisabled ?? process.env.AUTH_DISABLED === '1';
   const adminKeySecret = opts.adminKey ?? process.env.HUB_ADMIN_KEY;
+  const stateDir = opts.stateDir ?? process.env.HUB_STATE_DIR;
+  const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
+  const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
 
   if (databaseUrl) {
     pool = createDbPool(databaseUrl);
@@ -190,6 +202,16 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     onSessionError: (err) => console.error(`[gateway] session error: ${err.message}`),
   });
 
+  // M2 installer/update: when a state dir is configured, the update agent
+  // reads/writes release state there so the supervisor (which owns the hub
+  // process) can swap + health-gate signed releases. Without a source/public
+  // key the agent is present but disabled (status is still reported).
+  let updates: UpdateAgent | undefined;
+  if (stateDir) {
+    updates = new UpdateAgent({ stateDir, source: updateSource, publicKeyPem: updatePublicKey });
+    console.log(`[updates] agent ${updates.enabled ? 'enabled' : 'present but disabled (set UPDATE_SOURCE + UPDATE_PUBLIC_KEY)'} — state dir ${stateDir}`);
+  }
+
   const api = new ApiServer({
     host,
     port: opts.httpPort ?? 0,
@@ -202,6 +224,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     mappings,
     keys,
     audit,
+    updates,
     replayHandler: (message) => gateway.replay(message),
     releaseHandler: (id) => dispatcher.release(id),
   });

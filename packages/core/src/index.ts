@@ -68,3 +68,34 @@ export {
   type GoldenExpectation,
   type GoldenFile,
 } from './conformance.js';
+export {
+  UpdateAgent,
+  type StageResult,
+  type UpdateAgentOptions,
+  type UpdateCheckResult,
+  type UpdateStatus,
+} from './updates/agent.js';
+export {
+  compareSemver,
+  canonicalizeManifest,
+  generateUpdateKeyPair,
+  isNewerVersion,
+  sha256Hex,
+  signManifest,
+  updateManifestSchema,
+  verifyManifestSignature,
+  type UpdateArtifact,
+  type UpdateKeyPair,
+  type UpdateManifest,
+  type UpdateRelease,
+} from './updates/manifest.js';
+export {
+  UpdateStateDir,
+  type CurrentState,
+  type DesiredState,
+  type HistoryEntry,
+  type HistoryEvent,
+  type PreviousState,
+  type ReleaseSpec,
+} from './updates/state.js';
+export { HubSupervisor, type SupervisorOptions } from './updates/supervisor.js';

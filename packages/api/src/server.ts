@@ -9,7 +9,7 @@
 import net from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CanonicalMessage, MappingTable } from '@integration-hub/shared';
+import { hubVersionInfo, type CanonicalMessage, type MappingTable } from '@integration-hub/shared';
 import {
   DEFAULT_RETRY,
   InMemoryAlertStore,
@@ -21,6 +21,7 @@ import {
   type OrderRegistry,
   type ProfileStore,
   type RouteStore,
+  type UpdateAgent,
 } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
@@ -55,6 +56,12 @@ export interface ApiServerOptions {
   keys?: KeyStore;
   /** Audit log (PRD §30); defaults to an in-memory store when `keys` is set. */
   audit?: AuditStore;
+  /**
+   * Signed-update agent (plan G3 / §4.3). When wired, exposes
+   * /api/v1/updates/* backed by the agent's state dir. When absent the
+   * endpoints report the agent as not configured.
+   */
+  updates?: UpdateAgent;
 }
 
 const createKeySchema = z.object({
@@ -375,6 +382,36 @@ export class ApiServer {
       return reply.code(204).send();
     });
 
+    // Release identity (M2 installer/update: version is the update axis).
+    app.get('/api/v1/version', async () => hubVersionInfo());
+
+    // Signed remote updates (plan G3, M2 gate item). Reads work for anyone;
+    // check/apply/rollback are admin-only (updates:manage scope).
+    app.get('/api/v1/updates/status', async () => {
+      if (!this.opts.updates) {
+        return { enabled: false, reason: 'update agent not configured (set HUB_STATE_DIR / UPDATE_SOURCE / UPDATE_PUBLIC_KEY)' };
+      }
+      return this.opts.updates.status();
+    });
+    app.post('/api/v1/updates/check', async (req, reply) => {
+      if (!this.opts.updates) return reply.code(501).send({ error: 'update agent not configured' });
+      return this.opts.updates.check();
+    });
+    app.post('/api/v1/updates/apply', async (req, reply) => {
+      if (!this.opts.updates) return reply.code(501).send({ error: 'update agent not configured' });
+      const actor = req.auth?.key?.id;
+      const result = await this.opts.updates.apply(actor);
+      if (!result.staged) return reply.code(409).send({ error: result.reason ?? 'update not staged' });
+      return reply.code(202).send(result);
+    });
+    app.post('/api/v1/updates/rollback', async (req, reply) => {
+      if (!this.opts.updates) return reply.code(501).send({ error: 'update agent not configured' });
+      const actor = req.auth?.key?.id;
+      const result = await this.opts.updates.rollback(actor);
+      if (!result.staged) return reply.code(409).send({ error: result.reason ?? 'rollback not staged' });
+      return reply.code(202).send(result);
+    });
+
     app.get('/api/v1/results', async () => {
       const messages = await this.opts.store.list({ limit: 500 });
       return messages
@@ -446,6 +483,7 @@ export class ApiServer {
       uptime: process.uptime(),
       time: new Date().toISOString(),
       storage: this.opts.store.kind,
+      ...hubVersionInfo(),
     };
   }
 }

@@ -21,10 +21,12 @@ It is built as an **npm-workspaces TypeScript monorepo**. The protocol layer
 API and persistence; M1 added the durable delivery core (`@integration-hub/core`);
 M2 added the clinical gate — patient/order matching, result validation, the
 HELD exception queue — plus alerting, config-first **device profiles** and the
-golden-message **conformance harness** that certifies them, and a security
+golden-message **conformance harness** that certifies them, a security
 review milestone: **API-key authn with per-role scopes** over the whole v1 API
-and an **audit log** of every mutating action (PRD §30, §34). Tests use Node's
-built-in test runner.
+and an **audit log** of every mutating action (PRD §30, §34), and the last M2
+gate item: the facility **installer** (Docker image) plus **signed remote
+updates** with supervisor-driven apply, health-gate and rollback (PRD §42–43).
+Tests use Node's built-in test runner.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -79,6 +81,45 @@ curl -H "Authorization: Bearer $KEY" "http://127.0.0.1:3000/api/v1/audit?limit=2
 → scope table is centralized in `ROUTE_SCOPES` (packages/api/src/security.ts)
 and fail-closed: an unscoped v1 route is denied until it is added there.
 
+## Installer + signed remote updates (M2 gate item)
+
+**Installer.** The facility unit is the Docker image (`Dockerfile`, tag = the
+release the update machinery swaps):
+
+```bash
+npm run image:build     # docker build -t medconnect-hub:0.1.0 .
+npm run up:stack        # compose: Postgres + hub (API :3000, devices :5001 —
+                        #   host 5000 is taken by macOS AirPlay)
+curl http://127.0.0.1:3000/api/v1/health        # { storage: postgres, version }
+curl -H "Authorization: Bearer ihk_docker_demo_001" http://127.0.0.1:3000/api/v1/version
+```
+
+**Signed updates.** A release is an Ed25519-signed manifest (`schemaVersion 1`:
+release id/version/platform + `minHubVersion`/`maxHubVersion` range + env
+payload). The hub polls an outbound-only source, verifies the signature
+against `UPDATE_PUBLIC_KEY`, and stages; a **supervisor** process owns the hub
+lifecycle and performs the swap with a health gate — rolling back
+automatically when the new release fails to come up:
+
+```bash
+# Operator side: generate keys, sign a manifest (scripts/update-cli.ts)
+npm run update-cli -- keygen
+npm run update-cli -- sign manifest.json --key keys/update-key.pem -o manifest.signed.json
+npm run update-cli -- verify manifest.signed.json --pub keys/update-key.pub.pem
+
+# Hub side: run under the supervisor with the update source + public key
+HUB_STATE_DIR=.hub-state UPDATE_SOURCE=… UPDATE_PUBLIC_KEY="$(cat keys/update-key.pub.pem)" \
+  npm run start:supervised
+# API (admin only): POST /api/v1/updates/{check,apply,rollback}, GET …/status
+npm run demo:update     # full loop: signed check → apply → swap to v0.2.0 → rollback
+```
+
+Version state (current / desired / last-good / history) lives in the state
+dir (`HUB_STATE_DIR`); the console's **Software updates** panel shows it and
+offers check/apply/rollback to admins. Release identity is surfaced on
+`/health` and `/api/v1/version`. Run the hub under `npm start` without a state
+dir and the update endpoints report the agent as not configured.
+
 ## Quickstart (PostgreSQL — M0 persistence)
 
 ```bash
@@ -128,10 +169,11 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 123 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 147 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts, profiles/conformance, dispatcher/DLQ, API,
-                   #   security (roles/scopes + authz + audit) (14 DB-gated skip)
-npm run test:db    # 123 tests: same + PostgreSQL integration (needs db:up)
+                   #   security (roles/scopes + authz + audit), signed updates +
+                   #   supervisor (apply/rollback/crash) (14 DB-gated skip)
+npm run test:db    # 147 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire

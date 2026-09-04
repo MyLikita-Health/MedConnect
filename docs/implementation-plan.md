@@ -782,12 +782,12 @@ the "goldens in CI" M2 gate item is now concrete.
    suites green: `npm test` = 109 (97 pass / 12 DB-gated skip); `npm run
    test:db` = 109/109; demos clean in both modes.
 
-Remaining M2 gate items (§8.1): **security review** — now shipped (see
-§13.6); installer + remote update; certified profiles for 3–5 **real**
-analyzers via the field/vendor conformance program (workstream A6/K, gated
-on field access — risk R2); profile **versioning** on change is already
-modeled (`version`, goldens per version) but not yet enforced in the
-pipeline (A4 AdapterRegistry is future work).
+Remaining M2 gate items (§8.1): **security review** — shipped (§13.6);
+**installer + remote update** — shipped (§13.7); certified profiles for 3–5
+**real** analyzers via the field/vendor conformance program (workstream
+A6/K, gated on field access — risk R2); profile **versioning** on change is
+already modeled (`version`, goldens per version) but not yet enforced in
+the pipeline (A4 AdapterRegistry is future work).
 
 ### 13.6 M2 security review — API-key authn, per-role scopes, audit log: status
 
@@ -828,10 +828,69 @@ route, and every mutating action lands in an **audit log** (PRD §30, §34).
    Both suites green: `npm test` = 123 (109 pass / 14 DB-gated skip);
    `npm run test:db` = 123/123; both demos authenticated and clean.
 
-Remaining M2 gate items (§8.1): installer + remote update; certified
-profiles for 3–5 **real** analyzers (gated on field access — risk R2);
-profile **versioning** enforcement in the pipeline (A4 AdapterRegistry is
-future work).
+Remaining M2 gate items (§8.1): **installer + remote update** — now shipped
+(see §13.7); certified profiles for 3–5 **real** analyzers (gated on field
+access — risk R2); profile **versioning** enforcement in the pipeline (A4
+AdapterRegistry is future work).
+
+### 13.7 M2 installer + remote update — Docker image, signed manifests, supervisor: status
+
+The final M2 gate item is implemented and shipped as `M2 installer + remote
+update: Docker packaging + signed updates with supervisor rollback`. It
+satisfies §4.3's edge packaging goals (auto-start/supervision, crash
+recovery, outbound-only signed updates) in the scaffold's terms, and the G
+workstream exit criterion "update applied remotely and rolled back on
+failure" is demonstrated end-to-end.
+
+1. ✅ Installer unit: root `Dockerfile` + compose `hub` service — `npm run
+   image:build` / `npm run up:stack` boots the whole product in Docker
+   (Postgres-backed, migrations auto-applied, authenticated API, device
+   listener). Verified live: health/version from the container.
+2. ✅ Release identity: `HUB_VERSION` (env, default `0.1.0` in
+   `packages/shared/src/version.ts`) surfaced on `/health` and
+   `/api/v1/version` — the version axis updates compare and the UI shows.
+3. ✅ Signed manifest format (`packages/core/src/updates/manifest.ts`): zod
+   schema; canonical JSON (sorted keys, signature excluded); Ed25519
+   keygen/sign/verify; sha256; dependency-free semver compare.
+4. ✅ State directory (`updates/state.ts`): `current.json` / `desired.json` /
+   `last-good.json` / `previous.json` / `history.jsonl` / supervisor
+   heartbeat — version state survives restarts, no DB needed.
+5. ✅ Update agent (`updates/agent.ts`): fetches the signed manifest from an
+   https URL or local path (outbound only, PRD §42), verifies signature +
+   platform + version-range policy vs the running release, stages
+   apply/rollback into `desired.json`; rejections are recorded in history.
+   Wired into the hub when `HUB_STATE_DIR` is set; console panel shows
+   status/history, admin-only check/apply/rollback buttons.
+6. ✅ Supervisor (`updates/supervisor.ts`): owns the hub child — crash
+   watchdog with backoff, heartbeats, and the swap path: staged release →
+   restart → **health gate** (probes `/health`, optionally the target
+   version) → success records applied + last-good; gate failure auto-rolls
+   back to the replaced release; runtime crash-loops past `maxRestarts`
+   escalate to the previously-good release. Boots are serialized so restart
+   races cannot reap each other's children (a real bug found by the tests).
+   `npm run start:supervised` = supervisor + hub child.
+7. ✅ Operator tooling: `scripts/update-cli.ts` (`hub-update keygen | sign |
+   verify`), npm scripts `update-cli`, `start:supervised`, `demo:update`,
+   `image:build`, `up:stack`.
+8. Tests: manifest (canonical/sign/verify/tamper/semver), agent (policy,
+   staging, previous-vs-last-good rollback), supervisor integration with a
+   fake child (boot, apply swap, auto-rollback on failed gate, crash
+   restart, crash-loop escalation), API authz for `/api/v1/updates/*`
+   (admin-only `updates:manage`), health/version. Both suites green:
+   `npm test` = 147 (133 pass / 14 DB-gated skip); `npm run test:db` =
+   147/147; `npm run demo:update` runs the real hub under the supervisor
+   through signed check → apply → v0.2.0 → rollback → v0.1.0.
+
+Notes / honest limits: the scaffold's artifact kind is `payload` (a
+version+env bundle the supervisor hands the process); production artifacts
+swap the Docker image tag or checkout instead (kinds `tarball`/
+`docker-image` are reserved in the schema). `npm start` without `HUB_STATE_DIR`
+leaves the update endpoints reporting "not configured". Real fleet
+provisioning/remote push is Phase 3 workstream H3.
+
+Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
+gated on field access (risk R2); profile **versioning** enforcement in the
+pipeline (A4 AdapterRegistry is future work).
 
 ---
 

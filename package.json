@@ -19,6 +19,11 @@
     "simulate": "tsx packages/simulator/src/cli.ts",
     "demo": "tsx scripts/demo.ts",
     "demo:db": "DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx scripts/demo.ts",
+    "demo:update": "tsx scripts/demo-update.ts",
+    "start:supervised": "tsx packages/server/src/supervisor-cli.ts",
+    "update-cli": "tsx scripts/update-cli.ts",
+    "image:build": "docker build -t medconnect-hub:0.1.0 .",
+    "up:stack": "docker compose up -d --build hub",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down"
   },
