@@ -71,6 +71,45 @@ test('Postgres key store hashes secrets, authenticates by secret, lists safely',
   await pool.query(`DELETE FROM api_keys WHERE id = 'admin'`);
 });
 
+test('Postgres key lifecycle: rename, disable, expiry, rotate with never-seen tracking', { skip: skipReason }, async () => {
+  if (!pool || !keys) return skipTest('no pool');
+  await pool.query('DELETE FROM api_keys');
+
+  const { key, secret } = await keys.create({ name: 'pg lifecycle', role: 'engineer' });
+
+  // Rename + disable + re-enable keep the secret working semantics.
+  assert.equal((await keys.update(key.id, { name: 'pg lifecycle v2' }))?.name, 'pg lifecycle v2');
+  await keys.update(key.id, { enabled: false });
+  assert.equal(await keys.findBySecret(secret), undefined);
+  assert.equal((await keys.get(key.id))?.enabled, false);
+  await keys.update(key.id, { enabled: true });
+  assert.equal((await keys.findBySecret(secret))?.id, key.id);
+
+  // Expiry stored + enforced; null clears it.
+  await keys.update(key.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  assert.equal(await keys.findBySecret(secret), undefined);
+  const expired = (await keys.get(key.id))!;
+  assert.ok(expired.expiresAt, 'expiry column round-trips');
+  await keys.update(key.id, { expiresAt: null });
+  assert.equal((await keys.get(key.id))?.expiresAt, undefined);
+  assert.equal((await keys.findBySecret(secret))?.id, key.id);
+
+  // A key born expired is unusable.
+  const doomed = await keys.create({ name: 'doomed', role: 'viewer', expiresAt: new Date(Date.now() - 1000).toISOString() });
+  assert.equal(await keys.findBySecret(doomed.secret), undefined);
+
+  // Rotate: identity preserved, old secret revoked, new secret authenticates.
+  const rotated = (await keys.rotateSecret(key.id))!;
+  assert.equal(rotated.key.id, key.id);
+  assert.equal(rotated.key.role, 'engineer');
+  assert.notEqual(rotated.secret, secret);
+  assert.equal(await keys.findBySecret(secret), undefined);
+  assert.equal((await keys.findBySecret(rotated.secret))?.id, key.id);
+  assert.equal(await keys.rotateSecret('nope'), undefined);
+
+  await pool.query('DELETE FROM api_keys');
+});
+
 test('Postgres audit store round-trips entries and filters by result', { skip: skipReason }, async () => {
   if (!pool || !audit) return skipTest('no pool');
   await pool.query('DELETE FROM audit_log');

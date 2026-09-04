@@ -26,7 +26,7 @@ import {
 } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
-import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, type ApiScope } from './security.js';
+import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
 import { renderUi } from './ui.js';
 
 /** PEM key + cert; when present the API listens on HTTPS (PRD §42 TLS). */
@@ -77,6 +77,15 @@ const createKeySchema = z.object({
   id: z.string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
   name: z.string().min(1),
   role: z.enum(['admin', 'engineer', 'operator', 'viewer']),
+  /** Optional ISO expiry — the key refuses authn past this instant. */
+  expiresAt: z.string().datetime({ offset: true }).optional(),
+});
+
+const updateKeySchema = z.object({
+  name: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  /** ISO expiry to set, or null to clear an existing expiry. */
+  expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 const listAuditSchema = z.object({
@@ -213,7 +222,13 @@ export class ApiServer {
         const route = `${req.method} ${pattern}`;
         const scope: ApiScope | undefined = ROUTE_SCOPES[route];
         req.auth = { key, scope };
-        void this.keys!.touch(key.id); // best-effort last-use stamp
+        // Last-use stamp. Awaited so the next request observes it (rotation's
+        // never-seen warning depends on ordering); failures never block auth.
+        try {
+          await this.keys!.touch(key.id);
+        } catch {
+          // best-effort: a failed stamp must not break the request
+        }
         if (!scope) {
           // A registered route missing from ROUTE_SCOPES: config gap — deny loudly.
           return reply.code(403).send({ error: 'forbidden', reason: 'route has no declared scope (ROUTE_SCOPES)' });
@@ -461,16 +476,62 @@ export class ApiServer {
     if (this.keys) {
       app.get('/api/v1/me', async (req) => {
         const { key } = req.auth!;
-        return { id: key.id, name: key.name, role: key.role, prefix: key.prefix, enabled: key.enabled, createdAt: key.createdAt };
+        return { id: key.id, name: key.name, role: key.role, prefix: key.prefix, enabled: key.enabled, createdAt: key.createdAt, expiresAt: key.expiresAt };
       });
 
       app.get('/api/v1/keys', async () => this.keys!.list());
 
       app.post('/api/v1/keys', async (req, reply) => {
         const input = createKeySchema.parse(req.body);
+        if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
+          return reply.code(400).send({ error: 'expiresAt must be in the future' });
+        }
         const created = await this.keys!.create({ ...input, createdBy: req.auth!.key.id });
         // The plaintext secret is returned exactly once, here.
         return reply.code(201).send(created);
+      });
+
+      // Key lifecycle (rotation ergonomics): rename, disable (keep the record
+      // + audit trail), expiry dates — plus re-issue via POST …/rotate, which
+      // warns when the outgoing secret was never presented. Mutations land in
+      // the audit log through the generic onResponse hook (target = key id).
+      app.patch('/api/v1/keys/:id', async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const patch = updateKeySchema.parse(req.body);
+        const key = await this.keys!.get(id);
+        if (!key) return reply.code(404).send({ error: 'key not found' });
+        // Expiry dates are future-only: a past date means "already expired",
+        // which disables by accident — clear it instead.
+        if (patch.expiresAt && Date.parse(patch.expiresAt) <= Date.now()) {
+          return reply.code(400).send({ error: 'expiresAt must be in the future' });
+        }
+        // Lockout guard: never let the acting key disable itself (its request
+        // would be the last thing it ever authenticates). Deleting self is
+        // already blocked; disabling self is the same trap.
+        if (id === req.auth!.key.id && patch.enabled === false) {
+          return reply.code(400).send({ error: 'cannot disable the API key in use — use another admin key' });
+        }
+        const updated = await this.keys!.update(id, patch);
+        return reply.code(200).send(updated);
+      });
+
+      app.post('/api/v1/keys/:id/rotate', async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const before = await this.keys!.get(id);
+        if (!before) return reply.code(404).send({ error: 'key not found' });
+        // Audit-friendly re-issue: when the outgoing secret was never seen
+        // (issued but never authenticated), say so — rotating may strand the
+        // person who holds it, or retire a key nobody ever used. Computed from
+        // the pre-rotation snapshot (stores may mutate in place on rotate).
+        const warnNeverSeen = secretNeverSeen(before);
+        const rotated = await this.keys!.rotateSecret(id);
+        if (!rotated) return reply.code(404).send({ error: 'key not found' });
+        const { key, secret } = rotated;
+        const response: Record<string, unknown> = { key, secret };
+        if (warnNeverSeen) {
+          response.warning = 'the outgoing secret was never used since it was issued — confirm this key is actually in service before distributing the new one';
+        }
+        return reply.code(200).send(response);
       });
 
       app.delete('/api/v1/keys/:id', async (req, reply) => {

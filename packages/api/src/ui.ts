@@ -58,6 +58,11 @@ export function renderUi(): string {
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   @media (max-width:700px){ .grid2 { grid-template-columns:1fr; } }
   .err { color:var(--err); }
+  .kstatus.ok { color:var(--ok); }
+  .kstatus.off { color:var(--muted); }
+  .kstatus.warn { color:var(--warn); }
+  .kstatus.expired { color:var(--err); }
+  select { background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px; font-family:inherit; font-size:12px; }
   .overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:10; }
   input { background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px; font-family:inherit; font-size:12px; }
   input:focus { outline:1px solid var(--accent); }
@@ -117,6 +122,17 @@ export function renderUi(): string {
       </div>
       <p class="muted" id="upd-result" style="margin-bottom:0"></p>
     </div>
+    <div class="panel" id="keys-panel" style="display:none">
+      <h2>Access keys <span class="muted">rotation · rename · disable · expiry · re-issue</span></h2>
+      <div id="keys-result" style="white-space:pre-wrap;font-size:12px;margin-bottom:6px"></div>
+      <table id="keys"><thead><tr><th>Key</th><th>Role</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody></tbody></table>
+      <div id="keys-add" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="key-name" placeholder="name e.g. LIS interface v2" style="width:180px"/>
+        <select id="key-role"><option value="viewer">viewer</option><option value="operator">operator</option><option value="engineer">engineer</option><option value="admin">admin</option></select>
+        <input id="key-expiry" type="number" min="1" placeholder="expire in N days (blank = never)" style="width:200px"/>
+        <button onclick="createKey()">Create key</button>
+      </div>
+    </div>
   </section>
   <section>
     <div class="panel">
@@ -130,6 +146,7 @@ export function renderUi(): string {
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let selectedId = null;
 let confCache = {};
+let meId = null;
 let hubKey = localStorage.getItem('hub.key') || '';
 let meRole = null;
 let signInVisible = false;
@@ -186,6 +203,7 @@ async function updateRole() {
   try {
     const me = await api('/api/v1/me').then(r => r.json());
     meRole = me.role;
+    meId = me.id;
     roleEl.textContent = me.role + ' · ' + me.name;
     roleEl.style.display = 'inline-block';
   } catch { meRole = null; }
@@ -197,13 +215,17 @@ function canAct() {
 
 async function refresh() {
   try {
-    const [health, stats, devices, alerts, messages, profiles] = await Promise.all([
+    const keysReq = meRole === 'admin'
+      ? api('/api/v1/keys').then(r => r.json())
+      : Promise.resolve(null);
+    const [health, stats, devices, alerts, messages, profiles, keys] = await Promise.all([
       api('/api/v1/health').then(r => r.json()),
       api('/api/v1/stats').then(r => r.json()),
       api('/api/v1/devices').then(r => r.json()),
       api('/api/v1/alerts?firing=true&limit=50').then(r => r.json()),
       api('/api/v1/messages?limit=100').then(r => r.json()),
       api('/api/v1/profiles').then(r => r.json()),
+      keysReq,
     ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -215,6 +237,7 @@ async function refresh() {
     renderAlerts(alerts);
     renderMessages(messages);
     renderProfiles(profiles);
+    renderKeys(keys);
     if (selectedId) renderDetail(selectedId);
     renderUpdates();
   } catch {
@@ -378,6 +401,120 @@ async function deleteProfile(id) {
   await refresh();
 }
 
+function renderKeys(keys) {
+  const panel = document.getElementById('keys-panel');
+  if (!keys) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  document.getElementById('keys').querySelector('tbody').innerHTML = keys.map(k => {
+    const expired = k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
+    const status = !k.enabled ? '<span class="kstatus off">disabled</span>'
+      : expired ? '<span class="kstatus expired">expired</span>'
+      : '<span class="kstatus ok">active</span>';
+    const neverSeen = !k.lastUsedAt || (k.secretIssuedAt && new Date(k.lastUsedAt).getTime() < new Date(k.secretIssuedAt).getTime());
+    const used = neverSeen ? '<span class="kstatus warn">never used</span>'
+      : k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '—';
+    const self = k.id === meId;
+    const actions = [];
+    if (k.enabled && !expired && !self) actions.push('<button onclick="toggleKey(\\'' + esc(k.id) + '\\',false)">Disable</button>');
+    if (!k.enabled && !self) actions.push('<button onclick="toggleKey(\\'' + esc(k.id) + '\\',true)">Enable</button>');
+    actions.push('<button onclick="renameKey(\\'' + esc(k.id) + '\\')">Rename</button>');
+    actions.push('<button onclick="setKeyExpiry(\\'' + esc(k.id) + '\\')">' + (k.expiresAt ? 'Change expiry' : 'Set expiry') + '</button>');
+    actions.push('<button onclick="rotateKey(\\'' + esc(k.id) + '\\')">Re-issue</button>');
+    if (!self) actions.push('<button style="background:transparent;border:1px solid var(--err);color:var(--err)" onclick="deleteKey(\\'' + esc(k.id) + '\\')">Delete</button>');
+    return '<tr><td>' + esc(k.name) + (self ? ' <span class="kstatus ok">(this session)</span>' : '') + '<br/><span class="muted">' + esc(k.id) + ' · ' + esc(k.prefix) + '…</span></td>' +
+      '<td>' + esc(k.role) + '</td>' +
+      '<td>' + status + '</td>' +
+      '<td class="muted">' + (k.expiresAt ? new Date(k.expiresAt).toLocaleString() : 'never') + '</td>' +
+      '<td>' + used + '</td>' +
+      '<td style="white-space:nowrap">' + actions.join(' ') + '</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">No keys yet.</td></tr>';
+}
+
+function showKeyResult(msg, isErr) {
+  const el = document.getElementById('keys-result');
+  el.textContent = msg;
+  el.className = isErr ? 'err' : '';
+}
+
+async function patchKey(id, patch) {
+  const res = await api('/api/v1/keys/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showKeyResult('failed: ' + (body.error || res.status), true); return; }
+  showKeyResult('saved ' + body.id + (patch.name !== undefined ? ' — renamed to "' + body.name + '"' : ''));
+  await refresh();
+}
+
+function toggleKey(id, enabled) { patchKey(id, { enabled }); }
+
+async function renameKey(id) {
+  const name = prompt('New name for ' + id + ':');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  await patchKey(id, { name: trimmed });
+}
+
+async function setKeyExpiry(id) {
+  const input = prompt('Days until expiry for ' + id + ' (blank = clear expiry):');
+  if (input === null) return;
+  const days = parseInt(input, 10);
+  const expiresAt = isNaN(days) || days <= 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
+  await patchKey(id, { expiresAt });
+}
+
+async function createKey() {
+  const name = document.getElementById('key-name').value.trim();
+  if (!name) return;
+  const role = document.getElementById('key-role').value;
+  const daysRaw = document.getElementById('key-expiry').value;
+  const days = parseInt(daysRaw, 10);
+  const expiresAt = !daysRaw || isNaN(days) || days <= 0 ? undefined : new Date(Date.now() + days * 86400000).toISOString();
+  const res = await api('/api/v1/keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role, expiresAt }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showKeyResult('create failed: ' + (body.error || res.status), true); return; }
+  showSecretOnce('Created ' + body.key.id + ' (' + body.key.role + '). Secret shown once — copy it now:', body.secret, body.key.expiresAt);
+  document.getElementById('key-name').value = '';
+  document.getElementById('key-expiry').value = '';
+  await refresh();
+}
+
+function showSecretOnce(label, secret, expiresAt) {
+  const holder = document.getElementById('keys-result');
+  holder.className = '';
+  holder.innerHTML = '<span style="color:var(--ok)">' + esc(label) + '</span><br/>' +
+    '<input readonly value="' + esc(secret) + '" style="width:100%;margin:6px 0" onfocus="this.select()"/>' +
+    (expiresAt ? '<span class="muted">expires ' + new Date(expiresAt).toLocaleString() + '</span>' : '');
+}
+
+async function rotateKey(id) {
+  if (!confirm('Re-issue the secret for ' + id + '? The current secret stops working immediately.')) return;
+  const res = await api('/api/v1/keys/' + encodeURIComponent(id) + '/rotate', { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showKeyResult('re-issue failed: ' + (body.error || res.status), true); return; }
+  const holder = document.getElementById('keys-result');
+  holder.className = '';
+  holder.innerHTML = '<span style="color:var(--ok)">New secret for ' + esc(body.key.id) + ' — shown once, copy it now:</span><br/>' +
+    '<input readonly value="' + esc(body.secret) + '" style="width:100%;margin:6px 0" onfocus="this.select()"/>' +
+    (body.warning ? '<div class="err">⚠ ' + esc(body.warning) + '</div>' : '');
+  await refresh();
+}
+
+async function deleteKey(id) {
+  if (!confirm('Delete key ' + id + '? This revokes it permanently and cannot be undone.')) return;
+  const res = await api('/api/v1/keys/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!res.ok) { showKeyResult('delete failed: ' + res.status, true); return; }
+  showKeyResult('deleted ' + id);
+  await refresh();
+}
+
 async function renderUpdates() {
   const panel = document.getElementById('updates-panel');
   if (!hubKey) { panel.style.display = 'none'; return; }
@@ -439,8 +576,7 @@ async function releaseMessage(id) {
   await refresh();
 }
 
-refresh();
-updateRole();
+updateRole().then(() => refresh());
 if (!hubKey) showSignIn();
 setInterval(refresh, 3000);
 </script>

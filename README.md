@@ -81,6 +81,36 @@ curl -H "Authorization: Bearer $KEY" "http://127.0.0.1:3000/api/v1/audit?limit=2
 → scope table is centralized in `ROUTE_SCOPES` (packages/api/src/security.ts)
 and fail-closed: an unscoped v1 route is denied until it is added there.
 
+### Key lifecycle (rotation ergonomics)
+
+Keys can be **renamed**, **disabled without deleting** (the record + audit
+trail survive), given **expiry dates**, and **re-issued** — all admin-only,
+each mutation audited (target = key id):
+
+- `PATCH /api/v1/keys/:id` with `{name}`, `{enabled}` or
+  `{expiresAt}` (ISO, future-only; `null` clears the expiry). You cannot
+  disable the key you are using (lockout guard), and an expired or disabled
+  key refuses authn while staying listed.
+- `POST /api/v1/keys/:id/rotate` mints a **new secret** for the same key
+  (identity/name/role/status preserved; the old secret is revoked
+  immediately). The response carries a **warning when the outgoing secret
+  was never used since it was issued** — rotating may strand whoever holds
+  it, or retire a key nobody ever used. Per-secret tracking (`secretIssuedAt`
+  vs `lastUsedAt`, monotonic so same-millisecond bursts stay ordered) makes
+  the warning accurate even after earlier rotations; a key is "never used"
+  only when its *current* secret has never authenticated.
+- The console shows an **Access keys** panel (admin only): per-key status
+  (active/disabled/expired), expiry, last use with a *never used* marker, and
+  inline rename / disable / enable / expiry / re-issue / delete; created and
+  rotated secrets appear in a copy-once box with the warning.
+- The `hub-key` CLI drives the same surface from the terminal:
+  `npx tsx scripts/key-cli.ts list|create|rename|disable|enable|expiry|rotate|delete`
+  (point it at a hub with `HUB_URL` + `HUB_API_KEY`). Secrets print exactly
+  once; the never-used warning prints on rotate.
+
+Migration `0009` adds `api_keys.expires_at` + `secret_issued_at` (additive;
+hand-applied to dev databases alongside the file).
+
 ## Installer + signed remote updates (M2 gate item)
 
 **Installer.** The facility unit is the Docker image (`Dockerfile`, tag = the

@@ -22,6 +22,7 @@
     "demo:update": "tsx scripts/demo-update.ts",
     "start:supervised": "tsx packages/server/src/supervisor-cli.ts",
     "update-cli": "tsx scripts/update-cli.ts",
+    "key-cli": "tsx scripts/key-cli.ts",
     "tls:gen": "tsx scripts/gen-certs.ts",
     "image:build": "docker build -t medconnect-hub:0.1.0 .",
     "up:stack": "docker compose up -d --build hub",

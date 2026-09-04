@@ -102,6 +102,8 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'DELETE /api/v1/orders/:id': 'config:write',
   // Key management (admin)
   'POST /api/v1/keys': 'keys:manage',
+  'PATCH /api/v1/keys/:id': 'keys:manage',
+  'POST /api/v1/keys/:id/rotate': 'keys:manage',
   'DELETE /api/v1/keys/:id': 'keys:manage',
   // Release info (read) + signed updates (admin)
   'GET /api/v1/version': 'api:read',
@@ -126,8 +128,52 @@ export interface ApiKey {
   enabled: boolean;
   createdAt: string;
   lastUsedAt?: string;
+  /**
+   * ISO expiry; absent = no expiry. Expired keys refuse authn but stay listed
+   * (rotation ergonomics: extend/clear instead of delete+recreate).
+   */
+  expiresAt?: string;
+  /**
+   * When the CURRENT secret was issued (createdAt initially, updated on
+   * rotate). Compared with lastUsedAt so "never seen" is per issued secret:
+   * a key used daily, rotated, and never used again warns on the next
+   * rotation instead of staying silent.
+   */
+  secretIssuedAt?: string;
   /** Key id of whoever created it (audit/attribution; bootstrap keys have none). */
   createdBy?: string;
+}
+
+/**
+ * Monotonic per-key stamp: max(now, prev + 1ms). Loopback requests routinely
+ * land in the SAME millisecond; ordering "used after issued" then becomes
+ * ambiguous. A virtual clock that always moves forward keeps never-seen
+ * comparisons deterministic — a later event can never tie an earlier one.
+ */
+function stampAfter(prev?: string): string {
+  const base = prev ? Date.parse(prev) + 1 : 0;
+  return new Date(Math.max(Date.now(), base)).toISOString();
+}
+
+/** A usable key is enabled and not past its expiry. */
+export function keyIsUsable(key: ApiKey, now = Date.now()): boolean {
+  if (!key.enabled) return false;
+  if (key.expiresAt && Date.parse(key.expiresAt) <= now) return false;
+  return true;
+}
+
+/**
+ * True when the CURRENT secret has never authenticated a request since it was
+ * issued — the "never seen" signal for the re-issue flow (rotation mints a new
+ * secret; if the outgoing one was never presented, warn before revoking it).
+ */
+export function secretNeverSeen(key: ApiKey): boolean {
+  if (!key.lastUsedAt) return true;
+  const issued = key.secretIssuedAt ?? key.createdAt;
+  // Strictly after: a use stamped in the same ms as issuance counts as seen
+  // (an immediately-tested new key is in service). Uses between ms are
+  // unambiguous; the only ambiguity left warns, never stays silent.
+  return new Date(key.lastUsedAt).getTime() < new Date(issued).getTime();
 }
 
 export function hashSecret(secret: string): string {
@@ -145,7 +191,17 @@ export interface CreateKeyInput {
   role: ApiKeyRole;
   /** Optional caller-supplied secret (bootstrap from HUB_ADMIN_KEY; tests). */
   secret?: string;
+  /** Optional ISO expiry (absent = never expires). */
+  expiresAt?: string;
   createdBy?: string;
+}
+
+/** Partial key update: rename, enable/disable, set/clear expiry. */
+export interface KeyPatch {
+  name?: string;
+  enabled?: boolean;
+  /** ISO expiry, or null to clear an existing expiry. */
+  expiresAt?: string | null;
 }
 
 export interface KeyStore {
@@ -155,6 +211,14 @@ export interface KeyStore {
   findBySecret(secret: string): ApiKey | undefined | Promise<ApiKey | undefined>;
   /** Create a key; returns the record plus the plaintext secret ONCE. */
   create(input: CreateKeyInput): { key: ApiKey; secret: string } | Promise<{ key: ApiKey; secret: string }>;
+  /** Apply a partial update (rename / enable / disable / expiry); undefined when unknown. */
+  update(id: string, patch: KeyPatch): ApiKey | undefined | Promise<ApiKey | undefined>;
+  /**
+   * Mint a NEW secret for an existing key (id/name/role/status preserved).
+   * Returns undefined when the id is unknown. The old secret is revoked and
+   * the plaintext new one returned exactly once.
+   */
+  rotateSecret(id: string, createdBy?: string): { key: ApiKey; secret: string } | undefined | Promise<{ key: ApiKey; secret: string } | undefined>;
   remove(id: string): void | Promise<void>;
   /** Record successful use (for key lifecycle/rotation review). */
   touch(id: string): void | Promise<void>;
@@ -175,23 +239,51 @@ export class InMemoryKeyStore implements KeyStore {
   findBySecret(secret: string): ApiKey | undefined {
     const id = this.byHash.get(hashSecret(secret));
     const key = id !== undefined ? this.byId.get(id) : undefined;
-    return key?.enabled === false ? undefined : key;
+    return key && keyIsUsable(key) ? key : undefined;
   }
 
   create(input: CreateKeyInput): { key: ApiKey; secret: string } {
     const secret = input.secret ?? generateSecret();
+    const issuedAt = new Date().toISOString();
     const key: ApiKey = {
       id: input.id ?? `key_${randomBytes(4).toString('hex')}`,
       name: input.name,
       role: input.role,
       prefix: secret.slice(0, 12),
       enabled: true,
-      createdAt: new Date().toISOString(),
+      createdAt: issuedAt,
+      secretIssuedAt: issuedAt,
+      expiresAt: input.expiresAt,
       createdBy: input.createdBy,
     };
     this.byId.set(key.id, key);
     this.byHash.set(hashSecret(secret), key.id);
     return { key, secret };
+  }
+
+  update(id: string, patch: KeyPatch): ApiKey | undefined {
+    const key = this.byId.get(id);
+    if (!key) return undefined;
+    if (patch.name !== undefined) key.name = patch.name;
+    if (patch.enabled !== undefined) key.enabled = patch.enabled;
+    if ('expiresAt' in patch) key.expiresAt = patch.expiresAt ?? undefined;
+    return key;
+  }
+
+  rotateSecret(id: string): { key: ApiKey; secret: string } | undefined {
+    const existing = this.byId.get(id);
+    if (!existing) return undefined;
+    const secret = generateSecret();
+    // Revoke the old secret hash (a key owns exactly one hash entry).
+    for (const [hash, keyId] of this.byHash) {
+      if (keyId === id) this.byHash.delete(hash);
+    }
+    existing.prefix = secret.slice(0, 12);
+    // Issue strictly after any prior use so the new secret counts as unseen
+    // until it itself authenticates — even within the same real ms.
+    existing.secretIssuedAt = stampAfter(existing.lastUsedAt);
+    this.byHash.set(hashSecret(secret), id);
+    return { key: existing, secret };
   }
 
   remove(id: string): void {
@@ -206,7 +298,7 @@ export class InMemoryKeyStore implements KeyStore {
 
   touch(id: string): void {
     const key = this.byId.get(id);
-    if (key) key.lastUsedAt = new Date().toISOString();
+    if (key) key.lastUsedAt = stampAfter(key.lastUsedAt);
   }
 }
 

@@ -983,6 +983,47 @@ profile's current config against its recorded goldens.
    green: `npm test` = 165 (150 pass / 15 DB-gated skip); `npm run test:db`
    = 165/165.
 
+### 13.11 Key-rotation ergonomics (rename / disable / expiry / re-issue): status
+
+Shipped as the key-lifecycle surface on top of the M2 security review (§13.6):
+rename, disable-without-delete, expiry dates, and an audit-friendly re-issue
+flow with a never-seen warning — in the console (Access keys panel) and a
+`hub-key` CLI.
+
+1. ✅ Model + stores (`security.ts` + `PostgresKeyStore`, migration `0009`
+   adds `expires_at` + `secret_issued_at`): `KeyPatch` update (rename /
+   enable / disable / set-or-clear expiry), `rotateSecret` (new secret for an
+   existing key — id/name/role/status preserved, old secret revoked), expiry
+   enforced at authn (`keyIsUsable`).
+2. ✅ Never-seen tracking: `secretNeverSeen` compares `lastUsedAt` against
+   `secretIssuedAt` so it is per issued secret — a key used for months, then
+   rotated, counts as never-used again until the new secret authenticates.
+   Both stores stamp on a **monotonic per-key clock** (never ties, never goes
+   backward) so loopback same-millisecond bursts cannot corrupt the
+   comparison — a real flake the tests caught.
+3. ✅ API (`keys:manage`): `PATCH /api/v1/keys/:id` (future-only expiry; a
+   lockout guard refuses disabling the key in use) and
+   `POST /api/v1/keys/:id/rotate` returning `{key, secret, warning?}` — the
+   warning fires when the outgoing secret was never presented. Mutations
+   audit through the existing hook with the key as target; the secret never
+   reaches the audit log or key listings.
+4. ✅ Console: Access keys panel (admin only) — status badges, expiry, last
+   use with a *never used* marker, copy-once boxes for created/rotated
+   secrets, inline rename/disable/enable/expiry/re-issue/delete. Auth last-use
+   stamps are now awaited (was fire-and-forget) so a follow-up rotate always
+   observes the preceding use.
+5. ✅ CLI: `npm run key-cli` (`scripts/key-cli.ts`) — list/create/rename/
+   disable/enable/expiry/rotate/delete against `HUB_URL` + `HUB_API_KEY`;
+   secrets print exactly once and the warning prints on rotate. Verified live
+   end-to-end against a booted hub (self-disable refused, expiry on create,
+   rotate revoked the acting key — subsequent calls 401'd until re-keyed).
+6. Tests: store units (mem + PG round-trip) for rename/disable/expiry/rotate
+   and per-secret never-seen semantics; API integration for the role matrix,
+   lockout guard, past-expiry rejection, rotate warning + revocation + audit
+   (the in-place-mutation bug — `before` read after `rotateSecret` — was
+   caught and fixed). Both suites green: `npm test` = 173 (157 pass / 16
+   DB-gated skip); `npm run test:db` = 173/173.
+
 ---
 
 ## 14. Plan maintenance
