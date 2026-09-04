@@ -783,11 +783,11 @@ the "goldens in CI" M2 gate item is now concrete.
    test:db` = 109/109; demos clean in both modes.
 
 Remaining M2 gate items (§8.1): **security review** — shipped (§13.6);
-**installer + remote update** — shipped (§13.7); certified profiles for 3–5
-**real** analyzers via the field/vendor conformance program (workstream
-A6/K, gated on field access — risk R2); profile **versioning** on change is
-already modeled (`version`, goldens per version) but not yet enforced in
-the pipeline (A4 AdapterRegistry is future work).
+**installer + remote update** — shipped (§13.7); **device → profile
+binding** — shipped (§13.9); certified profiles for 3–5 **real** analyzers
+via the field/vendor conformance program (workstream A6/K, gated on field
+access — risk R2); profile **versioning** enforcement at runtime remains
+modeled-but-unenforced.
 
 ### 13.6 M2 security review — API-key authn, per-role scopes, audit log: status
 
@@ -828,10 +828,10 @@ route, and every mutating action lands in an **audit log** (PRD §30, §34).
    Both suites green: `npm test` = 123 (109 pass / 14 DB-gated skip);
    `npm run test:db` = 123/123; both demos authenticated and clean.
 
-Remaining M2 gate items (§8.1): **installer + remote update** — now shipped
-(see §13.7); certified profiles for 3–5 **real** analyzers (gated on field
-access — risk R2); profile **versioning** enforcement in the pipeline (A4
-AdapterRegistry is future work).
+Remaining M2 gate items (§8.1): **installer + remote update** — shipped
+(§13.7); **device → profile binding** — shipped (§13.9); certified profiles
+for 3–5 **real** analyzers (gated on field access — risk R2); profile
+**versioning** enforcement remains modeled-but-unenforced.
 
 ### 13.7 M2 installer + remote update — Docker image, signed manifests, supervisor: status
 
@@ -915,9 +915,41 @@ TLSSocket).
    pass / 14 DB-gated skip); `npm run test:db` = 151/151; live check over
    generated certs confirmed trusted curl + TLS device handshake.
 
+### 13.9 A4 AdapterRegistry seam — device → profile binding: status
+
+Shipped as `A4: bind registered devices to DeviceProfiles by config`. The
+registry-to-profile wiring the plan called "future work (A4 AdapterRegistry)"
+is now real: a registered device carries an optional `profileId`, and the
+gateway canonicalizes that device's stream with the bound profile's record
+layout + code mappings.
+
+1. ✅ Registry: `profileId` on `DeviceRecord`/`RegisterDeviceInput`
+   (in-memory + `PostgresDeviceRegistry`); migration `0008` adds
+   `devices.profile_id` → `device_profiles(id)` **ON DELETE SET NULL**
+   (deleting a profile detaches devices instead of deleting them).
+   Auto-registered wire devices keep their binding across reconnects
+   (upsert only refreshes state/last-seen).
+2. ✅ Gateway seam: `AstmGateway.resolveProfile` (`ProfileResolver`,
+   `ProfileBinding` in packages/gateway) — per-message the gateway resolves
+   the device's profile and canonicalizes with `layout` + merged mappings
+   (profile overrides the global mapping table). Unbound devices keep the
+   reference defaults. The gateway stays agnostic of stores.
+3. ✅ Wiring: `startHub` closes over the device registry + profile store
+   (`device.profileId → profileStore.get → defaultLayoutFor(profile)`).
+4. ✅ API/UI: `POST /api/v1/devices` accepts + validates `profileId` against
+   the profile store (400 on unknown); the console badges bound devices.
+5. Tests: gateway binding proves the same wire bytes canonicalize correctly
+   under the Acme profile and mis-associate under the reference layout
+   (GLU→GLUCOSE mapping applied per-device too); API register/validate; PG
+   store round-trip + FK rejection + detach-on-delete. Both suites green:
+   `npm test` = 158 (143 pass / 15 DB-gated skip); `npm run test:db` =
+   158/158.
+
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
-gated on field access (risk R2); profile **versioning** enforcement in the
-pipeline (A4 AdapterRegistry is future work).
+gated on field access (risk R2); profile **versioning** on change is modeled
+(`version`, goldens per version) but not yet enforced at runtime — binding
+*configuration* (A4) is shipped; adapter *packaging/ecosystem* (install -
+adapter flow, workstream L, Phase 4) is out of M2 scope.
 
 ---
 

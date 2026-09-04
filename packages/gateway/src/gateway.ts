@@ -6,7 +6,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { AstmSession, serializeRecord, splitComponent, type AstmRecord } from '@integration-hub/astm';
-import type { CanonicalMessage, MappingTable, MessageSink } from '@integration-hub/shared';
+import type { CanonicalMessage, DeviceRecordLayout, MappingTable, MessageSink } from '@integration-hub/shared';
 import { buildMessage } from './pipeline.js';
 
 /** TLS server credentials (PEM). When set the listener is TLS-terminated. */
@@ -14,6 +14,23 @@ export interface TlsCredentials {
   key: string;
   cert: string;
 }
+
+/**
+ * What a device's binding contributes to canonicalization (A4 seam): the
+ * DeviceProfile's record layout plus its test-code mappings. `layout` may be
+ * partial — missing groups fall back to the reference layout in the pipeline.
+ */
+export interface ProfileBinding {
+  layout?: DeviceRecordLayout;
+  mappings?: MappingTable;
+}
+
+/**
+ * A4 AdapterRegistry seam: resolves the certified DeviceProfile bound to a
+ * device (by config — device registry entry → profile id). The server wires
+ * this over its device registry + profile store; the gateway stays agnostic.
+ */
+export type ProfileResolver = (deviceId: string) => ProfileBinding | undefined | Promise<ProfileBinding | undefined>;
 
 export interface GatewayOptions {
   host?: string;
@@ -28,6 +45,11 @@ export interface GatewayOptions {
    * Devices connect with TLS and verify the hub against the facility CA.
    */
   tls?: TlsCredentials;
+  /**
+   * A4 binding: resolves the DeviceProfile configured for a device so its
+   * stream is canonicalized with the profile's layout + code mappings.
+   */
+  resolveProfile?: ProfileResolver;
   /** Connection-state callbacks keyed by device id (from the H record). */
   onDeviceState?: (deviceId: string, state: 'connected' | 'disconnected') => void;
   onSessionError?: (error: Error) => void;
@@ -105,8 +127,21 @@ export class AstmGateway {
     this.deviceBySocket.set(socket, deviceId);
     this.opts.onDeviceState?.(deviceId, 'connected');
 
+    // A4 seam: a registered device bound to a certified profile canonicalizes
+    // with that profile's layout and code mappings (which override the global
+    // mapping table per-device); everything else uses the reference defaults.
+    let layout: DeviceRecordLayout | undefined;
+    let mappings = this.opts.mappings;
+    if (this.opts.resolveProfile) {
+      const binding = await this.opts.resolveProfile(deviceId);
+      if (binding) {
+        layout = binding.layout;
+        mappings = { ...(this.opts.mappings ?? {}), ...(binding.mappings ?? {}) };
+      }
+    }
+
     const raw = records.map(serializeRecord).join('\r\n');
-    const message = buildMessage(records, raw, { deviceId, mappings: this.opts.mappings });
+    const message = buildMessage(records, raw, { deviceId, mappings, layout });
     // The pipeline produces MAPPED (or FAILED); the sink owns delivery and the
     // ROUTED/DLQ terminal transitions (plan §5.3).
     await this.persist(message);

@@ -92,6 +92,8 @@ const registerDeviceSchema = z.object({
   transport: z.enum(['tcp', 'serial', 'api']).optional(),
   host: z.string().optional(),
   port: z.number().int().positive().optional(),
+  /** A4 binding: certified DeviceProfile whose layout/mappings drive parsing. */
+  profileId: z.string().min(1).regex(/^[a-z0-9][a-z0-9._-]*$/).optional(),
 });
 
 const listMessagesSchema = z.object({
@@ -270,6 +272,10 @@ export class ApiServer {
     app.get('/api/v1/devices', async () => this.opts.devices.list());
     app.post('/api/v1/devices', async (req, reply) => {
       const input = registerDeviceSchema.parse(req.body);
+      // A4 seam: the profile must exist (and be reachable at parse time).
+      if (input.profileId && !(await this.profiles.get(input.profileId))) {
+        return reply.code(400).send({ error: `unknown device profile: ${input.profileId}` });
+      }
       const record = await this.opts.devices.register(input);
       return reply.code(201).send(record);
     });

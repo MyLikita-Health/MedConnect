@@ -228,7 +228,8 @@ function renderStats(s) {
 function renderDevices(devices) {
   document.getElementById('devices').querySelector('tbody').innerHTML =
     devices.map(d =>
-      '<tr><td>' + esc(d.name) + '<br/><span class="muted">' + esc(d.id) + '</span></td>' +
+      '<tr><td>' + esc(d.name) + '<br/><span class="muted">' + esc(d.id) + '</span>' +
+      (d.profileId ? '<br/><span class="badge role">profile ' + esc(d.profileId) + '</span>' : '') + '</td>' +
       '<td><span class="status ' + esc(d.state) + '">' + esc(d.state) + '</span></td>' +
       '<td class="muted">' + (d.lastSeen ? new Date(d.lastSeen).toLocaleTimeString() : '—') + '</td></tr>'
     ).join('') || '<tr><td colspan="3" class="muted">No devices yet. Start the simulator.</td></tr>';

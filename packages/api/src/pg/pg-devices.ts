@@ -16,13 +16,14 @@ interface DeviceRow {
   transport: string;
   host: string | null;
   port: number | null;
+  profile_id: string | null;
   state: string;
   last_seen: Date | string | null;
   auto_registered: boolean;
   created_at: Date | string;
 }
 
-const DEVICE_COLUMNS = `id, name, manufacturer, model, protocol, transport, host, port, state, last_seen, auto_registered, created_at`;
+const DEVICE_COLUMNS = `id, name, manufacturer, model, protocol, transport, host, port, profile_id, state, last_seen, auto_registered, created_at`;
 
 export class PostgresDeviceRegistry implements DeviceBackend {
   readonly kind = 'postgres' as const;
@@ -32,8 +33,8 @@ export class PostgresDeviceRegistry implements DeviceBackend {
   async register(input: RegisterDeviceInput): Promise<DeviceRecord> {
     const id = input.id ?? slugify(input.name);
     const { rows } = await this.pool.query<DeviceRow>(
-      `INSERT INTO devices (id, name, manufacturer, model, protocol, transport, host, port, state)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'unknown')
+      `INSERT INTO devices (id, name, manufacturer, model, protocol, transport, host, port, profile_id, state)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown')
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          manufacturer = EXCLUDED.manufacturer,
@@ -42,6 +43,7 @@ export class PostgresDeviceRegistry implements DeviceBackend {
          transport = EXCLUDED.transport,
          host = EXCLUDED.host,
          port = EXCLUDED.port,
+         profile_id = EXCLUDED.profile_id,
          state = EXCLUDED.state,
          last_seen = NULL
        RETURNING ${DEVICE_COLUMNS}`,
@@ -54,6 +56,7 @@ export class PostgresDeviceRegistry implements DeviceBackend {
         input.transport ?? 'tcp',
         input.host ?? null,
         input.port ?? null,
+        input.profileId ?? null,
       ],
     );
     return rowToDevice(rows[0]!);
@@ -124,6 +127,7 @@ function rowToDevice(row: DeviceRow): DeviceRecord {
     transport: row.transport as DeviceRecord['transport'],
     host: row.host ?? undefined,
     port: row.port ?? undefined,
+    profileId: row.profile_id ?? undefined,
     state: row.state as DeviceRecord['state'],
     lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : undefined,
     autoRegistered: row.auto_registered,

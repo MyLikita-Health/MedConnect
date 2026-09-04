@@ -8,7 +8,7 @@
  */
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
-import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
+import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
@@ -190,12 +190,24 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   });
   dispatcher.start();
 
+  // A4 AdapterRegistry seam: registered device → DeviceProfile binding. The
+  // gateway canonicalizes that device's stream with the profile's layout +
+  // code mappings instead of the generic reference layout.
+  const resolveProfile = async (deviceId: string) => {
+    const device = await devices.get(deviceId);
+    if (!device?.profileId) return undefined;
+    const profile = await profileStore.get(device.profileId);
+    if (!profile) return undefined;
+    return { layout: defaultLayoutFor(profile), mappings: profile.mappings };
+  };
+
   const gateway = new AstmGateway({
     host,
     port: opts.devicePort ?? 0,
     sink: dispatcher,
     mappings,
     ...(tls ? { tls } : {}),
+    resolveProfile,
     onDeviceState: async (deviceId, state) => {
       try {
         await devices.upsertFromConnection({

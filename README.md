@@ -439,6 +439,14 @@ pipeline canonicalizes correctly for both it and the reference layout.
   every golden file in CI — a profile is only as good as its recorded
   conformance run — and proves an Acme transcript *fails* under the
   reference profile (profiles matter).
+- **Adapter binding (A4 seam)** — a *registered device* carries an optional
+  `profileId`; when set, the gateway canonicalizes that device's ASTM stream
+  with the profile's layout + code mappings (per-device mappings override the
+  global table). Register: `POST /api/v1/devices` with `profileId`
+  (validated against the profile store; migration `0008` adds the FK, and
+  deleting a profile detaches devices rather than deleting them). The console
+  badges bound devices with their profile. Unbound devices and the simulator
+  keep the generic reference behavior.
 
 ## Scaffold boundaries (what is intentionally not here)
 
@@ -452,9 +460,8 @@ pipeline canonicalizes correctly for both it and the reference layout.
   cloud deployment; the edge keeps the SQL-outbox shape (plan §4.2, §13.1.5).
 - User *accounts* with passwords/JWT sessions, LDAP, 2FA and per-facility
   scoping are future RBAC layers (API keys + roles are the v1 surface, PRD
-  §34–35); TLS termination is handled by the reverse proxy in front of the
-  hub. Still missing: HL7 v2, DICOM, FHIR, webhooks, multi-tenancy — natural
-  next layers (PRD §13–15, §37, §41).
+  §34–35). Still missing: HL7 v2, DICOM, FHIR, webhooks, multi-tenancy —
+  natural next layers (PRD §13–15, §37, §41).
 - Patient/order matching runs against the expected-order registry (the LIS
   seam, `POST /api/v1/orders`) — wiring it to a real LIS master feed (HL7 ORM
   or ADT) is inbound HL7 work, still open. Result-plausibility seeds assume

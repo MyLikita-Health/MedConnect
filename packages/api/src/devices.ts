@@ -16,6 +16,12 @@ export interface DeviceRecord {
   transport: DeviceTransport;
   host?: string;
   port?: number;
+  /**
+   * Certified DeviceProfile id (A4 AdapterRegistry seam, PRD §39–40): when
+   * set, incoming ASTM from this device is canonicalized with the profile's
+   * record layout and code mappings instead of the generic reference layout.
+   */
+  profileId?: string;
   state: DeviceState;
   lastSeen?: string;
   autoRegistered?: boolean;
@@ -31,6 +37,8 @@ export interface RegisterDeviceInput {
   transport?: DeviceTransport;
   host?: string;
   port?: number;
+  /** Bind this device to a DeviceProfile (validated against the profile store). */
+  profileId?: string;
 }
 
 export interface DeviceStats {
@@ -54,6 +62,7 @@ export class DeviceRegistry {
       transport: input.transport ?? 'tcp',
       host: input.host,
       port: input.port,
+      profileId: input.profileId,
       state: 'unknown',
       createdAt: new Date().toISOString(),
     };
