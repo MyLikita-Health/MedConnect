@@ -473,10 +473,11 @@ worklist idempotently, modality stores the performed study, poll retires the
 item → cleanup). The compose image is derived (`docker/orthanc/Dockerfile`)
 so it bundles the REST-based **Worklists plugin** (pinned 0.9.2, AGPLv3+,
 enabled DB-backed via merged config). `npm run demo:mwl` boots the **real
-hub** with its M3.2 study monitor pointed at that Orthanc
+hub** with its M3.2/M3.3 wiring pointed at that Orthanc
 (`ORTHANC_URL`/`ORTHANC_USER`/`ORTHANC_PASSWORD`, default localhost:8042
-orthanc/orthanc): a registry order flows onto the live worklist, the
-modality performs the study, and the monitor's next poll retires it.
+orthanc/orthanc): an **ORM^O01 order over real MLLP** lands in the registry,
+the monitor syncs it onto the live worklist, the modality performs the
+study, and the next poll flows it BACK into the hub as a ROUTED message.
 `npm run demo:routing` proves **M3.3 storage routing** against TWO real
 Orthanc containers (compose `orthanc` + `pacs`, the archive): a performed
 study's metadata is routed through the dispatcher (a DB-driven rule delivers
