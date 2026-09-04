@@ -120,6 +120,35 @@ offers check/apply/rollback to admins. Release identity is surfaced on
 `/health` and `/api/v1/version`. Run the hub under `npm start` without a state
 dir and the update endpoints report the agent as not configured.
 
+## TLS for device + LIS connections (PRD §42, §45)
+
+Set `HUB_TLS_CERT` / `HUB_TLS_KEY` (PEM files) and **both** the REST API
+(`https://…:3000`) and the ASTM device listener (TLS) terminate TLS. Generate
+on-prem material — a facility CA plus a hub cert signed by it — with:
+
+```bash
+npm run tls:gen -- hub-hostname.internal lab-lan          # extra SANs optional
+# → tls/ca.pem (TRUST THIS), tls/hub.pem + tls/hub-key.pem (serve these)
+HUB_TLS_CERT=./tls/hub.pem HUB_TLS_KEY=./tls/hub-key.pem npm start
+```
+
+**CA trust flow.** Keep `tls/ca-key.pem` offline after issuance; `ca.pem` is
+the facility root of trust:
+
+- **Analyzers / LIS software** — import `tls/ca.pem` into the device/LIS
+trust store, then connect to the hub host:port over TLS. The hub presents a
+cert that chains to `ca.pem`, so it verifies (no per-device key shipping).
+- **Console / curl** — `curl --cacert ./tls/ca.pem https://host:3000/api/v1/health`;
+browsers: install `ca.pem` in the OS trust store (or accept the prompt).
+- **Supervisor** — `npm run start:supervised` detects TLS and probes the
+`https` health endpoint, skipping verification for self-signed on-prem certs
+(export `HUB_TLS_VERIFY_PROBE=1` once the CA is in the supervisor's store).
+- Node integration clients: `NODE_EXTRA_CA_CERTS=tls/ca.pem`.
+
+Without env vars the hub listens plain HTTP/TCP (the scaffold default); TLS
+tests pin the committed `test-fixtures/` cert. Mutual TLS (client certs for
+devices) is the Phase-3 edge hardening (plan G3).
+
 ## Quickstart (PostgreSQL — M0 persistence)
 
 ```bash

@@ -888,6 +888,33 @@ swap the Docker image tag or checkout instead (kinds `tarball`/
 leaves the update endpoints reporting "not configured". Real fleet
 provisioning/remote push is Phase 3 workstream H3.
 
+### 13.8 TLS on the API + device endpoints: status
+
+Shipped as `TLS: HTTPS API + TLS device listener with on-prem CA trust flow`
+(J workstream "TLS everywhere", PRD §42/§45 — hardening, not a numbered gate
+item). With `HUB_TLS_CERT`/`HUB_TLS_KEY` (PEM file paths) the hub
+TLS-terminates **both** endpoints: Fastify serves HTTPS (console included)
+and the ASTM gateway accepts TLS connections (`tls.createServer`; the
+session/ENQ-ACK layer is transport-agnostic and works unchanged over
+TLSSocket).
+
+1. ✅ Credentials threading: `startHub` opts/env → `AstmGateway` + `ApiServer`
+   (`TlsCredentials`/`ApiTls`); CLI reads the env vars.
+2. ✅ On-prem material + documented trust flow: `npm run tls:gen`
+   (`scripts/gen-certs.ts`) creates a facility CA + a hub cert signed by it
+   with configurable SANs. README documents the flow: CA is the facility
+   root of trust, import `ca.pem` into device/LIS trust stores, browsers/curl
+   use `--cacert`, the supervisor probes the https health endpoint
+   (self-signed skip via `HUB_TLS_VERIFY_PROBE`).
+3. ✅ Supervisor https probe: `probeJson` via node:https honors
+   `healthRejectUnauthorized` per request (global fetch has no TLS knob).
+4. Tests: gateway ASTM-over-TLS end-to-end (trusted client completes a full
+   ENQ/ACK session; untrusted handshake rejected) and API https (trusted
+   health call; untrusted fails) against committed `test-fixtures/` certs
+   with SAN localhost/127.0.0.1. Both suites green: `npm test` = 151 (137
+   pass / 14 DB-gated skip); `npm run test:db` = 151/151; live check over
+   generated certs confirmed trusted curl + TLS device handshake.
+
 Remaining M2 gate items (§8.1): certified profiles for 3–5 **real** analyzers
 gated on field access (risk R2); profile **versioning** enforcement in the
 pipeline (A4 AdapterRegistry is future work).

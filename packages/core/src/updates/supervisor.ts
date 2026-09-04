@@ -21,6 +21,7 @@
  * OS service wrapper (systemd/launchd) would drive in production.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { request as httpsRequest } from 'node:https';
 import { HUB_VERSION } from '@integration-hub/shared';
 import { UpdateStateDir, type DesiredState, type ReleaseSpec } from './state.js';
 
@@ -45,6 +46,12 @@ export interface SupervisorOptions {
   healthTimeoutMs?: number;
   /** Crash restarts tolerated (per release) before rollback/escalation. */
   maxRestarts?: number;
+  /**
+   * HTTPS health probes: verify the hub certificate chain. Set false for
+   * self-signed on-prem certs (the hub's own CA is typically not in the
+   * supervisor's trust store).
+   */
+  healthRejectUnauthorized?: boolean;
   log?: (line: string) => void;
 }
 
@@ -301,19 +308,10 @@ export class HubSupervisor {
   }
 
   private async probeHealth(): Promise<boolean> {
-    const url = this.opts.healthUrl!;
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), this.healthTimeoutMs);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) return false;
-      const body = (await res.json()) as { status?: string; version?: string };
-      if (body.status !== 'ok') return false;
-      const want = this.opts.healthTargetVersion;
-      return !want || body.version === want;
-    } finally {
-      clearTimeout(t);
-    }
+    const body = await probeJson(this.opts.healthUrl!, this.healthTimeoutMs, this.opts.healthRejectUnauthorized !== false);
+    if (!body || body.status !== 'ok') return false;
+    const want = this.opts.healthTargetVersion;
+    return !want || body.version === want;
   }
 
   // -------------------------------------------------------------------------
@@ -409,6 +407,51 @@ export class HubSupervisor {
 const CRASH_WINDOW_MS = 60_000;
 /** A child alive this long counts as a stable run (clears the crash window). */
 const STABLE_RUN_MS = 10_000;
+
+/**
+ * GET a URL and parse JSON, honoring TLS verification policy. Uses node:https
+ * directly for https URLs so rejectUnauthorized can be set per-probe (global
+ * fetch has no per-request TLS knob). Throws on HTTP/JSON/TLS failure.
+ */
+async function probeJson(url: string, timeoutMs: number, rejectUnauthorized: boolean): Promise<{ status?: string; version?: string } | undefined> {
+  const u = new URL(url);
+  if (u.protocol === 'https:') {
+    return new Promise((resolve, reject) => {
+      const req = httpsRequest(
+        u,
+        { rejectUnauthorized, timeout: timeoutMs, headers: { accept: 'application/json' } },
+        (res) => {
+          let raw = '';
+          res.setEncoding('utf8');
+          res.on('data', (c) => (raw += c));
+          res.on('end', () => {
+            try {
+              if (res.statusCode !== 200) {
+                reject(new Error(`HTTP ${res.statusCode}`));
+              } else {
+                resolve(JSON.parse(raw) as { status?: string; version?: string });
+              }
+            } catch (err) {
+              reject(err instanceof Error ? err : new Error(String(err)));
+            }
+          });
+        },
+      );
+      req.on('timeout', () => req.destroy(new Error('probe timed out')));
+      req.on('error', reject);
+      req.end();
+    });
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as { status?: string; version?: string };
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 function now(): string {
   return new Date().toISOString();

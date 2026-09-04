@@ -12,10 +12,18 @@ import { DEFAULT_MAPPINGS } from '@integration-hub/shared';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
+/** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
+export interface HubTls {
+  key: string;
+  cert: string;
+}
+
 export interface HubOptions {
   devicePort?: number;
   httpPort?: number;
   host?: string;
+  /** PEM key+cert: TLS-terminate BOTH the API (https) and device listener. */
+  tls?: HubTls;
   mappings?: Record<string, string>;
   /** PostgreSQL connection string; falls back to the DATABASE_URL env var. */
   databaseUrl?: string;
@@ -82,6 +90,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const stateDir = opts.stateDir ?? process.env.HUB_STATE_DIR;
   const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
   const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
+  const tls = opts.tls ?? (await loadTlsFromEnv());
 
   if (databaseUrl) {
     pool = createDbPool(databaseUrl);
@@ -186,6 +195,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     port: opts.devicePort ?? 0,
     sink: dispatcher,
     mappings,
+    ...(tls ? { tls } : {}),
     onDeviceState: async (deviceId, state) => {
       try {
         await devices.upsertFromConnection({
@@ -215,6 +225,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const api = new ApiServer({
     host,
     port: opts.httpPort ?? 0,
+    tls,
     store,
     devices,
     routes,
@@ -231,6 +242,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
 
   const { port: devicePort } = await gateway.start();
   const { port: httpPort } = await api.start();
+
+  if (tls) {
+    console.log('[tls]     API + device listener are TLS-terminated (HTTPS / TLS on both endpoints)');
+  }
 
   return {
     gateway,
@@ -260,6 +275,16 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
  * the active mapping table (canonical codes); unit and plausibility rules are
  * conservative (warn-level) so the safe matching hold stays the main gate.
  */
+/** Reads HUB_TLS_CERT / HUB_TLS_KEY (file paths) when both are set. */
+async function loadTlsFromEnv(): Promise<HubTls | undefined> {
+  const certPath = process.env.HUB_TLS_CERT;
+  const keyPath = process.env.HUB_TLS_KEY;
+  if (!certPath || !keyPath) return undefined;
+  const { readFile } = await import('node:fs/promises');
+  const [cert, key] = await Promise.all([readFile(certPath, 'utf8'), readFile(keyPath, 'utf8')]);
+  return { cert, key };
+}
+
 function defaultValidationConfig(mappings: Record<string, string>): ValidationConfig {
   const testCatalog = [...new Set(Object.values(mappings))];
   return {

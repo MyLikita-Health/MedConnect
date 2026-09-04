@@ -28,9 +28,17 @@ import type { AuditStore, KeyStore } from './security.js';
 import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, type ApiScope } from './security.js';
 import { renderUi } from './ui.js';
 
+/** PEM key + cert; when present the API listens on HTTPS (PRD §42 TLS). */
+export interface ApiTls {
+  key: string;
+  cert: string;
+}
+
 export interface ApiServerOptions {
   host?: string;
   port: number;
+  /** PEM key + cert → HTTPS API + console. The console UI is served over TLS too. */
+  tls?: ApiTls;
   store: StoreBackend;
   devices: DeviceBackend;
   /** Optional mapping table exposed read-only at /api/v1/mappings. */
@@ -155,7 +163,11 @@ export class ApiServer {
     this.profiles = opts.profiles ?? new InMemoryProfileStore();
     this.keys = opts.keys;
     this.audit = opts.audit ?? (opts.keys ? new InMemoryAuditStore() : undefined);
-    const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+    const app = Fastify({
+      logger: false,
+      bodyLimit: 1024 * 1024,
+      ...(this.opts.tls ? { https: { key: this.opts.tls.key, cert: this.opts.tls.cert } } : {}),
+    });
     this.app = app;
 
     // CORS for the console and integrations (same policy as the scaffold).

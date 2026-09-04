@@ -17,18 +17,27 @@ const CLI_PATH = fileURLToPath(new URL('./cli.ts', import.meta.url));
 
 const httpPort = Number(process.env.PORT ?? 3000);
 const stateDir = process.env.HUB_STATE_DIR ?? '.hub-state';
-const healthUrl = process.env.HUB_HEALTH_URL ?? `http://127.0.0.1:${httpPort}/api/v1/health`;
+// When the hub serves TLS (HUB_TLS_CERT/KEY), probe the https health endpoint.
+const tlsEnabled = Boolean(process.env.HUB_TLS_CERT && process.env.HUB_TLS_KEY);
+const healthUrl =
+  process.env.HUB_HEALTH_URL ??
+  `${tlsEnabled ? 'https' : 'http'}://127.0.0.1:${httpPort}/api/v1/health`;
+// Self-signed on-prem certs are the default; the probe skips verification
+// unless the operator has the hub CA in the supervisor trust store and says so.
+let healthRejectUnauthorized = true;
+if (tlsEnabled && process.env.HUB_TLS_VERIFY_PROBE !== '1') healthRejectUnauthorized = false;
 
 const supervisor = new HubSupervisor({
   stateDir,
   command: [process.execPath, '--import', 'tsx', CLI_PATH],
   healthUrl,
+  healthRejectUnauthorized,
   bootTimeoutMs: 30_000,
   log: (line) => console.log(line),
 });
 
 console.log(`[supervisor-cli] state dir: ${stateDir}`);
-console.log(`[supervisor-cli] health gate: ${healthUrl}`);
+console.log(`[supervisor-cli] health gate: ${healthUrl}${tlsEnabled ? ' (TLS, verify=' + healthRejectUnauthorized + ')' : ''}`);
 console.log('[supervisor-cli] Ctrl-C to stop (child receives SIGTERM)');
 
 let stopping = false;

@@ -4,9 +4,16 @@
  * a sink (the API store), and reports device connection state.
  */
 import net from 'node:net';
+import tls from 'node:tls';
 import { AstmSession, serializeRecord, splitComponent, type AstmRecord } from '@integration-hub/astm';
 import type { CanonicalMessage, MappingTable, MessageSink } from '@integration-hub/shared';
 import { buildMessage } from './pipeline.js';
+
+/** TLS server credentials (PEM). When set the listener is TLS-terminated. */
+export interface TlsCredentials {
+  key: string;
+  cert: string;
+}
 
 export interface GatewayOptions {
   host?: string;
@@ -15,6 +22,12 @@ export interface GatewayOptions {
   /** Where processed messages are delivered. */
   sink: MessageSink;
   mappings?: MappingTable;
+  /**
+   * PEM key + cert: when present the ASTM listener is TLS-terminated
+   * (edge packaging §4.3 "encrypted local storage… secure channel", PRD §42).
+   * Devices connect with TLS and verify the hub against the facility CA.
+   */
+  tls?: TlsCredentials;
   /** Connection-state callbacks keyed by device id (from the H record). */
   onDeviceState?: (deviceId: string, state: 'connected' | 'disconnected') => void;
   onSessionError?: (error: Error) => void;
@@ -28,7 +41,9 @@ export class AstmGateway {
   constructor(private readonly opts: GatewayOptions) {}
 
   async start(): Promise<{ port: number }> {
-    const server = net.createServer((socket) => this.handleConnection(socket));
+    const server = this.opts.tls
+      ? tls.createServer({ key: this.opts.tls.key, cert: this.opts.tls.cert }, (socket) => this.handleConnection(socket))
+      : net.createServer((socket) => this.handleConnection(socket));
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
