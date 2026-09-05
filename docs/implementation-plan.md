@@ -148,6 +148,9 @@ engines that already solve a hard protocol problem do their job:
 6. **Everything important is audited** (who/what/when/before/after/result — PRD §30).
 7. **Licensing hygiene**: AGPL components (Orthanc) are always separate processes
    integrated over documented public interfaces; the Hub codebase stays proprietary.
+   The written boundary policy is **§7.5.5** (policy doc:
+   [`docs/orthanc-agpl-boundary.md`](orthanc-agpl-boundary.md)) — the code-review
+   gate for risk R5 references it.
 
 ---
 
@@ -617,7 +620,7 @@ M3 imaging only with a committed radiology pilot.
 | D7 | HL7 parser lib selection | **RESOLVED — adopt `hl7v2` (panates, MIT)**: v1.9.0 + `hl7v2-dictionary` declared as deps of `@integration-hub/hl7` (B1/B2a shipped on it). Spike evidence (`packages/hl7/src/parser-substrate.test.ts`): parses ORU/ADT 2.3.1–2.5.1; dictionary-correct unescape + repetition reads; typed `HL7Error` on garbage, tolerant of truncated input; quirk — `toHL7String()` normalizes datatypes, so output is never byte-round-tripped (own model builds it). Runners-up rejected: `node-hl7-client`/-`server` (Node≥22, server-shaped, would duplicate our MLLP), `hl7` (amida) + `L7Node/hl7` dead. | **Resolved** (B kickoff) |
 | D8 | Licensing/commercial model detail | per-facility vs device-based vs OEM (PRD §61) | M2 |
 | D9 | Marketplace timing vs M5 pull | demand check with distributors | M4 |
-| D10 | Orthanc bundled vs customer-provided default | packaging/commercial impact | M3 |
+| D10 | Orthanc bundled vs customer-provided default | **RESOLVED (M3.5) — bundled-by-default** (pinned multi-arch derived image for pilot/demo) **+ customer-provided supported**: `ORTHANC_URL` already points at any Orthanc (facility-managed, vendor appliance), so deployments that already run Orthanc ship none; the §7.5.5 AGPL boundary is identical either way (REST only). | **Resolved** (M3.5) |
 
 ---
 
@@ -1521,23 +1524,44 @@ of C1–C6 is composition, not new protocol work):
    list, and rows auto-drop when a modality is removed from Orthanc's config
    (registry remove added to both the memory + PG backends). A down Orthanc
    (list failure) reports nothing and the last-known rows stand.
-5. **M3.5 — Orthanc lifecycle (C5)**: compose packaging + upgrade path, the
-   §7.5.5 AGPL boundary doc, optional customer-provided Orthanc — **decision
-   D10** (bundled vs customer-provided) resolves here.
+5. ✅ **M3.5 — Orthanc lifecycle (C5)**: version-pinned, multi-arch packaging
+   + the written AGPL boundary + decision D10 resolved. The derived image
+   (`docker/orthanc/Dockerfile`) now pins **`orthancteam/orthanc:26.8.2`**
+   (the multi-arch ops image — amd64 **and** arm64 — replacing the
+   amd64-only `jodogne/orthanc:latest`) and **source-builds the worklists
+   plugin 0.9.2 inside the same Ubuntu base** (the plugin's prebuilt release
+   binaries are Ubuntu x86_64 only, so arm64 requires the source build; the
+   plugin .so is built with `STATIC_BUILD` so it embeds the framework's own
+   DCMTK/jsoncpp and never conflicts with the runtime image's shared libs).
+   The compose `pacs` archive service is pinned to the same multi-arch base.
+   Upgrades are a one-line bump (`ORTHANC_BASE_IMAGE` /
+   `WORKLISTS_VERSION`) + rebuild. The **AGPL boundary policy is written**
+   at §7.5.5 ([`docs/orthanc-agpl-boundary.md`](orthanc-agpl-boundary.md)):
+   Orthanc/plugins stay separate processes driven over REST — the derived
+   image's bundled plugin is loaded by the Orthanc process, never the hub;
+   review-gate checklist + distribution obligations + the D10 customer-
+   provided path. **Decision D10 resolved**: bundled-by-default (the pinned
+   derived image for pilot/demo) **and** customer-provided Orthanc supported
+   (`ORTHANC_URL` already points at any instance; the boundary is identical
+   either way). Verified live: the image builds natively on **arm64** (this
+   host), boots, and the worklists REST API round-trips (create/list/delete)
+   on both the standalone image and the rebuilt compose stack.
 
-**Decisions & risks carried forward**: D10 open (packaging/commercial); R6
-enforced by the §3.2 matrix (no Node DICOM stack); AGPL boundary kept by the
-separate-process compose pattern (invariant 7); DICOMweb via Orthanc's plugin
-stays M5 (§8.1). Simulators (workstream K): a DICOM simulator = Orthanc + a
-fake modality (pynetdicom or Orthanc's own tools) driving order→MWL→store→
-route with failure injection — the M3 exit drill.
+**Decisions & risks carried forward**: D10 **resolved** (bundled default +
+customer-provided via ORTHANC_URL — see M3.5 above); R6 enforced by the §3.2
+matrix (no Node DICOM stack); AGPL boundary kept by the separate-process
+compose pattern (invariant 7) + the written §7.5.5 policy; DICOMweb via
+Orthanc's plugin stays M5 (§8.1). Simulators (workstream K): a DICOM
+simulator = Orthanc + a fake modality (pynetdicom or Orthanc's own tools)
+driving order→MWL→store→route with failure injection — the M3 exit drill.
 
 **Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL
 (✅ shipped) → M3.3 storage routing (✅ shipped) → M3.4 console+failure
-(✅ shipped) → M3.5 packaging; every slice keeps `npm test` /
-`npm run test:db` green; the §8.1 radiology-pilot gate closes M3.
-**Status: kickoff survey + M3.1 → M3.4 done**; M3.5 packaging next (C5
-source-built plugin for ARM64 hosts, version pinning, AGPL boundary doc).
+(✅ shipped) → M3.5 packaging (✅ shipped) → the M3 exit drill (workstream
+K: pynetdicom fake modality with failure injection) → §8.1 radiology-pilot
+gate closes M3. Every slice keeps `npm test` / `npm run test:db` green.
+**Status: kickoff survey + M3.1 → M3.5 done**; next: the M3 exit drill
+(pynetdicom modality harness) then workstream D (FHIR/webhooks, M4).
 
 ---
 

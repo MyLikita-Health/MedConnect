@@ -66,10 +66,12 @@ services:
   #
   # The derived image (docker/orthanc/Dockerfile) adds the REST-based Worklists
   # plugin so the M3.2 MWL client works live: docker compose up -d --build orthanc
+  # (M3.5: version-pinned multi-arch base — amd64 + arm64; the worklists plugin
+  # is source-built in the image so both architectures work).
   orthanc:
     build:
       context: ./docker/orthanc
-    image: medconnect-orthanc:0.1.0
+    image: medconnect-orthanc:0.2.0
     ports:
       - "8042:8042"  # Orthanc REST API + Explorer
       - "4242:4242"  # DICOM C-STORE/C-FIND port (modalities arrive here)
@@ -81,8 +83,12 @@ services:
   # The hub points the main orthanc service at it as a forwarding peer
   # (http://pacs:8042 inside the compose network) and storeToPeer forwards
   # performed studies there. REST on host 8043 for the demo/verification.
+  # Multi-arch versioned base (M3.5); ORTHANC_PASSWORD satisfies the 1.13+
+  # user requirement, matching the derived image's dev credentials.
   pacs:
-    image: jodogne/orthanc:latest
+    image: orthancteam/orthanc:26.8.2
+    environment:
+      - ORTHANC_PASSWORD=orthanc
     ports:
       - "8043:8042"  # REST (the main Orthanc reaches it as http://pacs:8042)
       - "4243:4242"  # DICOM port (free for a modality later)

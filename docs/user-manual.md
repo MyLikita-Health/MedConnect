@@ -347,7 +347,7 @@ docker compose up -d --build orthanc    # builds the derived image (adds the Wor
 ORTHANC_URL=http://127.0.0.1:8042 ORTHANC_USER=orthanc ORTHANC_PASSWORD=orthanc npm start
 ```
 
-The compose `orthanc` image is derived (`docker/orthanc/Dockerfile`): stock `jodogne/orthanc` plus the REST-based **Worklists plugin** (pinned 0.9.2, AGPLv3+) and the plugin config enabling DB-backed worklists.
+The compose `orthanc` image is derived (`docker/orthanc/Dockerfile`, M3.5): a **version-pinned, multi-arch** base (`orthancteam/orthanc:26.8.2` — amd64 **and** arm64, replacing the amd64-only `jodogne/orthanc:latest`) plus the REST-based **Worklists plugin** (0.9.2, AGPLv3+) **source-built in the image** (the prebuilt binaries are x86_64-only; `STATIC_BUILD` keeps the .so self-contained) and the plugin config enabling DB-backed worklists. Upgrades are a one-line version bump + rebuild; the AGPL boundary policy is `docs/orthanc-agpl-boundary.md` (§7.5.5).
 
 ### 11.2 What runs when `ORTHANC_URL` is set
 
