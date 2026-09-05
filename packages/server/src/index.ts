@@ -14,7 +14,7 @@ import { DEFAULT_MAPPINGS, defaultLayoutFor, type CanonicalMessage } from '@inte
 import { ImagingRouter } from './imaging-router.js';
 import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -54,6 +54,17 @@ export interface HubOptions {
    * under the supervisor) the update agent + /api/v1/updates/* are live.
    */
   stateDir?: string;
+  /**
+   * D3 webhook event bus: subscriptions seeded at boot (tests/demos bring
+   * their own; the webhook-subscriptions REST surface manages them at runtime
+   * from D3 slice 3). The bus itself is always present — with zero
+   * subscriptions `fire()` is a no-op, so wiring the fire points is free.
+   */
+  webhooks?: {
+    subscriptions?: WebhookSubscription[];
+    /** `source` stamped on every event envelope (default `hub:<host>`). */
+    source?: string;
+  };
   /** Signed-manifest source: https URL, .json path, or dir (env UPDATE_SOURCE). */
   updateSource?: string;
   /** PEM update public key (env UPDATE_PUBLIC_KEY) that must sign manifests. */
@@ -111,6 +122,14 @@ export interface Hub {
   /** API-key auth + audit (present unless authDisabled). */
   keys?: KeyStore;
   audit?: AuditStore;
+  /**
+   * D3 webhook event bus (always present; `fire()` no-ops with zero
+   * subscriptions). Domain events are fired at the hub's real seams: message
+   * recorded/failed (result.received/failed, message.failed), device state
+   * flips (device.connected/disconnected) and order registration
+   * (order.received).
+   */
+  webhooks: EventBus;
   ports: { device: number; hl7?: number; http: number };
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool };
@@ -225,18 +244,65 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     await alertStore.upsertRule({ id: 'orthanc-down', kind: 'orthanc-down', name: 'Orthanc MWL unreachable', threshold: 3, channels: ['console'], enabled: true });
   }
 
+  // D3 — the webhook event bus (PRD §37). Always present: the fire points
+  // below call `fireEvent` at the hub's real seams, and with zero subscriptions
+  // a fire is a no-op (no network). Deliveries are fire-and-forget — the event
+  // bus retries per subscription policy internally and never throws, so a slow
+  // subscriber can never hold up the message pipeline.
+  const webhookSource = opts.webhooks?.source ?? `hub:${host}`;
+  const webhooks = new EventBus({
+    subscriptions: opts.webhooks?.subscriptions ?? [],
+    log: (line) => console.log(line),
+  });
+  const fireEvent = (type: WebhookEventType, data: Record<string, unknown>) =>
+    webhooks.fire({ type, data, source: webhookSource });
+
   // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
   // → queue → retry → DLQ (plan §5.3). Matching is the clinical safety gate:
   // results that don't uniquely match a registered order are HELD, not delivered.
-  // Delivery/alert wiring shared by the lab dispatcher and the imaging
-  // dispatcher (M3.3): a successful delivery clears the destination-down
-  // alert, a failure raises it, and DLQ growth re-checks the backlog alert.
+  // Delivery/alert + D3-webhook wiring shared by the lab dispatcher and the
+  // imaging dispatcher (M3.3): a successful delivery clears the
+  // destination-down alert, a failure raises it, and DLQ growth re-checks the
+  // backlog alert. D3 fire points live here so BOTH dispatchers emit domain
+  // events at the same lifecycle moments.
   const alertEvents = (): NonNullable<DispatcherOptions['events']> => ({
+    onRecorded: (message) => {
+      // A new lab message entered the pipeline (imaging study events carry no
+      // `payload` — they have no result.* lifecycle; message.failed covers them).
+      if (!message.payload) return;
+      void fireEvent('result.received', {
+        messageId: message.id,
+        protocol: message.protocol,
+        deviceId: message.deviceId,
+        accession: message.payload.order.id,
+        patientId: message.payload.patient.id,
+        sampleId: message.payload.order.sampleId,
+      });
+    },
     onDelivery: async (event) => {
       if (event.ok) await alerts.deliverySucceeded(event.destinationId);
       else await alerts.deliveryFailed(event.destinationId, event.error ?? 'delivery failed');
     },
-    onDlq: async () => alerts.checkBacklog('dlq', (await store.list({ dlq: true, limit: 500 })).length),
+    onDlq: async (message, reason) => {
+      // message.failed is the generic DLQ event (lab AND imaging); result.failed
+      // additionally fires for lab results (the PRD §37 result lifecycle).
+      void fireEvent('message.failed', {
+        messageId: message.id,
+        protocol: message.protocol,
+        deviceId: message.deviceId,
+        kind: message.imaging ? 'imaging' : 'result',
+        reason,
+      });
+      if (message.payload) {
+        void fireEvent('result.failed', {
+          messageId: message.id,
+          accession: message.payload.order.id,
+          patientId: message.payload.patient.id,
+          reason,
+        });
+      }
+      await alerts.checkBacklog('dlq', (await store.list({ dlq: true, limit: 500 })).length);
+    },
   });
 
   // Outbound connection manager (B3.3 refinement): one held-open MLLP
@@ -323,6 +389,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       console.error(`[gateway] device state update failed: ${(err as Error).message}`);
     }
     await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
+    // D3: every registry state flip from a wire gateway is a domain event.
+    void fireEvent(state === 'connected' ? 'device.connected' : 'device.disconnected', {
+      deviceId,
+      protocol,
+      state,
+    });
   };
 
   const gateway = new AstmGateway({
@@ -366,7 +438,18 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         // expected order (replacing the manual POST /api/v1/orders flow);
         // matching then sees it, so results against it route instead of HELD.
         orders: {
-          register: (order) => orders.register({ ...order, receivedAt: order.receivedAt ?? new Date().toISOString() }),
+          register: (order) => {
+            const registered = { ...order, receivedAt: order.receivedAt ?? new Date().toISOString() };
+            // D3: the LIS feed registering an expected order is order.received.
+            void fireEvent('order.received', {
+              orderId: registered.id,
+              patientId: registered.patientId,
+              sampleId: registered.sampleId,
+              tests: registered.tests,
+              status: registered.status,
+            });
+            return orders.register(registered);
+          },
         },
         // B2c extension — the ADT patient-admission feed: ADT^A01/A04/A08
         // register the patient admission (the patient-side LIS master feed).
@@ -461,6 +544,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
           } catch (err) {
             console.error(`[mwl] device state update failed: ${(err as Error).message}`);
           }
+          // D3: the Orthanc health row is a device like any other.
+          void fireEvent(ok ? 'device.connected' : 'device.disconnected', {
+            deviceId: 'orthanc',
+            protocol: 'DICOM',
+            state: ok ? 'connected' : 'disconnected',
+          });
         })(),
       log: (line) => console.log(line),
     });
@@ -494,6 +583,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
             console.error(`[modality] device state update failed: ${(err as Error).message}`);
           }
           await alerts.deviceState(s.name, s.state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
+          // D3: each Orthanc-registered modality flip is a domain event too.
+          void fireEvent(s.state === 'connected' ? 'device.connected' : 'device.disconnected', {
+            deviceId: s.name,
+            protocol: 'DICOM',
+            state: s.state,
+          });
         }
         // Reconcile: drop auto-registered DICOM rows whose modality vanished
         // from Orthanc's config (never the orthanc row itself).
@@ -570,6 +665,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     alerts,
     alertStore,
     profileStore,
+    webhooks,
     mwl,
     modalities,
     imaging,

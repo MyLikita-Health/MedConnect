@@ -1615,7 +1615,50 @@ translator + round-trip oracle tests before any wiring).
    `api:read` in ROUTE_SCOPES (viewer-and-up), responses carry
    `application/fhir+json`. A FHIR client points its base at
    `<hub>/api/v1/fhir`. v1 limits: read + search only, `_id` is the only
-   search param. Next: D3 webhook event bus, then D4 sandbox/OpenAPI.
+   search param.
+
+9. ✅ **D3 (slice 1) — signed webhook event bus engine**
+   (`packages/core/src/event-bus.ts`, 5 tests): the domain-event catalog
+   (result.received/validated/failed, order.received,
+   device.connected/disconnected, message.failed) with typed envelopes
+   (id = idempotency key, occurredAt, source, data). Delivery POSTs are
+   HMAC-SHA256 signed per-subscription secret →
+   `X-IntegrationHub-Signature: sha256=…` + `X-IntegrationHub-Event`/
+   `-Event-Id`/`-Timestamp` headers; `verifyWebhookSignature` (constant-time)
+   exported for receivers/tests — the D exit criterion "signature verification
+   tested" is asserted. EventBus: fire → enabled matching subscriptions only,
+   per-subscription retry policy, attempt-level delivery log, envelope
+   retention (bounded) and **replay** that re-sends the SAME signed body +
+   event id (consumer dedupe). Wiring-free by design (the D2/B3.1 pattern).
+   Next (D3 slice 2): wire real fire points in `startHub` (message recorded/
+   failed, device state flips, order registered) + webhook-subscriptions
+   REST surface + console, reusing this engine.
+
+10. ✅ **D3 (slice 2) — webhook fire points wired into `startHub`**
+   (`packages/server/src/index.ts` + `packages/server/src/webhooks.test.ts`,
+   2 e2e tests, 353 total): the bus (always present — zero subscriptions =
+   fire no-ops, so wiring is free) now fires at the hub's real seams. A new
+   `DispatcherEvents.onRecorded` (fired after dedup — duplicates stay
+   silent) maps to `result.received` for lab payloads; the shared dispatcher
+   `onDlq` fires `message.failed` for EVERY DLQ (lab + imaging, so
+   `message.failed` = "any message reaching FAILED/DLQ" as catalogued) plus
+   `result.failed` for lab results; gateway device flips fire
+   `device.connected/disconnected` (ASTM + HL7 wire seams AND the Orthanc
+   poll + modality C-ECHO device rows, protocol DICOM); the HL7 ORM feed
+   fires `order.received` when it registers an expected order. Deliveries
+   are fire-and-forget (the bus retries internally, never throws — a slow
+   subscriber can't hold the message pipeline). Hub opts gain `webhooks:
+   { subscriptions, source }` (tests/demos seed; runtime management is slice
+   3's REST surface) and `hub.webhooks` is exposed. E2e proof drives a real
+   MLLP session: ORM → device.connected + order.received (id ACC-424242,
+   tests [GLUCOSE]), matching ORU → result.received → ROUTED, rule → dead
+   HTTP destination → message.failed + result.failed carry the SAME
+   messageId and the store row lands FAILED + dlqAt; socket close →
+   device.disconnected. Every captured delivery is verified end-to-end:
+   HMAC signature checks against the raw body with `verifyWebhookSignature`
+   and the X-IntegrationHub-Event/-Event-Id/-Timestamp headers match the
+   envelope. Deferred to slice 3: the manual `POST /api/v1/orders` fire
+   point + webhook-subscriptions REST surface + console.
 
 ---
 

@@ -46,6 +46,12 @@ export interface DeliveryEvent {
 
 /** Optional lifecycle observers (wired to alerting, plan workstream I). */
 export interface DispatcherEvents {
+  /**
+   * A NEW message was accepted into the pipeline (recorded + passed dedup).
+   * Duplicates return before this fires; the D3 webhook bus maps it to
+   * `result.received` for lab payloads.
+   */
+  onRecorded?(message: CanonicalMessage): void | Promise<void>;
   /** One delivery attempt finished (success or failure). */
   onDelivery?(event: DeliveryEvent): void | Promise<void>;
   /** A message entered the dead-letter queue. */
@@ -124,6 +130,9 @@ export class Dispatcher implements MessageSink {
       }
       await this.opts.dedup.add(key, message.id, this.opts.dedupTtlMs ?? DEFAULT_DEDUP_TTL_MS);
     }
+
+    // The message is accepted: a real (non-duplicate) entry into the pipeline.
+    await this.opts.events?.onRecorded?.(message);
 
     // Patient/order matching (E6) then validation (E5). Hold outcomes park the
     // message in the exception queue; the operator reviews and releases it.

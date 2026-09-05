@@ -44,6 +44,23 @@ export {
 export { PostgresAlertStore } from './pg-alerts.js';
 export { InMemoryAlertStore, type AlertFilter, type AlertKind, type AlertRecord, type AlertRule, type AlertStore } from './alert-store.js';
 export { AlertService, type AlertServiceOptions } from './alerts.js';
+export {
+  EVENT_HEADER,
+  EVENT_ID_HEADER,
+  EventBus,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  WEBHOOK_EVENT_TYPES,
+  signWebhook,
+  verifyWebhookSignature,
+  type EventBusOptions,
+  type FireEventInput,
+  type WebhookDelivery,
+  type WebhookDeliveryAttempt,
+  type WebhookEvent,
+  type WebhookEventType,
+  type WebhookSubscription,
+} from './event-bus.js';
 export { PostgresAdmissionRegistry, PostgresOrderRegistry } from './pg-registry.js';
 export {
   DEFAULT_UNIT_CATALOG,
