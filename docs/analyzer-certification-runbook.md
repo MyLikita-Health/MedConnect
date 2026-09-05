@@ -1,9 +1,10 @@
 # Analyzer Certification Runbook
 
 Onboarding a real analyzer onto the hub as a **certified device profile** — from
-first bytes on the wire to a CI-gated, version-stamped, bound profile. This is
-the field procedure behind the "certified device profile" claim (PRD §39–40,
-plan §6.3, workstream A2/K).
+first bytes on the wire to a CI-gated, version-stamped, bound profile.This is the field procedure behind the "certified device profile" claim (PRD §39–40,
+plan §6.3, workstream A2/K). It covers both certification gates the platform
+ships: the **ASTM golden gate** for lab analyzers (§§1–9) and the **M3 imaging
+exit drill** (§10, workstream K) that closes the imaging workstream.
 
 **What certification means here.** A *profile* is configuration that turns the
 generic ASTM pipeline into a device adapter: 1-based record-layout field
@@ -403,3 +404,111 @@ curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
 Deliverable: profile id + golden file + device binding + the soak report. That
 combination is what "certified" means on this platform — the rest of the
 pipeline is config, not code.
+
+---
+
+## 10. The M3 exit drill — imaging certification gate (workstream K)
+
+The imaging counterpart to the ASTM golden gate. Where §§1–7 certify a lab
+analyzer by *recorded transcripts* replayed through the ASTM pipeline, the M3
+exit drill certifies the imaging chain (plan §7.C / §13.16) by driving it
+**live over real DICOM networking**: a pynetdicom *fake modality* stands in
+for an actual CT scanner and walks the entire order → worklist → store → route
+path against a real Orthanc, with failure injection. Passing the drill is the
+M3 exit gate.
+
+### 10.1 Components
+
+| Piece | Where | Role |
+| --- | --- | --- |
+| Fake modality | `scripts/dicom-modality/fake_modality.py` | pynetdicom AE that answers C-ECHO, C-FINDs the worklist, C-STOREs performed studies, and can refuse stores (`--refuse`) |
+| Orthanc | `docker compose up -d --build orthanc` (`medconnect-orthanc:0.2.0`) | the DICOM engine; its Worklists plugin holds the MWL, its ModalityMonitor C-ECHOs registered modalities |
+| Hub (drill-booted) | `startHub` inside `scripts/demo-m3-exit.ts` | in-memory, auth-disabled, with `orthanc` + modality-monitor wiring; MLLP listener (ADT/ORM); MWL monitor; imaging router; device registry + alerts |
+
+No live hub, no Postgres, and no PACS peer are needed — the drill boots its own
+hub and cleans up after itself: the modality config, patients, and worklist
+items are removed, so Orthanc is left exactly as it was.
+
+### 10.2 Prerequisites
+
+```bash
+docker compose up -d --build orthanc      # derived image incl. the Worklists plugin
+python3 -m venv .venv && .venv/bin/pip install pynetdicom   # the fake modality's AE stack
+npm run build
+```
+
+The fake modality runs **on the host** and Orthanc must reach it back through
+the compose container, so `host.docker.internal` has to resolve inside the
+Orthanc container — automatic on Docker Desktop; on Linux add
+`extra_hosts: ["host.docker.internal:host-gateway"]` to the compose `orthanc`
+service.
+
+Environment overrides: `ORTHANC_URL` / `ORTHANC_USER` / `ORTHANC_PASSWORD`
+(defaults `http://127.0.0.1:8042` / `orthanc` / `orthanc`), `MODALITY_AET`
+(default `FAKE-CT`), `MODALITY_PORT` (default `11112`), `MODALITY_PYTHON`
+(default `.venv/bin/python`).
+
+### 10.3 Run the gate
+
+```bash
+npm run demo:m3-exit
+# exit 0  →  [drill] ═══ DRILL COMPLETE — ALL CHECKS PASSED ═══
+# exit 1  →  one or more ✗ FAIL lines; the failing check names what broke
+```
+
+The drill prints one `✓` / `✗ FAIL` line per check; **any** ✗ makes it exit 1
+— treat that as the M3 exit gate failing.
+
+### 10.4 What each check proves
+
+| # | Check | Proves |
+| --- | --- | --- |
+| 1 | `admission accepted (AA)` | ADT^A01 over MLLP parsed + accepted (the LIS patient feed) |
+| 2 | `order accepted (AA)` | ORM^O01 over MLLP parsed + registered in the OrderRegistry |
+| 3 | `order synced onto the Orthanc worklist` | MWL monitor pushed the registry order to the Worklists plugin — accepts `created` **or** `queued`, since the standing poller may have won the race |
+| 4 | `C-FIND found the scheduled procedure` | a real modality query finds the worklist item (empty return-keys, the way real scanners query) |
+| 5 | `C-STORE performed the study into Orthanc` | the performed study lands in Orthanc over DICOM |
+| 6 | `performed study became a hub message` + `study routed through the dispatcher` + accession carried | the monitor's next poll sees the study and routes its metadata → `ROUTED` |
+| 7 | modality `disconnected` + `device-offline` FIRING, then `connected` + resolved after restart | failure injection A: C-ECHO failure → device row + alert, auto-recovery |
+| 8 | second study `FAILED` + `dlqAt`, then `ROUTED` + marker cleared after rule fix + retry | failure injection B: dead destination → DLQ (never a silent drop) → operator retry |
+
+### 10.5 Failure-injection manual controls (fake modality CLI)
+
+```bash
+.venv/bin/python scripts/dicom-modality/fake_modality.py serve \
+  --ae FAKE-CT --host 0.0.0.0 --port 11112 [--accept-store]
+.venv/bin/python scripts/dicom-modality/fake_modality.py find-mwl \
+  --ae FAKE-CT --orthanc 127.0.0.1 --port 4242 --accession ACC-X --expect
+.venv/bin/python scripts/dicom-modality/fake_modality.py store \
+  --ae FAKE-CT --orthanc 127.0.0.1 --port 4242 \
+  --accession ACC-X --patient-id PID-1 --patient-name "Doe^John" --modality CT [--refuse]
+```
+
+- Killing the `serve` process = the modality going offline (drill failure A).
+- `--refuse` on `store` = modality-side storage failure; nothing lands and the
+  worklist item stays scheduled.
+- `--expect` on `find-mwl` makes a missing match exit non-zero, so the query
+  asserts the item was found.
+
+### 10.6 Exit criteria for M3
+
+- [ ] `npm run demo:m3-exit` passes clean (exit 0, all ✓) against a fresh
+      `docker compose up -d --build orthanc`.
+- [ ] The two failure injections actually fail before they are fixed — a drill
+      that passes with the modality never going offline or the rule never
+      pointing at a dead destination proves nothing. Introduce a deliberate
+      regression (e.g. rule → dead port), confirm the ✗ appears, then restore.
+- [ ] Orthanc is left pristine after the run: `GET /modalities`,
+      `GET /patients`, and `GET /worklists` all empty.
+- [ ] The chain also holds on Postgres: `npm run test:db` green (imaging
+      messages persist through the PG store).
+
+### 10.7 Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `C-ECHO failed` / modality never connects | Orthanc can't reach the host-run modality | Confirm the `serve` process is up; check `host.docker.internal` resolves inside the Orthanc container (§10.2) |
+| `C-FIND found 0` although the worklist item exists | Query sent `PatientName="*"` — Orthanc's matcher treats `*` as *requiring* the tag to exist on the item | Send empty (return) keys like real modalities; feed an ADT first so the item carries the patient name |
+| Check 3 reports `created=0 queued=0` | The order never reached the worklist | Order must be `active` with a `patientId`; confirm the ORM leg produced `AA` (check 2) |
+| `unknown destination kind: hl7` when routing imaging | The imaging dispatcher lacks the outbound-HL7 deliverer | Both dispatchers must share the same MLLP pool — wire `deliverHl7Destination` into the imaging dispatcher |
+| `host.docker.internal` unresolved (Linux hosts) | Docker Desktop's NAT hostname doesn't exist on Linux | Add `extra_hosts: ["host.docker.internal:host-gateway"]` to the compose `orthanc` service |

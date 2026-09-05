@@ -372,6 +372,40 @@ docker compose up -d pacs && npm run demo:routing              # M3.3: metadata 
 .venv/bin/pip install pynetdicom && npm run demo:m3-exit       # M3 exit drill: real DICOM modality (C-FIND/C-STORE) + failure injection
 ```
 
+### 11.5 The M3 exit drill (imaging certification gate)
+
+`npm run demo:m3-exit` is the platform's **M3 exit gate** (workstream K): it
+drives the whole imaging chain **live, over real DICOM networking** — a
+pynetdicom *fake modality* stands in for an actual CT scanner and walks
+**ADT^A01 → ORM^O01 (MLLP) → MWL C-FIND → C-STORE → routed performed study**
+against a real Orthanc container, then exercises the two failure paths an
+operator will actually meet:
+
+- **Modality offline** — kill the fake modality: Orthanc's C-ECHO fails, the
+  hub's modality monitor flips the device row to `disconnected` and fires
+  `device-offline`; restarting the modality resolves both automatically.
+- **Dead routing destination** — a rule pointed at an unreachable `hl7`
+  destination sends the study to `FAILED` + the DLQ (never a silent drop);
+  after the rule is fixed, an operator retry (`POST /api/v1/messages/:id/retry`
+  or the Radiology panel's Retry button) routes it → `ROUTED`.
+
+Run it:
+
+```bash
+docker compose up -d --build orthanc   # derived image incl. the Worklists plugin
+python3 -m venv .venv && .venv/bin/pip install pynetdicom   # the fake modality
+npm run build
+npm run demo:m3-exit                   # exit 0 = ALL CHECKS PASSED; any ✗ FAIL = gate failed
+```
+
+The drill prints one ✓/✗ line per check (ADT/ORM accepted, order on the
+worklist, C-FIND match, C-STORE landed, study routed, device-offline fired +
+resolved, DLQ + retry), cleans up after itself (Orthanc left pristine), and
+boots its own hub — no Postgres or PACS peer needed. Every check, the
+failure-injection manual controls, the exit criteria, and troubleshooting
+live in the [certification runbook
+§10](docs/analyzer-certification-runbook.md#10-the-m3-exit-drill--imaging-certification-gate-workstream-k).
+
 ---
 
 ## 12. How a message flows through the pipeline

@@ -1582,7 +1582,40 @@ workstream K)** → §8.1 radiology-pilot gate closes M3. Every slice keeps
    up -d --build orthanc` + `.venv/bin/pip install pynetdicom`.
 
 **Status: M3 fully shipped through the exit drill (M3.1 → M3.5 + drill)**;
-next: workstream D (FHIR/webhooks, M4).
+**M4 started — workstream D, D2 first** (the B3.1 pattern: pure two-way
+translator + round-trip oracle tests before any wiring).
+
+7. ✅ **D2 — canonical ↔ FHIR R4 translator** (`@integration-hub/fhir`,
+   `packages/fhir/src/translate.ts`, 8 oracle tests): canonical → FHIR
+   (Patient, ServiceRequest, DiagnosticReport, Observation-per-result,
+   ImagingStudy, Device — the D1 resource set) and FHIR → canonical,
+   proven by round-trip identity tests. Standards choices: interpretation
+   carries the raw **v2-0078 abnormal-flag code** (lossless), status maps
+   F/P/C/X/I/D bijectively (S/A collapse to `preliminary`), numeric values
+   become `valueQuantity` incl. comparator ranges (`>200` → comparator),
+   non-numeric ride `valueString`, ref-range "a-b" → low/high, name
+   "Last, Given" → family/given, order accession/sample → typed ServiceRequest
+   identifiers, ImagingStudy storage URLs ride extensions (pixels never in
+   the hub). Documented v1 limits: multi-test orders carry the primary test
+   on ServiceRequest.code, pure numeric formatting normalizes (`95.0`→`95`),
+   imaging series ids / device transport have no R4 home. Next: D1 REST
+   imaging series ids / device transport have no R4 home. Next: D1 REST
+   surface (`/fhir` routes serving these resources from the stores).
+
+8. ✅ **D1 — FHIR R4 REST surface** (`packages/api/src/fhir.ts`, 7 route
+   tests): `GET /api/v1/fhir/metadata` (CapabilityStatement), `GET
+   /api/v1/fhir/:type` (searchset Bundle, `?_id=` filter) and `GET
+   /api/v1/fhir/:type/:id` (single resource; unknown type/id → FHIR
+   OperationOutcome 404) for Patient / ServiceRequest / DiagnosticReport /
+   Observation / ImagingStudy / Device. Resources project live from the
+   stores — lab messages → the D2 resources, imaging messages (M3.3) →
+   ImagingStudy, device registry → Device — with NEWEST-message-wins on
+   duplicate resource ids (a corrected re-send supersedes the earlier one).
+   Mounted under `/api/v1` so FHIR inherits key auth: every route is
+   `api:read` in ROUTE_SCOPES (viewer-and-up), responses carry
+   `application/fhir+json`. A FHIR client points its base at
+   `<hub>/api/v1/fhir`. v1 limits: read + search only, `_id` is the only
+   search param. Next: D3 webhook event bus, then D4 sandbox/OpenAPI.
 
 ---
 

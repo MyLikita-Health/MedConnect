@@ -84,6 +84,10 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/mwl': 'api:read',
   'GET /api/v1/imaging': 'api:read',
   'GET /api/v1/me': 'api:read',
+  // FHIR R4 outward surface (M4/D1) — all reads.
+  'GET /api/v1/fhir/metadata': 'api:read',
+  'GET /api/v1/fhir/:type': 'api:read',
+  'GET /api/v1/fhir/:type/:id': 'api:read',
   // Management reads (admin)
   'GET /api/v1/keys': 'keys:manage',
   'GET /api/v1/audit': 'audit:read',

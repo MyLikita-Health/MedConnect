@@ -29,6 +29,7 @@ import {
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
 import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
+import { registerFhirRoutes } from './fhir.js';
 import { renderUi } from './ui.js';
 
 /** PEM key + cert; when present the API listens on HTTPS (PRD §42 TLS). */
@@ -624,6 +625,10 @@ export class ApiServer {
           })),
         );
     });
+
+    // FHIR R4 outward surface (M4/D1): read + search over the stored
+    // lab/imaging messages and the device registry, at /api/v1/fhir.
+    registerFhirRoutes(app, { store: this.opts.store, devices: this.opts.devices });
 
     // Security endpoints (only meaningful with auth enabled): identify the
     // calling key, manage API keys, and query the audit log.

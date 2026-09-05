@@ -507,7 +507,10 @@ demo:m3-exit`) drives ADT^A01 → ORM^O01 → MWL C-FIND → C-STORE → routed
 performed study over real DICOM networking, with failure injection — the
 modality going offline flips its device row + fires `device-offline`, and a
 rule pointed at a dead HL7 destination DLQs the study until the operator
-retries after fixing it. Cleanup leaves Orthanc pristine.
+retries after fixing it. Cleanup leaves Orthanc pristine. **This drill is the
+M3 exit gate** — every check it makes, the failure-injection controls, and
+its troubleshooting table are documented in the [certification runbook
+§10](docs/analyzer-certification-runbook.md#10-the-m3-exit-drill--imaging-certification-gate-workstream-k).
 
 Set `ORTHANC_URL` (+ user/password) when starting the hub and `hub.mwl` runs
 the same loop continuously (`MWL_POLL_MS` cadence, default 60s). Each
