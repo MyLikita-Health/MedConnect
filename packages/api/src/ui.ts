@@ -452,6 +452,15 @@ export function renderUi(): string {
   }
   .rad-block .section-sub { color: var(--text-dim); font-size: 11px; }
   .rad-block .has-err { color: var(--err); }
+  /* Narrow left column: keep rows single-line (the panel scrolls
+     horizontally like the other tables); long study descriptions get an
+     ellipsis clamp with the full text in the title tooltip. */
+  .rad-block td { white-space: nowrap; }
+  .rad-block td.ellipsis {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 </style>
 </head>
 <body>
@@ -551,34 +560,6 @@ export function renderUi(): string {
       </div>
     </div>
 
-    <!-- Radiology console (M3.4 — shown when Orthanc is configured) -->
-    <div class="panel" id="radiology-panel" style="display:none">
-      <h2>Radiology <span class="sub">MWL worklist + performed-study routing (M3.2–M3.4)</span></h2>
-
-      <!-- MWL worklist: what modalities will C-FIND + the sync health -->
-      <div class="rad-block" id="rad-mwl-block" style="display:none">
-        <h3>Orthanc worklist <span class="section-sub" id="mwl-summary"></span></h3>
-        <div id="mwl-status" class="muted" style="font-size:12px;margin-bottom:8px"></div>
-        <div class="tbl-wrap">
-          <table id="mwl">
-            <thead><tr><th>Accession</th><th>Patient</th><th>Modality</th><th>Scheduled</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Imaging studies: performed-study events + how they routed -->
-      <div class="rad-block" id="rad-imaging-block" style="display:none">
-        <h3>Imaging studies <span class="section-sub" id="imaging-summary"></span></h3>
-        <div class="tbl-wrap">
-          <table id="imaging">
-            <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th>Routing</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
     <!-- Software updates (shown when configured) -->
     <div class="panel" id="updates-panel" style="display:none">
       <h2>Software updates</h2>
@@ -627,6 +608,35 @@ export function renderUi(): string {
 
   <!-- Right column -->
   <section>
+
+    <!-- Radiology console (M3.4 — shown when Orthanc is configured; wide
+         tables live in the right column next to the detail route) -->
+    <div class="panel" id="radiology-panel" style="display:none">
+      <h2>Radiology <span class="sub">MWL worklist + performed-study routing (M3.2–M3.4)</span></h2>
+
+      <!-- MWL worklist: what modalities will C-FIND + the sync health -->
+      <div class="rad-block" id="rad-mwl-block" style="display:none">
+        <h3>Orthanc worklist <span class="section-sub" id="mwl-summary"></span></h3>
+        <div id="mwl-status" class="muted" style="font-size:12px;margin-bottom:8px"></div>
+        <div class="tbl-wrap">
+          <table id="mwl">
+            <thead><tr><th>Accession</th><th>Patient</th><th>Modality</th><th>Scheduled</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Imaging studies: performed-study events + how they routed -->
+      <div class="rad-block" id="rad-imaging-block" style="display:none">
+        <h3>Imaging studies <span class="section-sub" id="imaging-summary"></span></h3>
+        <div class="tbl-wrap">
+          <table id="imaging">
+            <thead><tr><th>Accession</th><th>Status</th><th>Performed</th><th>Study</th><th>Routing</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
     <!-- Messages -->
     <div class="panel">
@@ -882,7 +892,7 @@ function renderImaging(view) {
         '<td class="col-id mono">' + esc(img.accession || '—') + '</td>' +
         '<td><span class="pill ' + esc(m.status) + '">' + esc(m.status) + '</span></td>' +
         '<td class="dim mono">' + (img.performedAt ? new Date(img.performedAt).toLocaleTimeString() : '—') + '</td>' +
-        '<td class="dim">' + esc((img.study && img.study.studyDescription) || (img.study && img.study.orthancId || '').slice(0, 12) || '—') + '</td>' +
+        '<td class="dim ellipsis" title="' + esc((img.study && img.study.studyDescription) || (img.study && img.study.orthancId || '').slice(0, 12) || '—') + '">' + esc((img.study && img.study.studyDescription) || (img.study && img.study.orthancId || '').slice(0, 12) || '—') + '</td>' +
         '<td style="white-space:nowrap">' + action + '</td></tr>';
     }).join('') || '<tr class="empty-row"><td colspan="5">No imaging studies yet — perform a study and the monitor routes it here.</td></tr>';
 }
