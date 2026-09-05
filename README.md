@@ -1,6 +1,7 @@
 # Integration Hub — MVP scaffold
 
-> Full-platform roadmap: see [`docs/implementation-plan.md`](docs/implementation-plan.md) — architecture decisions, workstream plans, phased milestones M0–M5, risks, and the scaffold→production evolution map.
+> **User manual:** setup, configuration, console, API, device connectivity (ASTM + HL7), imaging, routing, alerts, and troubleshooting — see [`docs/user-manual.md`](docs/user-manual.md).
+> **Full-platform roadmap:** see [`docs/implementation-plan.md`](docs/implementation-plan.md) — architecture decisions, workstream plans, phased milestones M0–M5, risks, and the scaffold→production evolution map.
 
 A working skeleton of the healthcare interoperability platform described in
 [`docs/prd.txt`](docs/prd.txt): a hub that connects laboratory analyzers to LIS/HIS
@@ -250,7 +251,7 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 313 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 331 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
@@ -259,11 +260,13 @@ npm test           # 313 tests: codec, sessions, pipeline, matching/validation,
                    #   variant + ADT golden corpora, Orthanc REST adapter
                    #   (M3.1) + MWL worklist client + startHub study monitor
                    #   + storage routing (M3.2/M3.3: performed studies through
-                   #   the dispatcher, peer forwarding), dispatcher/DLQ, API,
-                   #   security (roles/scopes + authz + audit), signed
-                   #   updates + supervisor (apply/rollback/crash) (18
+                   #   the dispatcher, peer forwarding), imaging failure
+                   #   handling (M3.4: dispatcher retry + radiology console),
+                   #   modality C-ECHO device health (M3 C6), dispatcher/DLQ,
+                   #   API, security (roles/scopes + authz + audit), signed
+                   #   updates + supervisor (apply/rollback/crash) (21
                    #   DB-gated skip)
-npm run test:db    # 313 tests: same + PostgreSQL integration (needs db:up)
+npm run test:db    # 331 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
