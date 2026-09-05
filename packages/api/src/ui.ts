@@ -560,6 +560,38 @@ export function renderUi(): string {
       </div>
     </div>
 
+    <!-- D3 webhooks (PRD §37): subscriptions + signed delivery log. Reads are
+         api:read (any signed-in role); add/delete/test/replay are config:write
+         (engineer and up) — the action buttons hide below that. -->
+    <div class="panel">
+      <h2>Webhooks <span class="sub">signed event deliveries · D3 event bus</span></h2>
+      <div id="webhook-result" style="white-space:pre-wrap;font-size:12px;margin-bottom:8px;padding:8px;border-radius:var(--radius-sm);background:var(--bg);display:none"></div>
+      <div class="tbl-wrap">
+        <table id="webhooks">
+          <thead><tr><th>Name</th><th>URL</th><th>Events</th><th>State</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="webhook-add" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <h2 style="margin-bottom:8px;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-dim)">Add subscription — the hub signs every POST with the HMAC secret</h2>
+        <div class="key-add-row" style="flex-wrap:wrap">
+          <label>Name <input id="wh-name" placeholder="e.g. LIS results receiver" style="width:160px"/></label>
+          <label>URL <input id="wh-url" placeholder="https://receiver.example/hook" style="width:220px"/></label>
+          <label>Events <input id="wh-events" placeholder="*  or  result.received, order.received" style="width:220px"/></label>
+          <label>Secret <input id="wh-secret" placeholder="blank = auto-generate (shown once)" style="width:200px"/></label>
+          <label style="align-items:center"><input id="wh-enabled" type="checkbox" checked/> enabled</label>
+          <button onclick="addWebhook()">Add subscription</button>
+          <button class="ghost" onclick="testWebhook()">Send test ping</button>
+        </div>
+      </div>
+      <div class="tbl-wrap" style="margin-top:14px">
+        <table id="webhook-deliveries">
+          <thead><tr><th>Event</th><th>Subscription</th><th>Status</th><th>Attempts</th><th>When</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Software updates (shown when configured) -->
     <div class="panel" id="updates-panel" style="display:none">
       <h2>Software updates</h2>
@@ -735,7 +767,10 @@ async function refresh() {
   // stay hidden unless the hub is wired (the monitor is running).
   const imagingReq = api('/api/v1/imaging').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
   const mwlReq     = api('/api/v1/mwl').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
-  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView] = await Promise.all([
+  // D3 webhook event bus: subscription + delivery views (api:read — any role).
+  const webhooksReq   = api('/api/v1/webhooks').then(async r => r.ok ? r.json() : []);
+  const deliveriesReq = api('/api/v1/webhooks/deliveries?limit=50').then(async r => r.ok ? r.json() : []);
+  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView, webhookSubs, webhookDeliveries] = await Promise.all([
     api('/api/v1/health').then(r => r.json()),
     api('/api/v1/stats').then(r => r.json()),
     api('/api/v1/devices').then(r => r.json()),
@@ -746,6 +781,8 @@ async function refresh() {
     keysReq,
     imagingReq,
     mwlReq,
+    webhooksReq,
+    deliveriesReq,
   ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -760,6 +797,7 @@ async function refresh() {
     renderProfiles(profiles);
     renderKeys(keys);
     renderRadiology(mwlView, imagingView);
+    renderWebhooks(webhookSubs, webhookDeliveries);
     if (selectedId) renderDetail(selectedId);
     renderUpdates();
   } catch {
@@ -826,6 +864,126 @@ function renderAlerts(alerts) {
       '<td>' + esc(a.message) + '</td>' +
       '<td class="dim mono">' + new Date(a.firedAt).toLocaleTimeString() + '</td></tr>'
     ).join('') || '<tr class="empty-row"><td colspan="4">No firing alerts.</td></tr>';
+}
+
+/* ── Webhooks (D3 event bus) ──────────────────────────────────────── */
+function showWebhookResult(msg, isErr) {
+  const el = document.getElementById('webhook-result');
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.className = isErr ? 'err' : 'ok';
+}
+
+function renderWebhooks(subs, deliveries) {
+  const manage = manageProfiles(); // config:write = admin/engineer
+  const addRow = document.getElementById('webhook-add');
+  addRow.style.display = manage ? 'flex' : 'none';
+  addRow.style.flexDirection = 'column';
+  document.getElementById('webhooks').querySelector('tbody').innerHTML =
+    subs.map(s => {
+      const eventsHtml = s.events === '*'
+        ? '<span class="pill ok" style="font-size:10px;padding:1px 6px">* all events</span>'
+        : (s.events || []).map(e => '<span class="pill" style="font-size:10px;padding:1px 6px">' + esc(e) + '</span>').join(' ');
+      const btns = manage ? [
+        '<button class="ghost" style="font-size:11px;padding:3px 8px" onclick="toggleWebhook(\\'' + esc(s.id) + '\\',' + s.enabled + ')">' + (s.enabled ? 'Disable' : 'Enable') + '</button>',
+        '<button class="danger" style="font-size:11px;padding:3px 8px" onclick="deleteWebhook(\\'' + esc(s.id) + '\\')">Delete</button>',
+      ].join(' ') : '';
+      return '<tr>' +
+        '<td><span class="dev-name">' + esc(s.name) + '</span><br/><span class="dev-id">' + esc(s.id) + '</span></td>' +
+        '<td class="dim ellipsis" style="max-width:260px" title="' + esc(s.url) + '">' + esc(s.url) + '</td>' +
+        '<td>' + eventsHtml + '</td>' +
+        '<td><span class="pill ' + (s.enabled ? 'connected' : 'disconnected') + '">' + (s.enabled ? 'enabled' : 'disabled') + '</span></td>' +
+        '<td style="white-space:nowrap">' + btns + '</td></tr>';
+    }).join('') || '<tr class="empty-row"><td colspan="5">No webhook subscriptions yet — add one to receive signed result/order/device events.</td></tr>';
+
+  const names = {};
+  (subs || []).forEach(s => { names[s.id] = s.name; });
+  document.getElementById('webhook-deliveries').querySelector('tbody').innerHTML =
+    (deliveries || []).map(d => {
+      const attempts = (d.attempts || []).length;
+      const last = (d.attempts || []).slice(-1)[0];
+      const err = d.lastError ? ' · ' + esc(d.lastError) : '';
+      const replay = manage && !d.ok
+        ? '<button class="ghost" style="font-size:11px;padding:3px 8px" onclick="replayWebhook(\\'' + esc(d.eventId) + '\\')" title="Re-send the same signed delivery">↩ Replay</button>' : '';
+      return '<tr>' +
+        '<td class="mono">' + esc(d.eventId.slice(0, 8)) + '…</td>' +
+        '<td>' + esc(names[d.subscriptionId] || d.subscriptionId) + '</td>' +
+        '<td><span class="pill ' + (d.ok ? 'connected' : 'disconnected') + '">' + (d.ok ? 'delivered' : 'failed') + '</span></td>' +
+        '<td class="dim">' + attempts + (err ? ' — <span title="' + err + '" class="has-err">' + esc((d.lastError || '').slice(0, 40)) + '</span>' : '') + '</td>' +
+        '<td class="dim mono">' + (d.deliveredAt ? new Date(d.deliveredAt).toLocaleTimeString() : (last ? new Date(last.at).toLocaleTimeString() : '—')) + '</td>' +
+        '<td style="white-space:nowrap">' + replay + '</td></tr>';
+    }).join('') || '<tr class="empty-row"><td colspan="6">No webhook deliveries yet — events fire as results/orders/devices flow through the hub.</td></tr>';
+}
+
+async function addWebhook() {
+  const name = document.getElementById('wh-name').value.trim();
+  const url  = document.getElementById('wh-url').value.trim();
+  if (!name || !url) { showWebhookResult('name and URL are required', true); return; }
+  const rawEvents = document.getElementById('wh-events').value.trim();
+  const events = !rawEvents || rawEvents === '*'
+    ? '*'
+    : rawEvents.split(',').map(e => e.trim()).filter(Boolean);
+  const secret = document.getElementById('wh-secret').value.trim() || undefined;
+  const enabled = document.getElementById('wh-enabled').checked;
+  const res = await api('/api/v1/webhooks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, url, events, secret, enabled }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showWebhookResult('create failed: ' + (body.error || res.status), true); return; }
+  const holder = document.getElementById('webhook-result');
+  holder.style.display = 'block';
+  holder.className = '';
+  holder.innerHTML =
+    '<span style="color:var(--ok);font-size:12px">✓ Created ' + esc(body.id) + '. HMAC secret shown once — copy it now:</span><br/>' +
+    '<input readonly value="' + esc(body.secret) + '" style="width:100%;margin:6px 0;font-family:ui-monospace,Menlo,monospace" onfocus="this.select()"/>';
+  document.getElementById('wh-name').value = '';
+  document.getElementById('wh-url').value = '';
+  document.getElementById('wh-secret').value = '';
+  await refresh();
+}
+
+async function toggleWebhook(id, enabled) {
+  const res = await api('/api/v1/webhooks/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: !enabled }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showWebhookResult('toggle failed: ' + (body.error || res.status), true); return; }
+  showWebhookResult('✓ ' + id + ' ' + (body.enabled ? 'enabled' : 'disabled'), false);
+  await refresh();
+}
+
+async function deleteWebhook(id) {
+  if (!confirm('Delete webhook subscription ' + id + '? Deliveries to it stop immediately.')) return;
+  const res = await api('/api/v1/webhooks/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!res.ok) { showWebhookResult('delete failed: ' + res.status, true); return; }
+  showWebhookResult('✓ deleted ' + id, false);
+  await refresh();
+}
+
+async function testWebhook() {
+  // Pings every enabled subscription matching the event type (a wiring
+  // check — the signed POST lands in the delivery log below).
+  const res = await api('/api/v1/webhooks/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { showWebhookResult('test ping failed: ' + (out.error || res.status), true); return; }
+  showWebhookResult('✓ test ping fired — event ' + out.id + ', delivered to ' + out.matched + ' subscription(s)' + (out.note ? ' (' + out.note + ')' : ''), out.matched === 0);
+  await refresh();
+}
+
+async function replayWebhook(eventId) {
+  const res = await api('/api/v1/webhooks/deliveries/' + encodeURIComponent(eventId) + '/replay', { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { showWebhookResult('replay failed: ' + (body.error || res.status), true); return; }
+  showWebhookResult('✓ re-sent to ' + body.attempted + ' subscription(s)', false);
+  await refresh();
 }
 
 /* ── Radiology console (M3.4) ─────────────────────────────────────── */

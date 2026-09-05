@@ -83,6 +83,8 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'GET /api/v1/admissions': 'api:read',
   'GET /api/v1/mwl': 'api:read',
   'GET /api/v1/imaging': 'api:read',
+  'GET /api/v1/webhooks': 'api:read',
+  'GET /api/v1/webhooks/deliveries': 'api:read',
   'GET /api/v1/me': 'api:read',
   // FHIR R4 outward surface (M4/D1) — all reads.
   'GET /api/v1/fhir/metadata': 'api:read',
@@ -109,6 +111,12 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'POST /api/v1/orders': 'config:write',
   'DELETE /api/v1/orders/:id': 'config:write',
   'POST /api/v1/admissions': 'config:write',
+  // D3 webhook event bus (config:write — engineer and up)
+  'POST /api/v1/webhooks': 'config:write',
+  'PATCH /api/v1/webhooks/:id': 'config:write',
+  'DELETE /api/v1/webhooks/:id': 'config:write',
+  'POST /api/v1/webhooks/deliveries/:eventId/replay': 'config:write',
+  'POST /api/v1/webhooks/test': 'config:write',
   // Key management (admin)
   'POST /api/v1/keys': 'keys:manage',
   'PATCH /api/v1/keys/:id': 'keys:manage',

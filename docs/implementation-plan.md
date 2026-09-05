@@ -1660,6 +1660,29 @@ translator + round-trip oracle tests before any wiring).
    envelope. Deferred to slice 3: the manual `POST /api/v1/orders` fire
    point + webhook-subscriptions REST surface + console.
 
+11. ✅ **D3 (slice 3) — webhook-subscriptions REST surface + console**
+   (`packages/api/src/webhooks.ts` + `webhooks.test.ts`, 5 route tests;
+   `ui.ts` Webhooks panel; 359 total): `/api/v1/webhooks` — GET
+   subscriptions (secret never re-sent), POST create (secret echoed exactly
+   once — generated when omitted; API-key pattern), PATCH / DELETE by id,
+   GET deliveries (?limit=), POST deliveries/:eventId/replay (200
+   {attempted} when re-attempted, 404 for unknown events), POST test (fires
+   a synthetic signed ping through the REAL bus — returns {id, matched},
+   with a note when nothing matches). Reads are `api:read`, mutations
+   `config:write` (engineer+); the ROUTE_SCOPES table stays fail-closed.
+   startHub passes its live bus into ApiServer (subscriptions managed at
+   runtime; still in-memory on the bus — PG persistence remains a
+   documented deferral). Console: a Webhooks panel in the left column —
+   subscription table (events chips, enable/disable, delete; actions hide
+   below engineer), add form (events = '*' or a comma list; secret blank =
+   generate + copy-once), test ping, and the delivery log with a ↩ Replay
+   button per failed delivery. Test coverage: CRUD + secret-once semantics,
+   validation 400s, test-ping signature verification against the captured
+   body, deliveries + replay (down → 200 {attempted} → fix → same event id
+   re-sent → delivery flips ok), and auth scoping (viewer reads 200 /
+   writes 403; engineer writes 201; anonymous 401). Deferred: PG
+   persistence + the manual `POST /api/v1/orders` fire point.
+
 ---
 
 ## 14. Plan maintenance

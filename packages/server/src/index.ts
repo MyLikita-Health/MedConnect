@@ -622,6 +622,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // store-backed). Both present only when Orthanc is configured.
     mwl,
     imaging: imaging !== undefined,
+    // D3 slice 3: the REST surface manages subscriptions on the live bus.
+    webhooks,
     alerts: alertStore,
     profiles: profileStore,
     mappings,

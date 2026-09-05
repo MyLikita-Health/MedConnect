@@ -21,6 +21,7 @@ import {
   runStoredConformance,
   type AdmissionRegistry,
   type AlertStore,
+  type EventBus,
   type OrderRegistry,
   type ProfileStore,
   type RouteStore,
@@ -30,6 +31,7 @@ import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
 import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
 import { registerFhirRoutes } from './fhir.js';
+import { registerWebhookRoutes } from './webhooks.js';
 import { renderUi } from './ui.js';
 
 /** PEM key + cert; when present the API listens on HTTPS (PRD §42 TLS). */
@@ -143,6 +145,14 @@ export interface ApiServerOptions {
    * endpoints report the agent as not configured.
    */
   updates?: UpdateAgent;
+  /**
+   * D3 webhook event bus (plan §7.D): when wired, exposes the
+   * /api/v1/webhooks surface — subscription CRUD, the delivery log, replay
+   * of failed deliveries and a test ping. When absent the endpoints report
+   * the bus as not configured. Subscriptions are managed at runtime on the
+   * bus (in-memory; PG persistence is a documented deferral).
+   */
+  webhooks?: EventBus;
 }
 
 const createKeySchema = z.object({
@@ -629,6 +639,10 @@ export class ApiServer {
     // FHIR R4 outward surface (M4/D1): read + search over the stored
     // lab/imaging messages and the device registry, at /api/v1/fhir.
     registerFhirRoutes(app, { store: this.opts.store, devices: this.opts.devices });
+
+    // D3 webhook event bus (slice 3): subscription CRUD, the delivery log,
+    // replay of failed deliveries and a test ping, at /api/v1/webhooks.
+    registerWebhookRoutes(app, { bus: this.opts.webhooks });
 
     // Security endpoints (only meaningful with auth enabled): identify the
     // calling key, manage API keys, and query the audit log.
