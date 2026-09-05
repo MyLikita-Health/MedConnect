@@ -1557,11 +1557,32 @@ driving order→MWL→store→route with failure injection — the M3 exit drill
 
 **Sequencing & gates**: M3.1 adapter+shapes (✅ shipped) → M3.2 MWL
 (✅ shipped) → M3.3 storage routing (✅ shipped) → M3.4 console+failure
-(✅ shipped) → M3.5 packaging (✅ shipped) → the M3 exit drill (workstream
-K: pynetdicom fake modality with failure injection) → §8.1 radiology-pilot
-gate closes M3. Every slice keeps `npm test` / `npm run test:db` green.
-**Status: kickoff survey + M3.1 → M3.5 done**; next: the M3 exit drill
-(pynetdicom modality harness) then workstream D (FHIR/webhooks, M4).
+(✅ shipped) → M3.5 packaging (✅ shipped) → **M3 exit drill (✅ shipped,
+workstream K)** → §8.1 radiology-pilot gate closes M3. Every slice keeps
+`npm test` / `npm run test:db` green.
+
+6. ✅ **M3 exit drill — real DICOM networking end-to-end (workstream K)**:
+   `scripts/dicom-modality/fake_modality.py` — a pynetdicom AE that stands in
+   for a real scanner (C-ECHO, MWL C-FIND, C-STORE; `--refuse` for
+   modality-side storage failure), plus `npm run demo:m3-exit`
+   (`scripts/demo-m3-exit.ts`) driving the full chain against the live
+   compose Orthanc: **ADT^A01 → ORM^O01 over MLLP → MWL sync → modality
+   C-FIND → C-STORE (performed study) → hub poll routes the study metadata
+   through the dispatcher**. Failure injection, both proven live:
+   (A) modality killed → Orthanc C-ECHO fails → device row flips to
+   `disconnected` + `device-offline` alert fires; restart resolves both.
+   (B) a routing rule pointing at a dead `hl7` destination → delivery fails
+   → **FAILED + DLQ** → rule fixed → operator retry → ROUTED, DLQ marker
+   cleared. Two fixes the live drill surfaced: `find_mwl` sends empty
+   (return) keys, not `"*"` (Orthanc's matcher requires the tag to exist
+   on the item — silent C-FIND misses otherwise), and the imaging dispatcher
+   now shares the results dispatcher's outbound-HL7 deliverer (M3.3 rules
+   can target `hl7` destinations like any other). Cleanup leaves Orthanc
+   pristine (modalities/patients/worklists emptied). Prereq: `docker compose
+   up -d --build orthanc` + `.venv/bin/pip install pynetdicom`.
+
+**Status: M3 fully shipped through the exit drill (M3.1 → M3.5 + drill)**;
+next: workstream D (FHIR/webhooks, M4).
 
 ---
 

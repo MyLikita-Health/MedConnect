@@ -49,7 +49,8 @@ replace them under risk R2). Kickoff survey + status: plan §13.15. Next:
 the M3.2 MWL worklist client, and M3.3 storage routing (performed studies
 through the dispatcher + Orthanc peer forwarding to a PACS archive) are in
 (plan §13.16) — M3.4 console/failure (DLQ retry + radiology console) is in
-too — then M3.5 packaging, FHIR/webhooks, multi-tenancy.
+too — M3.5 packaging and the M3 exit drill (pynetdicom fake modality with
+failure injection) are in — then FHIR/webhooks (M4), multi-tenancy.
 
 ## Quickstart (in-memory, no services needed)
 
@@ -500,6 +501,13 @@ Orthanc containers (compose `orthanc` + `pacs`, the archive): a performed
 study's metadata is routed through the dispatcher (a DB-driven rule delivers
 it to an http webhook → ROUTED) while the pixels are forwarded to the PACS
 peer — the archive Orthanc verifiably receives the study.
+`npm run demo:m3-exit` is the **M3 exit drill** (workstream K): a real
+pynetdicom modality (`.venv/bin/pip install pynetdicom`, then `npm run
+demo:m3-exit`) drives ADT^A01 → ORM^O01 → MWL C-FIND → C-STORE → routed
+performed study over real DICOM networking, with failure injection — the
+modality going offline flips its device row + fires `device-offline`, and a
+rule pointed at a dead HL7 destination DLQs the study until the operator
+retries after fixing it. Cleanup leaves Orthanc pristine.
 
 Set `ORTHANC_URL` (+ user/password) when starting the hub and `hub.mwl` runs
 the same loop continuously (`MWL_POLL_MS` cadence, default 60s). Each

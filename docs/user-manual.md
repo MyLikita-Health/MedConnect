@@ -369,6 +369,7 @@ The compose `orthanc` image is derived (`docker/orthanc/Dockerfile`, M3.5): a **
 docker compose up -d --build orthanc && npm run demo:dicom     # adapter + worklist client against a real container
 docker compose up -d --build orthanc && npm run demo:mwl       # the real hub's monitor: wire order → worklist → performed → ROUTED
 docker compose up -d pacs && npm run demo:routing              # M3.3: metadata routed + pixels archived to the PACS peer
+.venv/bin/pip install pynetdicom && npm run demo:m3-exit       # M3 exit drill: real DICOM modality (C-FIND/C-STORE) + failure injection
 ```
 
 ---
@@ -516,6 +517,7 @@ API (admin): `POST /api/v1/updates/{check,apply,rollback}`, `GET …/status`. Ve
 | `npm run demo:dicom` | DICOM adapter + MWL worklist client against a real Orthanc container |
 | `npm run demo:mwl` | The real hub's MWL monitor: wire ORM order → worklist → performed study → ROUTED message |
 | `npm run demo:routing` | M3.3 storage routing against two Orthanc containers: metadata routed to a webhook + pixels forwarded to the PACS peer |
+| `npm run demo:m3-exit` | M3 exit drill (workstream K): a pynetdicom fake modality drives ADT→ORM→MWL C-FIND→C-STORE→ROUTED over real DICOM, with failure injection (modality offline → device-offline alert; dead HL7 destination → DLQ → operator retry) |
 | `npm run demo:db` | In-memory demo but persisted to Postgres (`DATABASE_URL` preset) |
 | `npm run demo:update` | Signed-update loop: check → apply → swap → rollback |
 | `npm run simulate` | ASTM analyzer simulator (`--count`, `--interval`, `--corrupt-rate`) |

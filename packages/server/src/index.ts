@@ -10,11 +10,11 @@ import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, In
 import { AstmGateway } from '@integration-hub/gateway';
 import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
-import { DEFAULT_MAPPINGS, defaultLayoutFor } from '@integration-hub/shared';
+import { DEFAULT_MAPPINGS, defaultLayoutFor, type CanonicalMessage } from '@integration-hub/shared';
 import { ImagingRouter } from './imaging-router.js';
 import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -239,6 +239,22 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     onDlq: async () => alerts.checkBacklog('dlq', (await store.list({ dlq: true, limit: 500 })).length),
   });
 
+  // Outbound connection manager (B3.3 refinement): one held-open MLLP
+  // connection per destination endpoint, reused across deliveries.
+  const hl7OutboundPool = new MllpConnectionPool({ debug: (line) => console.log(`[outbound:hl7] ${line}`) });
+
+  // B3.3 outbound HL7 deliverer, shared by every dispatcher the hub wires
+  // (results + imaging/M3.3): `hl7` destinations deliver over MLLP with one
+  // held-open connection pool per (host, port). A non-AA application ACK
+  // throws → retry per policy → DLQ with the MSA-3 reason — never dropped.
+  const deliverHl7Destination = async (destination: Destination, message: CanonicalMessage): Promise<void> => {
+    if (destination.kind !== 'hl7' || !destination.hl7) throw new Error(`cannot deliver kind ${destination.kind} over HL7`);
+    await deliverHl7(destination.hl7, message, {
+      pool: hl7OutboundPool,
+      debug: (line) => console.log(`[outbound:hl7] ${line}`),
+    });
+  };
+
   const dispatcher = new Dispatcher({
     store,
     dedup,
@@ -254,13 +270,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // then DLQs with the MSA-3 reason — never silently dropped. Deliveries
     // share one held-open connection pool per (host, port) — LIS peers
     // expect persistent MLLP connections (reconnect + idle close handled).
-    deliver: async (destination, message) => {
-      if (destination.kind !== 'hl7' || !destination.hl7) throw new Error(`cannot deliver kind ${destination.kind} over HL7`);
-      await deliverHl7(destination.hl7, message, {
-        pool: hl7OutboundPool,
-        debug: (line) => console.log(`[outbound:hl7] ${line}`),
-      });
-    },
+    deliver: deliverHl7Destination,
     events: {
       ...alertEvents(),
       onHold: async () => alerts.checkBacklog('held-backlog', (await store.list({ status: 'HELD', limit: 500 })).length),
@@ -314,10 +324,6 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     }
     await alerts.deviceState(deviceId, state).catch((err) => console.error(`[alerts] ${(err as Error).message}`));
   };
-
-  // Outbound connection manager (B3.3 refinement): one held-open MLLP
-  // connection per destination endpoint, reused across deliveries.
-  const hl7OutboundPool = new MllpConnectionPool({ debug: (line) => console.log(`[outbound:hl7] ${line}`) });
 
   const gateway = new AstmGateway({
     host,
@@ -401,8 +407,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       dedup,
       routes,
       // No matching/validation — the imaging event pipeline (protocol-blind
-      // core: dedup → route → deliver → ROUTED/DLQ). An `hl7` destination
-      // throws here (no deliverer) → retry → DLQ, like any unhandled kind.
+      // core: dedup → route → deliver → ROUTED/DLQ). Like the results
+      // dispatcher, `hl7` destinations deliver over MLLP (shared pool) and
+      // fail → retry → DLQ when the peer is unreachable.
+      deliver: deliverHl7Destination,
       events: alertEvents(),
       log: (line) => console.log(line),
     });
