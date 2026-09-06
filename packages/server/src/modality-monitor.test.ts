@@ -12,6 +12,10 @@ import { startHub } from './index.js';
 import type { Hub } from './index.js';
 import { startMockOrthanc } from './mock-orthanc.js';
 
+// Server integration tests are designed for in-memory stores. Explicitly
+// unset DATABASE_URL so startHub() never silently flips into PG mode.
+delete process.env.DATABASE_URL;
+
 async function startHubWithOrthanc(t: any, baseUrl: string): Promise<Hub> {
   const hub = await startHub({
     authDisabled: true,

@@ -1713,6 +1713,19 @@ translator + round-trip oracle tests before any wiring).
    closes the last D3 deferral — the webhook event bus is fully wired:
    engine, fire points, REST surface, console, replay, PG persistence.
 
+14. ✅ **D4 — REST API v1 GA + OpenAPI spec + sandbox** (`packages/api/src/openapi.json`,
+   `scripts/demo-sandbox.ts`, 364 total): the full v1 API surface (~50 routes)
+   is documented as an OpenAPI 3.1 spec served at `GET /api/v1/openapi.json`
+   (public — no auth required, so developers discover the API without a key).
+   Every route is documented with request/response schemas, auth requirements,
+   and tags (Health, Messages, Queue, Devices, Profiles, Routing, Alerts,
+   Orders, Admissions, Imaging, Results, Webhooks, FHIR, Security, Updates).
+   The sandbox script (`npm run demo:sandbox`) starts the hub, seeds a rich
+   demo dataset (profiles, devices, orders, admissions, destinations, routes,
+   alert rules) via the API, sends simulator messages through the full
+   pipeline, and prints a curl-based walkthrough of every endpoint — enough
+   for a reference LIS/EHR vendor to integrate without our help.
+
 ---
 
 ## 14. Plan maintenance

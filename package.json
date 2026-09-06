@@ -26,6 +26,7 @@
     "demo:routing": "tsx scripts/demo-routing.ts",
     "demo:m3-exit": "tsx scripts/demo-m3-exit.ts",
     "demo:db": "DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx scripts/demo.ts",
+    "demo:sandbox": "tsx scripts/demo-sandbox.ts",
     "demo:update": "tsx scripts/demo-update.ts",
     "start:supervised": "tsx packages/server/src/supervisor-cli.ts",
     "update-cli": "tsx scripts/update-cli.ts",

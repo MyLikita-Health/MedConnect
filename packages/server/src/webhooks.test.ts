@@ -20,8 +20,13 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MllpDecoder, wrapMessage } from '@integration-hub/hl7';
 import { verifyWebhookSignature, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
-import { startHub } from './index.js';
-import type { Hub } from './index.js';
+import { startHub } from './index.js';import type { Hub } from './index.js';
+
+// Server integration tests are designed for in-memory stores. Explicitly
+// unset DATABASE_URL so startHub() never silently flips into PG mode.
+delete process.env.DATABASE_URL;
+
+
 
 const SECRET = 'webhook-test-secret';
 

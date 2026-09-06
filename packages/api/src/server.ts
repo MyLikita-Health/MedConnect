@@ -6,7 +6,9 @@
  * baseline (plan §13): /api/v1/{health,stats,mappings,devices,messages,results}
  * plus replay, and the console UI at /.
  */
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
+import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { hubVersionInfo, type CanonicalMessage, type MappingTable } from '@integration-hub/shared';
@@ -315,7 +317,7 @@ export class ApiServer {
       app.addHook('preHandler', async (req, reply) => {
         // Console UI + health probes stay public (no data exposure).
         const pattern: string | undefined = req.routeOptions.url;
-        if (!req.url.startsWith('/api/v1/') || pattern === '/api/v1/health') return;
+        if (!req.url.startsWith('/api/v1/') || pattern === '/api/v1/health' || pattern === '/api/v1/openapi.json') return;
 
         const header = req.headers.authorization;
         const secret = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
@@ -393,6 +395,13 @@ export class ApiServer {
       reqLogger(err);
       return reply.code(500).send({ error: 'internal error' });
     });
+
+    // OpenAPI 3.1 spec — publicly accessible (no auth) so developers can
+    // discover the API surface without an API key.
+    const openapiSpec = JSON.parse(
+      readFileSync(fileURLToPath(new URL('./openapi.json', import.meta.url)), 'utf8'),
+    );
+    app.get('/api/v1/openapi.json', async () => openapiSpec);
 
     app.get('/api/v1/health', async () => this.health());
     app.get('/api/v1/stats', async () => this.opts.store.stats());

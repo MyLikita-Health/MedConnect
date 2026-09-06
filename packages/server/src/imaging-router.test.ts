@@ -18,6 +18,10 @@ import type { Hub } from './index.js';
 import { buildStudyMessage } from './imaging-router.js';
 import { startMockOrthanc } from './mock-orthanc.js';
 
+// Server integration tests are designed for in-memory stores. Explicitly
+// unset DATABASE_URL so startHub() never silently flips into PG mode.
+delete process.env.DATABASE_URL;
+
 const iso = (): string => new Date().toISOString();
 
 async function startHubWithOrthanc(t: any, baseUrl: string, extra: Partial<Parameters<typeof startHub>[0]> = {}): Promise<Hub> {

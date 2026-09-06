@@ -252,7 +252,7 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 331 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 364 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
@@ -265,9 +265,13 @@ npm test           # 331 tests: codec, sessions, pipeline, matching/validation,
                    #   handling (M3.4: dispatcher retry + radiology console),
                    #   modality C-ECHO device health (M3 C6), dispatcher/DLQ,
                    #   API, security (roles/scopes + authz + audit), signed
-                   #   updates + supervisor (apply/rollback/crash) (21
+                   #   updates + supervisor (apply/rollback/crash),
+                   #   FHIR R4 (D1/D2: two-way translator + REST surface),
+                   #   webhook event bus (D3: signed engine, subscriptions
+                   #   CRUD + PG persistence, delivery log + replay, test
+                   #   ping, fire points), OpenAPI 3.1 spec (D4) (25
                    #   DB-gated skip)
-npm run test:db    # 331 tests: same + PostgreSQL integration (needs db:up)
+npm run test:db    # 364 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
@@ -667,3 +671,24 @@ pipeline canonicalizes correctly for both it and the reference layout.
   manual `POST /api/v1/orders`. Result-plausibility seeds assume the
   reference simulator's unit conventions (mg/dL): a facility using SI units
   must configure its own bounds.
+- **FHIR R4 outward surface (D1/D2)** — `GET /api/v1/fhir/:type` serves
+  Patient, ServiceRequest, DiagnosticReport, Observation, ImagingStudy, and
+  Device resources projected from the hub's stores; `canonicalToFhir` and
+  `fhirToCanonical` are two-way round-trip tested (the serializer doubles
+  as a conformance oracle). The FHIR base is `<hub>/api/v1/fhir`.
+- **Webhook event bus (D3)** — signed domain-event delivery with HMAC-SHA256
+  signatures (`X-IntegrationHub-Signature`), per-subscription retry, the
+  delivery log with replay, and a test ping. Events fire at the hub's real
+  seams (message recorded → `result.received`, DLQ → `message.failed`,
+  device state → `device.connected/disconnected`, order registered →
+  `order.received`). Subscriptions are PG-persisted (`migration 0013`) so
+  they survive restarts. REST surface: `GET/POST/PATCH/DELETE
+  /api/v1/webhooks`, `GET /api/v1/webhooks/deliveries`, `POST
+  /api/v1/webhooks/deliveries/:eventId/replay`, `POST
+  /api/v1/webhooks/test`. Console: Webhooks panel.
+- **OpenAPI 3.1 spec (D4)** — `GET /api/v1/openapi.json` serves a
+  comprehensive OpenAPI spec covering all ~50 routes with request/response
+  schemas, auth requirements, and tags. Public (no auth) so developers
+  discover the API without an API key. The sandbox script (`npm run
+  demo:sandbox`) seeds a rich demo dataset and prints a curl-based
+  walkthrough of every endpoint.

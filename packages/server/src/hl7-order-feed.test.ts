@@ -13,6 +13,10 @@ import type { CanonicalMessage, MessageAttempt } from '@integration-hub/shared';
 import { Dispatcher, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryRouteStore, type DeliveryStore } from '@integration-hub/core';
 import { Hl7Gateway, MllpDecoder, wrapMessage } from '@integration-hub/hl7';
 
+// Server integration tests are designed for in-memory stores. Explicitly
+// unset DATABASE_URL so startHub() never silently flips into PG mode.
+delete process.env.DATABASE_URL;
+
 const ORU = [
   'MSH|^~\\&|ACME_LIS|FAC1|HUB|FAC2|20260904120000||ORU^R01|MSG0001|P|2.3.1',
   'PID|1||PID-1001^^^FAC1^PI||Adeyemi^Tunde||19850312|M',
