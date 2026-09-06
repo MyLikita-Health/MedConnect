@@ -380,10 +380,15 @@ Deliverables:
 - D3 Webhook event bus: result.received/validated/failed, order.received,
   device.connected/disconnected, message.failed (PRD §37); signed deliveries, retries.
 - D4 REST API v1 GA + versioning policy + OpenAPI; sandbox environment with seeded data.
-- D5 SDK (JS/TS first) wrapping orders/results/devices/webhooks (PRD §38).
+- D5 JS/TS SDK (`@integration-hub/api` → `HubClient`) wrapping orders/results/devices/webhooks
+  (PRD §38): typed models mirroring the v1 OpenAPI contract, `apiKeyAuth`, retry with
+  exponential backoff on 429/5xx, list pagination via `limit`, and the webhook create
+  secret-echoed-once semantics. SDK smoke test drives a live in-memory hub end-to-end
+  (health/version → devices → orders → webhooks create/list/update/test). Exit criterion:
+  a reference LIS/EHR integration can be written against the SDK + OpenAPI surface alone.
 
 Exit criteria: reference LIS/EHR integration completed in sandbox without our help;
-webhook replay + signature verification tested; OpenAPI published.
+webhook replay + signature verification tested; OpenAPI published; SDK ships with the API.
 
 ### E. Integration core services (Phase 1 core)
 

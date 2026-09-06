@@ -39,3 +39,16 @@ export { PostgresMessageStore } from './pg/pg-store.js';
 export { PostgresDeviceRegistry } from './pg/pg-devices.js';
 export { createDbPool, closeDbPool, DEFAULT_DATABASE_URL } from './pg/pool.js';
 export { runMigrations } from './pg/migrate.js';
+
+/**
+ * JS/TS SDK (workstream D5): typed client wrapping the v1 REST surface —
+ * orders, results, devices, webhooks — plus auth helpers and the shared
+ * version shape. Imported from `@integration-hub/api` alongside the server
+ * types so integrators get the client + the API contract together.
+ *
+ * Device-level types (`Device`, `DeviceProtocol`, `DeviceTransport`,
+ * `DeviceState`, `RegisterDeviceInput`) are re-exported from `./devices.js`
+ * below so the canonical source stays in `devices.ts`; the SDK block only
+ * contributes the client + webhook/result/order types + auth helper.
+ */
+export { HubClient, type HubClientOptions, type HubHealth, type Order, type CreateOrderInput, type ResultRow, type WebhookSubscription, type WebhookEventType, type CreateWebhookSubscriptionInput, type UpdateWebhookSubscriptionInput, type WebhookDelivery, type ReplayDeliveryResponse, type TestWebhookResponse, type ApiError, apiKeyAuth, } from './sdk.js';

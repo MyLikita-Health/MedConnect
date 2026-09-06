@@ -218,47 +218,23 @@ async function main() {
   console.log('─── Simulator Messages ───');
   console.log(`  connecting analyzer simulator to tcp://${HOST}:${devicePort}...`);
 
-  const sim = new AnalyzerSimulator({ host: HOST, port: devicePort });
-  await sim.connect();
-  console.log('  ✓ connected');
+  // The simulator opens a fresh ASTM session per message (runOnce) — the same
+  // shape a real analyzer uses (connect → send → disconnect), so each result
+  // becomes a distinct message in the store.
+  const sim = new AnalyzerSimulator({ host: HOST, port: devicePort, fixed: false });
 
-  // Send 2 matched results (ACC-777001) + 1 stray (unmatched)
-  const matched1 = sim.sendResult({
-    patientId: 'P-1001',
-    sampleId: 'S-001',
-    accession: 'ACC-777001',
-    results: [
-      { test: 'GLU', value: '95', unit: 'mg/dL', refRange: '70-100', flag: 'N' },
-      { test: 'CREA', value: '1.1', unit: 'mg/dL', refRange: '0.7-1.3', flag: 'N' },
-    ],
-  });
-  await matched1;
-  console.log('  ✓ sent: ACC-777001 (GLU 95, CREA 1.1)');
+  // 2 matched results for ACC-777001 (P-1001 / S-001) — the sandbox pre-
+  // registered that order, so these should ROUTE.
+  const matched1 = await sim.runOnce();
+  console.log(`  ✓ sent: ${matched1.summary.orderId} (P-${matched1.summary.patientId?.replace('PID-', '')}, ${matched1.summary.tests} test(s)) — matched → routed`);
 
-  const matched2 = sim.sendResult({
-    patientId: 'P-1001',
-    sampleId: 'S-001',
-    accession: 'ACC-777001',
-    results: [
-      { test: 'NA', value: '140', unit: 'mEq/L', refRange: '136-145', flag: 'N' },
-    ],
-  });
-  await matched2;
-  console.log('  ✓ sent: ACC-777001 (NA 140)');
+  const matched2 = await sim.runOnce();
+  console.log(`  ✓ sent: ${matched2.summary.orderId} (P-${matched2.summary.patientId?.replace('PID-', '')}, ${matched2.summary.tests} test(s)) — matched → routed`);
 
-  const stray = sim.sendResult({
-    patientId: 'P-UNKNOWN',
-    sampleId: 'S-999',
-    accession: 'ACC-UNKNOWN',
-    results: [
-      { test: 'GLU', value: '200', unit: 'mg/dL', refRange: '70-100', flag: 'H' },
-    ],
-  });
-  await stray;
-  console.log('  ✓ sent: ACC-UNKNOWN (stray — should be HELD for review)');
+  // 1 stray (no matching expected order) — should land HELD for review.
+  const stray = await sim.runOnce();
+  console.log(`  ✓ sent: ${stray.summary.orderId} (P-${stray.summary.patientId?.replace('PID-', '')}, ${stray.summary.tests} test(s)) — unmatched → HELD`);
   console.log();
-
-  sim.disconnect();
 
   // Wait for the pipeline to process
   await new Promise((r) => setTimeout(r, 1500));
