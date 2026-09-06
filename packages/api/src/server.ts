@@ -97,6 +97,12 @@ export interface ApiServerOptions {
   devices: DeviceBackend;
   /** Optional mapping table exposed read-only at /api/v1/mappings. */
   mappings?: MappingTable;
+  /**
+   * Cloud tenancy (H1): when the API runs as a cloud instance it is bootstrapped
+   * into a single org + first facility. When absent the API is a single-tenant edge
+   * (org_id/facility_id stay null, RLS stays permissive). Set on a cloud install.
+   */
+  cloudOrg?: { orgId: string; facilityId: string; admin: boolean };
   /** Routing configuration (destinations + rules); defaults to an in-memory store. */
   routes?: RouteStore;
   /** Expected-order registry behind patient/order matching (PRD §27). */

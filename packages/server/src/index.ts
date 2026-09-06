@@ -6,7 +6,7 @@
  * and devices in PostgreSQL (migrations auto-applied) and serves the default
  * mapping table from the DB; otherwise it falls back to the in-memory stores.
  */
-import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
+import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
@@ -91,7 +91,21 @@ export interface HubOptions {
      */
     modalityPollMs?: number;
   };
-}
+  /**
+   * Cloud tenancy (H1): when the hub runs as a cloud instance it bootstraps a
+   * single org + first facility on the PG store (if present) and stamps every
+   * device + message written through the PG stores with org_id/facility_id.
+   * Absent → single-tenant edge mode (org_id/facility_id null, RLS permissive).
+   */
+  cloudOrg?: { orgName?: string; facilityName?: string; adminKeyName?: string };
+  /**
+   * Cloud tenancy context (H1): when set, every PG-backed write is stamped with
+   * the current org_id + facility_id and RLS is pointed at the cloud org. Absent
+   * on a single-tenant edge. Exposed on the returned Hub so callers can pass it
+   * down to the PG stores for write-through.
+   */
+  cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
+  };
 
 export interface Hub {
   gateway: AstmGateway;
@@ -132,8 +146,9 @@ export interface Hub {
   webhooks: EventBus;
   ports: { device: number; hl7?: number; http: number };
   /** Present when running on PostgreSQL. */
-  db?: { pool: Pool };
+  db?: { pool: Pool } | undefined;
   stop(): Promise<void>;
+  cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
 }
 
 export async function startHub(opts: HubOptions = {}): Promise<Hub> {
@@ -152,6 +167,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let pool: Pool | undefined;
   let keys: KeyStore | undefined;
   let audit: AuditStore | undefined;
+  let cloudContext: { orgId: string; facilityId: string; admin: boolean } | undefined;
 
   const authDisabled = opts.authDisabled ?? process.env.AUTH_DISABLED === '1';
   const adminKeySecret = opts.adminKey ?? process.env.HUB_ADMIN_KEY;
@@ -179,6 +195,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     admissions = new PostgresAdmissionRegistry(pool);
     alertStore = new PostgresAlertStore(pool);
     profileStore = new PostgresProfileStore(pool);
+    const orgStore = new PostgresOrgStore(pool!);
+    const facilityStore = new PostgresFacilityStore(pool!);
     if (!authDisabled) {
       keys = new PostgresKeyStore(pool);
       audit = new PostgresAuditStore(pool);
@@ -187,6 +205,25 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // Seed the default mapping table once so DB mappings match scaffold defaults.
     if (!opts.mappings) await pgStore.setMappings(DEFAULT_MAPPINGS);
     mappings = opts.mappings ?? (await pgStore.getMappings());
+
+    // H1 cloud tenancy bootstrap (idempotent): on a PG store, ensure a single
+    // cloud org + first facility exist. The bootstrap is the get-started path for
+    // a cloud instance; the H3 pairing flow drives onboarding in production.
+    // When absent the API is a single-tenant edge (org_id/facility_id null,
+    // RLS permissive until enableRlPolicies points it at the cloud org).
+    if (opts.cloudOrg) {
+      const boot = await bootstrapCloudOrg(orgStore, facilityStore, opts.cloudOrg);
+      cloudContext = { orgId: boot.org.id, facilityId: boot.facility.id, admin: false };
+      // Point RLS at the cloud org so tenant-scoped reads are isolated to this org.
+      await orgStore.enableRlPolicies(boot.org.id, boot.facility.id);
+      if (opts.cloudOrg.adminKeyName) {
+        const ks = keys as PostgresKeyStore;
+        const created = await ks.create({ name: opts.cloudOrg.adminKeyName, role: 'admin', createdBy: 'cloud-bootstrap' });
+        cloudContext.admin = true;
+        console.log(`[cloud] admin API key created (${created.key.id}): ${created.secret}`);
+        console.log(`[cloud] save this secret — it is shown exactly once`);
+      }
+    }
   } else {
     store = new MessageStore();
     devices = new DeviceRegistry();
@@ -223,6 +260,13 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     }
   } else if (authDisabled) {
     console.log('[api]     API auth DISABLED (AUTH_DISABLED=1) — every /api/v1 route is open');
+  }
+
+  // Seed the reference + example certified profiles so CRUD/API demos work and
+  // the store never starts empty (goldens/*.json embed the authoritative copy).
+  if ((await profileStore.list()).length === 0) {
+    await profileStore.upsert(REFERENCE_PROFILE);
+    await profileStore.upsert(ACME_CHEM_200_PROFILE);
   }
 
   // Seed the reference + example certified profiles so CRUD/API demos work and
@@ -655,7 +699,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   });
 
   const { port: devicePort } = await gateway.start();
-  const { port: hl7Port } = hl7Gateway ? await hl7Gateway.start() : { port: undefined as number | undefined };
+  const hl7Port = hl7Gateway ? (await hl7Gateway.start()).port : undefined;
   const { port: httpPort } = await api.start();
   if (hl7Gateway && hl7Port !== undefined) {
     console.log(`[gateway] HL7 v2 (MLLP) listening on tcp://${host}:${hl7Port} — ORU^R01 in, app ACK out`);
@@ -665,7 +709,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     console.log('[tls]     API + device listener are TLS-terminated (HTTPS / TLS on both endpoints)');
   }
 
-  return {
+  // H1: stamp the cloud operating context onto the returned Hub so callers can
+  // pass it down to the PG stores for write-through (devices + messages).
+  const hub: Hub = {
     gateway,
     ...(hl7Gateway ? { hl7: hl7Gateway } : {}),
     api,
@@ -697,7 +743,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       await hl7OutboundPool.close();
       if (pool) await closeDbPool(pool);
     },
+    cloudContext,
   };
+  return hub;
 }
 
 /**
@@ -705,6 +753,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
  * the active mapping table (canonical codes); unit and plausibility rules are
  * conservative (warn-level) so the safe matching hold stays the main gate.
  */
+
 /** Reads HUB_TLS_CERT / HUB_TLS_KEY (file paths) when both are set. */
 async function loadTlsFromEnv(): Promise<HubTls | undefined> {
   const certPath = process.env.HUB_TLS_CERT;

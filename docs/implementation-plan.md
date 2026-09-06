@@ -215,10 +215,21 @@ engines that already solve a hard protocol problem do their job:
   BRIN/b-tree indexes on `device_id`, `status`, `received_at`.
 - **Patient/order/result** tables keep the canonical values *plus* the original device
   identifiers needed for matching (PRD §27) and dedup (§29).
-- **Tenancy** (cloud): shared schema with `org_id`/`facility_id` columns + Postgres RLS;
-  re-evaluate schema-per-tenant only if a customer demands hard isolation (D5).
-- **Edge → cloud sync**: outbox pattern — every local write also appends to an outbox
-  row; the sync worker ships rows and marks them acked. No dual-write races.
+- **Tenancy** (cloud): shared schema with `org_id`/`facility_id` columns + Postgres RLS.
+  Default: one org per cloud instance (a cloud platform installation = one org, many
+  facilities). Facilities are the tenant-level isolation boundary for RBAC and resource
+  scoping; a user is bound to a facility and sees only that facility's devices/messages/
+  routing. RLS enforces org+facility read/write isolation on every tenant-scoped table.
+  Schema-per-tenant (D5 escalation): reserved for customers who require hard isolation
+  (sovereign data, audit-isolation, specific compliance posture). When triggered, the
+  migration path is org → separate shared-schema cluster (not per-customer per-table
+  fragmentation), so the platform doesn't fragment into N copies of itself.
+- **Edge → cloud sync**: outbox pattern — every local write to a tenant-scoped table also
+  appends an outbox row (`outbox { table, pk, op, payload, acked, synced_at }`); the cloud
+  sync worker reads unacked rows and marks them acked. No dual-write races. The edge's durable
+  local queue is the outbox itself (PRD §21 local queues + §4.3 durable local queue) — the
+  same rows the dispatcher's in-process delivery already targets today; cloud adds the sync
+  worker that reads them when connectivity returns.
 - **JSONB** for: device profile config, mapping tables snapshot, route rule payload,
   parsed-record blobs, extension metadata.
 
@@ -439,13 +450,18 @@ complete; RBAC enforced and tested per role; every mutating action audited.
 **Objective:** facility keeps working when WAN dies; sync when back (PRD §10, §43).
 
 Deliverables:
-- G1 Local durable store + outbox; crash recovery (replay outbox on boot).
+- G1 Local durable store + outbox; crash recovery (replay outbox on boot). The edge
+  SQL store IS the durable outbox today (every committed message is on disk via
+  `PostgresMessageStore`); M4 adds the explicit `outbox` table + cloud sync worker
+  (decision D11) that reads unacked rows and ships them over the outbound-only secure
+  channel, acking on success. The dispatcher seam is unchanged.
 - G2 Edge watchdog/supervisor: restart policy, heartbeat, health file, disk/log
   rotation, safe shutdown (PRD §46).
 - G3 Secure channel (TLS, client cert / device auth), outbound only (PRD §42);
   credential + profile rotation; signed update packages.
 - G4 Sync protocol: message/clinical/audit delta sync with idempotency + conflict
-  policy; bandwidth-friendly batching; sync status visible in console.
+  policy; bandwidth-friendly batching; sync status visible in console. Idempotency keys
+  are the outbox row pk + logical table+op so a retry never duplicates a cloud write.
 
 Exit criteria: kill -9 + power-cut tests lose zero committed messages; 48 h offline
 soak then sync converges with no duplicates (idempotency keys); update applied
@@ -455,12 +471,24 @@ remotely and rolled back on failure.
 
 **Objective:** manage fleets of facilities/gateways from one place (PRD §35).
 
+Preconditions (now resolved): D5 tenancy model = shared-schema + RLS, org-centric
+(one cloud installation = one org, many facilities); facility is the RBAC + resource
+isolation boundary. M0 schema already carries the null/default-tenant scaffolding
+(`org_id`/`facility_id` on `devices` + `messages `, no RLS until M4). Edge-outbox/
+cloud-queue swap = D11 (edge outbox = cloud sync outbox; cloud adds BullMQ worker).
+
 Deliverables:
 - H1 Org → Facility → Department hierarchy; users scoped per level; RLS enforcement.
+  Bootstrap a cloud org + its first facility on install; facility_id is the isolation key
+  on devices/messages/definitions. Users bound to a facility; admins can be bound across
+  facilities in the same org. RLS policies on every tenant-scoped table (no policy before
+  M4 — single-tenant edge mode). Two-tenant isolation is a test-suite gate (H1 exit).
 - H2 Cloud console superset of edge console; fleet views: gateways, devices, messages
-  aggregated; per-facility drill-down.
+  aggregated; per-facility drill-down. Reuses the same ApiServer + stores behind a
+  tenant-aware backend (every query filtered by the requesting facility unless admin).
 - H3 Remote provisioning: gateway onboarding (pairing code/cert), profile push,
-  updates (PRD §42, §63 marketplace-ready).
+  updates (PRD §42, §63 marketplace-ready). Reuses the signed-update agent (G3/M2) for
+  the update axis; provisioning is the pairing + profile-push + facility-link flow.
 - H4 Platform ops: tenant metrics, per-tenant quotas, feature flags.
 - H5 Commercial hooks: license/subscription model entities (PRD §61) + entitlement
   checks at gateway + API; analytics exports for success metrics (§2).
@@ -520,6 +548,29 @@ added by partner without core team.
 
 ---
 
+### 8.2a Windows desktop local deployment (decision D12 — parallel track)
+
+- **Local edge DB shape resolved (D12):** SQLite + durable outbox for the single-machine
+  Windows edge (no Docker, no separate DB service, single-file store under the app data dir,
+  managed by the hub itself); PostgreSQL stays for the cloud/central side; in-memory stays
+  as the test/dev fallback.
+- **Local mode:** one hub, one box, one embedded store, one console — single-tenant edge by
+  default; no Docker at install or run time; end-user first-boot config; optional imaging
+  (bundled Orthanc as a separate Windows process, off by default, AGPL boundary unchanged:
+  out-of-process, REST-only).
+- **Network reach:** LAN analyzer/modal listeners + outbound to remote LIS/HIS/EMR (HL7 MLLP,
+  HTTP/FHIR) with retry/DLQ; TLS on API + device endpoints optional.
+- **Cloud later:** local-first, cloud-later by design; when paired, the local box becomes a
+  cloud-connected edge via the H3 provisioning + secure-outbound-channel story (§7.G3),
+  with the outbox as the sync basis and Postgres on the cloud side.
+- **Sequencing:** start W1 (resolve D12 + SQLite edge backend behind the existing
+  StoreBackend/DeviceBackend seams + prove a fully-local no-Docker run), then W2 (Windows
+  service + installer skeleton + first-boot config UI), then W3 (imaging + LAN/network
+  polish), then W4 (cloud-pairing readiness + Windows update delivery on top of the
+existing signed-update supervisor). This track is parallel to M4 cloud, not a blocker.
+
+---
+
 ## 8. Phased roadmap & milestones
 
 Reference calendar for a core team of 3–5 engineers (assumption A1). Workstreams run
@@ -534,14 +585,17 @@ M4 = PRD Phase 3 advanced · M5 = PRD Phase 4 ecosystem)
 | **M1** | 3–6 | **V1 lab gateway production** | ASTM profiles + serial; HL7 v2 lab engine (B); durable pipeline (E3) + retry/DLQ; mapping + routing DB-driven; dedup; message viewer; console v1 (F); edge watchdog + outbox (G); simulators/conformance v1 (K) | 2 pilot labs live (1–2 vendors each); soak 7 days w/ 0 silent drops; PRD §55 MVP checklist closed |
 | **M2** | 7–9 | V1 hardening + certifications | Patient/order matching (E6); validation rules; alerting live; security review; installer + remote update; **3–5 certified device profiles**; goldens in CI | GA v1 release; integration-deployment time <1 day/facility; support/runbooks; first paying facility |
 | **M3** | 10–14 | **Imaging (DICOM)** | Orthanc module (C1–C5); MWL; storage routing to PACS; radiology console; imaging failure queue; RIS/HL7 outbound for imaging | Radiology pilot: order→MWL→store→PACS end-to-end; failure drill passes; dual-domain (lab+imaging) console at one facility |
-| **M4** | 15–20 | **Cloud platform + developer surface** | Multi-tenant cloud (H1–H3); FHIR R4 (D1–D2); webhooks (D3); REST GA + sandbox (D4); SDK (D5); analytics/licensing hooks (H5) | Reference vendor integrates via sandbox unaided; 2 tenants isolated (test-proven); edge sync converges after 48 h offline |
+| **M4** | 15–20 | **Cloud platform + developer surface** | Multi-tenant cloud (H1–H3); FHIR R4 (D1–D2); webhooks (D3); REST GA + sandbox (D4); SDK (D5); analytics/licensing hooks (H5); edge→cloud outbox sync (D11) | Reference vendor integrates via sandbox unaided; 2 tenants isolated (test-proven); edge sync converges after 48 h offline |
 | **M5** | 21–26 | **Ecosystem & broader devices** | Marketplace + adapter packaging (L); certification program; OEM/white-label API; ECG/monitor/POCT profiles; MPPS/DICOMweb/IHE where demanded (PRD §58) | Distributor + OEM onboarded; 1 certified device added by partner; N connected-device metric compounding quarterly |
 
 ### 8.2 Sequencing principles
 
 - **Do not start M3 imaging until M2 gate closes** (PRD §69: lab rock-solid first).
 - Cloud (M4) work may begin *scoped* early (tenant columns + RLS in M0 schema) to avoid
-  migration pain, but the cloud product does not gate lab revenue.
+  migration pain, but the cloud product does not gate lab revenue. The M0 schema already
+  carries the null/default-tenant scaffolding (`org_id`/`facility_id` on `devices` and
+  `messages`, migration `0001_init.sql`); RLS policies + the cloud-org bootstrap are the
+  M4 arrival, per D5.
 - Simulators/conformance (K) and observability (I) are continuous, not one-off.
 - Certification of the *first* vendors (M2) overlaps with M1 pilots: profile work starts
   the moment a real analyzer is available (risk R2).
@@ -618,14 +672,16 @@ M3 imaging only with a committed radiology pilot.
 | --- | --- | --- | --- |
 | D1 | ORM/migrations | Prisma vs Drizzle | M0 |
 | D2 | Edge local DB | bundled Postgres container vs SQLite+outbox | M0 |
+| D12 | Windows local edge DB shape | **RESOLVED (Windows desktop track)**: SQLite + durable outbox for the single-machine Windows edge (no Docker, no separate DB service, single-file store under the app data dir, managed by the hub itself); PostgreSQL stays for the cloud/central side. In-memory stays as the test/dev fallback. Other D decisions unchanged (D1 ORM/migrations, D3 first certified vendors, D4 edge hardware, D5 tenancy escalation, D6 cloud hosting, D7 HL7 parser — resolved, D8 licensing, D9 marketplace timing, D10 Orthanc bundled-by-default + customer-provided). |
 | D3 | First certified vendors | depends on market/distributor access | M1 |
 | D4 | Edge hardware baseline | mini-PC spec; OS support (Windows/Linux) | M1 |
-| D5 | Tenancy model escalation | shared+RLS vs schema-per-tenant for large customers | M4 |
+| D5 | Tenancy model escalation | shared+RLS default; schema-per-tenant only if a customer demands hard isolation (e.g. sovereign-data, audit-isolation, or a compliance posture that won't accept shared storage). Rationale: PRD §35 wants fleet mgmt from one place, which is naturally a shared-schema multi-tenant model; the edge is single-tenant by design and RLS must arrive with cloud, not before. Escalation path (D5 here) records the threshold and migration shape so a later customer demand doesn't trigger a re-architecture. Resolved in favor of shared-schema + RLS for launch; schema-per-tenant remains a documented fallback. | **Resolved** (M4 cloud kickoff) |
 | D6 | Cloud hosting | self-hosted vs hyperscaler; region (data residency) | M3 |
 | D7 | HL7 parser lib selection | **RESOLVED — adopt `hl7v2` (panates, MIT)**: v1.9.0 + `hl7v2-dictionary` declared as deps of `@integration-hub/hl7` (B1/B2a shipped on it). Spike evidence (`packages/hl7/src/parser-substrate.test.ts`): parses ORU/ADT 2.3.1–2.5.1; dictionary-correct unescape + repetition reads; typed `HL7Error` on garbage, tolerant of truncated input; quirk — `toHL7String()` normalizes datatypes, so output is never byte-round-tripped (own model builds it). Runners-up rejected: `node-hl7-client`/-`server` (Node≥22, server-shaped, would duplicate our MLLP), `hl7` (amida) + `L7Node/hl7` dead. | **Resolved** (B kickoff) |
 | D8 | Licensing/commercial model detail | per-facility vs device-based vs OEM (PRD §61) | M2 |
 | D9 | Marketplace timing vs M5 pull | demand check with distributors | M4 |
 | D10 | Orthanc bundled vs customer-provided default | **RESOLVED (M3.5) — bundled-by-default** (pinned multi-arch derived image for pilot/demo) **+ customer-provided supported**: `ORTHANC_URL` already points at any Orthanc (facility-managed, vendor appliance), so deployments that already run Orthanc ship none; the §7.5.5 AGPL boundary is identical either way (REST only). | **Resolved** (M3.5) |
+| D11 | Edge durable queue / cloud queue swap | **RESOLVED (M4 cloud kickoff) — edge outbox = the cloud sync outbox, cloud adds a Redis+BullMQ worker**. The in-process dispatcher today writes to the edge SQL store (the edge-outbox shape, §4.2/§13.2); no recovery on restart yet. Cloud M4 adds (1) an explicit `outbox` table + write-through on the same local writes, and (2) a BullMQ worker that reads unacked outbox rows and ships them to the cloud platform over the outbound-only secure channel (PRD §42), acking on success. The dispatcher seam (`MessageSink` / `Dispatcher`) stays the same — BullMQ is a swap behind the existing delivery seam, not a rewrite. In-memory mode keeps the in-process delivery; PG mode with no cloud sync keeps the outbox as a no-op log until a sync worker is wired. |
 
 ---
 
@@ -685,7 +741,10 @@ Exit: M0 gate (§8.1) — demo runs against Postgres (`npm run demo:db`), all sc
   routing, `Dispatcher`); migration `0002_m1_lifecycle.sql` adds `dlq_at` /
   `duplicate_of`, `destinations`, `route_rules`, `message_attempts`, and
   `dedup_keys`. In-process delivery is the edge-outbox shape; no queue recovery
-  on restart yet (Redis/BullMQ swap keeps the same `Dispatcher` seam).
+  on restart yet (Redis+BullMQ swap keeps the same `Dispatcher` seam — decision
+  D11). The outbox table that backs cloud sync is NOT yet a separate row; today the
+  edge SQL store IS the durable outbox (every committed message is on disk). Cloud M4
+  adds the explicit `outbox` table + sync worker (D11) behind the existing seam.
 - RLS was deliberately NOT added with the tenant columns: default-deny policies
   would break single-tenant edge mode. Policies arrive with the tenancy
   mechanism in M4 (§5.2).
