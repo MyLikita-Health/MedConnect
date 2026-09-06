@@ -528,33 +528,40 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       // `orthanc-down` alert (subject = this Orthanc's base URL), any
       // successful poll clears it — surfaced in the console + webhook channels
       // like every other alert.
-      alerts: { orthancPoll: (ok, error) => void alerts.orthancPoll(orthancUrl, ok, error) },
+      // Await the alert update (the monitor's reportOutcome try/catches it) so
+      // the write stays inside the poll chain — hub.stop drains the chain
+      // before closing the pool, instead of an unhandled rejection racing it.
+      alerts: { orthancPoll: (ok, error) => alerts.orthancPoll(orthancUrl, ok, error) },
       // M3 C6 — Orthanc health as a device (PRD §32–33): every poll outcome
       // flips the `orthanc` device row (connected/disconnected + lastSeen) in
       // the same registry the gateways auto-register wire devices into, so the
       // Devices panel shows the imaging server's health like any modality.
       // The device id matches the deviceId imaging messages carry, and the
       // orthanc-down alert (above) holds the failure detail + thresholds.
-      onPollOutcome: ({ ok }) =>
-        void (async () => {
-          try {
-            await devices.upsertFromConnection({
-              id: 'orthanc',
-              name: 'Orthanc',
-              protocol: 'DICOM',
-              transport: 'api',
-              state: ok ? 'connected' : 'disconnected',
-            });
-          } catch (err) {
-            console.error(`[mwl] device state update failed: ${(err as Error).message}`);
-          }
-          // D3: the Orthanc health row is a device like any other.
-          void fireEvent(ok ? 'device.connected' : 'device.disconnected', {
-            deviceId: 'orthanc',
+      onPollOutcome: async ({ ok }) => {
+        // Awaited (the monitor's reportOutcome try/catches it) so the write
+        // stays inside the poll chain — hub.stop drains the chain before
+        // closing the pool, instead of the flip racing an ended pool. The
+        // webhook fire stays fire-and-forget: the bus retries internally and
+        // never throws.
+        try {
+          await devices.upsertFromConnection({
+            id: 'orthanc',
+            name: 'Orthanc',
             protocol: 'DICOM',
+            transport: 'api',
             state: ok ? 'connected' : 'disconnected',
           });
-        })(),
+        } catch (err) {
+          console.error(`[mwl] device state update failed: ${(err as Error).message}`);
+        }
+        // D3: the Orthanc health row is a device like any other.
+        void fireEvent(ok ? 'device.connected' : 'device.disconnected', {
+          deviceId: 'orthanc',
+          protocol: 'DICOM',
+          state: ok ? 'connected' : 'disconnected',
+        });
+      },
       log: (line) => console.log(line),
     });
     mwl.start();

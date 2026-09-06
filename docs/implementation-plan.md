@@ -1685,7 +1685,7 @@ translator + round-trip oracle tests before any wiring).
 
 12. ✅ **D3 (slice 4) — PG-persisted webhook subscriptions**
    (`packages/core/src/pg-webhooks.ts` + `pg-webhooks.test.ts`, 4 DB-gated
-   tests; `packages/api/migrations/0012_webhook_subscriptions.sql`;
+   tests; `packages/api/migrations/0013_webhook_subscriptions.sql`;
    `event-bus.ts` store seam; 363 total): the bus gains an optional
    `WebhookSubscriptionStore` (list/upsert/remove). With a store attached
    (startHub passes `PostgresWebhookStore` whenever a pool exists) the bus
