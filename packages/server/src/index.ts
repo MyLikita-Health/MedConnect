@@ -14,7 +14,7 @@ import { DEFAULT_MAPPINGS, defaultLayoutFor, type CanonicalMessage } from '@inte
 import { ImagingRouter } from './imaging-router.js';
 import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore, InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore,  InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, PostgresWebhookStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -252,8 +252,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const webhookSource = opts.webhooks?.source ?? `hub:${host}`;
   const webhooks = new EventBus({
     subscriptions: opts.webhooks?.subscriptions ?? [],
+    // PG mode (D3): subscriptions persist — the bus loads them at boot and
+    // writes through on every add/update/remove, so they survive restarts.
+    store: pool ? new PostgresWebhookStore(pool) : undefined,
     log: (line) => console.log(line),
   });
+  if (pool) await webhooks.ready;
   const fireEvent = (type: WebhookEventType, data: Record<string, unknown>) =>
     webhooks.fire({ type, data, source: webhookSource });
 

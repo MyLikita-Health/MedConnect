@@ -202,6 +202,45 @@ test('test ping fires a signed delivery through the real bus', async (t) => {
   assert.match(noneBody.note ?? '', /no enabled subscription/);
 });
 
+test('manual POST /api/v1/orders fires a signed order.received delivery (the REST fire point)', async (t) => {
+  const { base, received } = await startApi(t);
+
+  const res = await fetch(`${base}/api/v1/orders`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      id: 'ACC-MANUAL-1',
+      patientId: 'PID-2002',
+      sampleId: 'S-42',
+      tests: ['GLUCOSE', 'CREATININE'],
+      status: 'active',
+    }),
+  });
+  assert.equal(res.status, 201);
+
+  // The order lands in the registry (the manual LIS seam).
+  const orders = await fetch(`${base}/api/v1/orders`).then((r) => r.json() as Promise<Array<{ id: string }>>);
+  assert.equal(orders.length, 1);
+  assert.equal(orders[0]!.id, 'ACC-MANUAL-1');
+
+  // …and a signed order.received delivery reaches the subscription. The fire
+  // is fire-and-forget (void), so give the stub a moment to land it.
+  for (let i = 0; i < 50 && received.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(received.length, 1, 'one signed delivery captured');
+  const captured = received[0]!;
+  const event = JSON.parse(captured.body) as WebhookEvent;
+  assert.equal(captured.headers[EVENT_HEADER], 'order.received');
+  assert.equal(captured.headers[EVENT_ID_HEADER], event.id);
+  assert.equal(verifyWebhookSignature(SECRET, captured.body, captured.headers[SIGNATURE_HEADER]), true);
+  // Same envelope shape as the HL7 ORM feed — only the source differs.
+  assert.equal(event.source, 'hub:api');
+  assert.equal(event.data.orderId, 'ACC-MANUAL-1');
+  assert.equal(event.data.patientId, 'PID-2002');
+  assert.equal(event.data.sampleId, 'S-42');
+  assert.deepEqual(event.data.tests, ['GLUCOSE', 'CREATININE']);
+  assert.equal(event.data.status, 'active');
+});
+
 test('deliveries log + replay: failed deliveries are listed and re-sent on replay', async (t) => {
   const { base, bus, received, stub } = await startApi(t);
 

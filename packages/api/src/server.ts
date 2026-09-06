@@ -541,6 +541,22 @@ export class ApiServer {
     app.post('/api/v1/orders', async (req, reply) => {
       const order = orderSchema.parse(req.body);
       await this.orders.register({ ...order, receivedAt: new Date().toISOString() });
+      // D3 (PRD §37): the manual LIS-order registration is order.received —
+      // the SAME envelope shape as the HL7 ORM feed (server/index.ts), so a
+      // subscriber can't tell the manual POST and the wire apart (only the
+      // source differs: hub:api vs hub:<host>). Fire-and-forget like every
+      // other fire point — the bus retries internally and never throws.
+      void this.opts.webhooks?.fire({
+        type: 'order.received',
+        source: 'hub:api',
+        data: {
+          orderId: order.id,
+          patientId: order.patientId,
+          sampleId: order.sampleId,
+          tests: order.tests,
+          status: order.status,
+        },
+      });
       return reply.code(201).send(order);
     });
     app.delete('/api/v1/orders/:id', async (req, reply) => {

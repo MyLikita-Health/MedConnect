@@ -24,6 +24,7 @@
  * state flip, order registered) and exposes the subscriptions REST surface.
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 import type { RetryPolicy } from './routing.js';
 
 export const SIGNATURE_HEADER = 'x-integration-hub-signature';
@@ -78,6 +79,52 @@ export interface WebhookSubscription {
   createdAt: string;
 }
 
+/**
+ * Durable subscription storage. Absent → the bus keeps subscriptions in
+ * memory only (a restart loses them). When attached, the bus loads
+ * subscriptions at boot (`ready`) and writes through on every add/update/
+ * remove — the PG store (`PostgresWebhookStore`) is the production impl.
+ */
+export interface WebhookSubscriptionStore {
+  /** Every persisted subscription (overlaid on the boot seeds; store wins on id clash). */
+  list(): Promise<WebhookSubscription[]>;
+  /** Insert or replace one subscription. */
+  upsert(subscription: WebhookSubscription): Promise<void>;
+  /** Delete one subscription; resolves once the row is gone. */
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * Zod schema for a persisted subscription. Read-back validation (the
+ * pg-profiles pattern): a corrupt row fails loudly on load instead of
+ * silently mis-parsing the delivery config.
+ */
+export const webhookSubscriptionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  url: z.string().url(),
+  secret: z.string().min(1),
+  events: z.union([
+    z.array(z.enum([...WEBHOOK_EVENT_TYPES] as [WebhookEventType, ...WebhookEventType[]])).min(1),
+    z.literal('*'),
+  ]),
+  enabled: z.boolean(),
+  retry: z
+    .object({
+      maxAttempts: z.number().int().min(1).max(10),
+      backoffMs: z.number().int().min(0),
+      backoffFactor: z.number().min(1),
+      jitter: z.boolean(),
+    })
+    .optional(),
+  createdAt: z.string(),
+});
+
+/** Parse (and validate) a persisted subscription — corrupt rows throw. */
+export function parseWebhookSubscription(input: unknown): WebhookSubscription {
+  return webhookSubscriptionSchema.parse(input);
+}
+
 export interface WebhookDeliveryAttempt {
   eventId: string;
   subscriptionId: string;
@@ -100,6 +147,12 @@ export interface WebhookDelivery {
 export interface EventBusOptions {
   /** Seed subscriptions (the bus starts empty when omitted). */
   subscriptions?: WebhookSubscription[];
+  /**
+   * Durable subscription store (PG in production). When present the bus
+   * loads subscriptions at boot (`ready`) and persists every add/update/
+   * remove; when absent subscriptions live in memory only.
+   */
+  store?: WebhookSubscriptionStore;
   /** fetch override for tests (defaults to global fetch). */
   fetch?: typeof fetch;
   log?: (line: string) => void;
@@ -143,25 +196,56 @@ export class EventBus {
   private readonly subs = new Map<string, WebhookSubscription>();
   private readonly doFetch: typeof fetch;
   private readonly log: EventBusOptions['log'];
+  private readonly store: WebhookSubscriptionStore | undefined;
+  /** Resolves once the boot-time subscription load finishes (no-op without a store). */
+  readonly ready: Promise<void>;
 
   constructor(opts: EventBusOptions) {
     for (const sub of opts.subscriptions ?? []) this.subs.set(sub.id, sub);
+    this.store = opts.store;
     this.doFetch = opts.fetch ?? fetch.bind(globalThis);
     this.log = opts.log;
+    this.ready = this.store ? this.loadSubscriptions() : Promise.resolve();
   }
+
+  private async loadSubscriptions(): Promise<void> {
+    try {
+      const stored = await this.store!.list();
+      for (const sub of stored) this.subs.set(sub.id, sub);
+      this.log?.(`[webhooks] loaded ${stored.length} persisted subscription(s)`);
+    } catch (err) {
+      // The bus never throws at boot (fire stays a no-op with zero subs); a
+      // store failure is logged loudly and the seeds remain live.
+      this.log?.(
+        `[webhooks] subscription load failed — starting with seeds only: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   /** Every subscription (management + console views). */
   listSubscriptions(): WebhookSubscription[] {
     return [...this.subs.values()];
   }
 
-  /** Add or replace a subscription (idempotent — REST upsert). */
-  addSubscription(subscription: WebhookSubscription): void {
+  /**
+   * Add or replace a subscription (idempotent — REST upsert). When a store is
+   * attached the write-through is awaited (returns a promise); without one the
+   * update is synchronous.
+   */
+  addSubscription(subscription: WebhookSubscription): void | Promise<void> {
     this.subs.set(subscription.id, subscription);
+    return this.store?.upsert(subscription);
   }
 
-  /** Remove a subscription; returns false when it did not exist. */
-  removeSubscription(id: string): boolean {
-    return this.subs.delete(id);
+  /**
+   * Remove a subscription; returns false when it did not exist. When a store
+   * is attached the deletion is awaited (returns a promise); without one the
+   * removal is synchronous.
+   */
+  removeSubscription(id: string): boolean | Promise<boolean> {
+    const existed = this.subs.delete(id);
+    if (!existed) return false;
+    return this.store ? this.store.remove(id).then(() => true) : true;
   }
 
   private deliveryKey(eventId: string, subscriptionId: string): string {
@@ -242,6 +326,7 @@ export class EventBus {
    * matched.
    */
   async fire(input: FireEventInput): Promise<{ id: string; matched: number }> {
+    await this.ready;
     const event: WebhookEvent = {
       id: input.id ?? randomUUID(),
       type: input.type,
@@ -271,6 +356,7 @@ export class EventBus {
    * Returns the number of subscriptions re-attempted.
    */
   async replay(eventId: string): Promise<number> {
+    await this.ready;
     const event = this.events.get(eventId);
     if (!event) return 0;
     const failed = [...this.deliveries.values()].filter((d) => d.eventId === eventId && !d.ok);

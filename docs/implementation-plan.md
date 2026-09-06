@@ -1683,6 +1683,36 @@ translator + round-trip oracle tests before any wiring).
    writes 403; engineer writes 201; anonymous 401). Deferred: PG
    persistence + the manual `POST /api/v1/orders` fire point.
 
+12. ✅ **D3 (slice 4) — PG-persisted webhook subscriptions**
+   (`packages/core/src/pg-webhooks.ts` + `pg-webhooks.test.ts`, 4 DB-gated
+   tests; `packages/api/migrations/0012_webhook_subscriptions.sql`;
+   `event-bus.ts` store seam; 363 total): the bus gains an optional
+   `WebhookSubscriptionStore` (list/upsert/remove). With a store attached
+   (startHub passes `PostgresWebhookStore` whenever a pool exists) the bus
+   loads subscriptions at boot (`EventBus.ready`, awaited in startHub) and
+   writes through on every add/update/remove — subscriptions now survive
+   hub restarts in PG mode, closing entry 11's deferral. The REST surface
+   awaits the now-persisting calls; without a store the bus behaves exactly
+   as before (synchronous, in-memory). Rows are JSONB payloads with zod
+   read-back validation (pg-profiles pattern) — a corrupt row fails loudly
+   on load, and the bus never throws at boot (store failure logs + seeds
+   stay live). Tests: store round-trip (upsert/list/remove, secret
+   persisted server-side, same-id overwrite), the restart proof (bus A
+   writes → fresh bus B on the same store sees them → removal through B is
+   seen by bus C), corrupt-row rejection, and unchanged no-store behavior.
+
+13. ✅ **D3 (slice 5) — manual `POST /api/v1/orders` fire point**
+   (`packages/api/src/server.ts` + `webhooks.test.ts`, 364 total): the
+   manual LIS-order registration now fires `order.received` — the SAME
+   envelope shape as the HL7 ORM feed (`orderId/patientId/sampleId/tests/
+   status`; only the source differs: `hub:api` vs `hub:<host>`), so
+   subscribers can't tell the manual POST and the wire apart. Fire-and-forget
+   like every fire point (the bus retries internally, never throws). Test:
+   POST an order → it lands in the registry AND a signed `order.received`
+   delivery reaches the subscription (HMAC verified, shape asserted). This
+   closes the last D3 deferral — the webhook event bus is fully wired:
+   engine, fire points, REST surface, console, replay, PG persistence.
+
 ---
 
 ## 14. Plan maintenance

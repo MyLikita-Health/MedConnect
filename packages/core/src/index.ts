@@ -48,6 +48,7 @@ export {
   EVENT_HEADER,
   EVENT_ID_HEADER,
   EventBus,
+  parseWebhookSubscription,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
   WEBHOOK_EVENT_TYPES,
@@ -60,7 +61,9 @@ export {
   type WebhookEvent,
   type WebhookEventType,
   type WebhookSubscription,
+  type WebhookSubscriptionStore,
 } from './event-bus.js';
+export { PostgresWebhookStore } from './pg-webhooks.js';
 export { PostgresAdmissionRegistry, PostgresOrderRegistry } from './pg-registry.js';
 export {
   DEFAULT_UNIT_CATALOG,

@@ -94,7 +94,7 @@ export function registerWebhookRoutes(app: FastifyInstance, opts: { bus?: EventB
       retry: input.retry,
       createdAt: new Date().toISOString(),
     };
-    bus.addSubscription(sub);
+    await bus.addSubscription(sub);
     // The secret is returned exactly once, at create (like API keys).
     return reply.code(201).send(sub);
   });
@@ -111,14 +111,14 @@ export function registerWebhookRoutes(app: FastifyInstance, opts: { bus?: EventB
       // A secret is only ever replaced when a new one is submitted.
       secret: patch.secret ?? existing.secret,
     };
-    bus.addSubscription(updated);
+    await bus.addSubscription(updated);
     return reply.code(200).send(toDto(updated));
   });
 
   app.delete('/api/v1/webhooks/:id', async (req, reply) => {
     if (!bus) return missing(reply);
     const { id } = req.params as { id: string };
-    if (!bus.removeSubscription(id)) return reply.code(404).send({ error: 'webhook subscription not found' });
+    if (!(await bus.removeSubscription(id))) return reply.code(404).send({ error: 'webhook subscription not found' });
     return reply.code(204).send();
   });
 
