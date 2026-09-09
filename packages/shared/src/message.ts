@@ -118,6 +118,14 @@ export interface CanonicalMessage {
    * instead of silently parsing results with unverified offsets.
    */
   profile?: ProfileStamp;
+  /**
+   * Cloud tenancy stamps (H1 write-through, plan §5.2): the org + facility
+   * the message belongs to. Set on a cloud-mode hub (or an edge shipping to
+   * the cloud); absent on a single-tenant edge. The D11 outbox write-through
+   * copies these into the sync entry so the cloud can route it.
+   */
+  orgId?: string;
+  facilityId?: string;
 }
 
 /** Profile provenance of a parsed message (see CanonicalMessage.profile). */

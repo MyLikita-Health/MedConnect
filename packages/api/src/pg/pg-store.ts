@@ -16,10 +16,12 @@ import type {
   ParsedRecord,
   TimelineEntry,
 } from '@integration-hub/shared';
+import type { OutboxWriter } from '@integration-hub/core';
+import type { SyncedMessageRow, SyncedDeviceRow } from './pg-outbox.js';
 import type { MarkFields, StoreBackend } from '../backend.js';
 import type { MessageFilter, StoreStats } from '../store.js';
 
-const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, imaging, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at, match_reason`;
+const MESSAGE_COLUMNS = `id, protocol, direction, device_id, received_at, raw, records, payload, imaging, status, errors, timeline, dlq_at, duplicate_of, match_status, matched_order_id, matched_patient_id, match_strategy, match_at, match_reason, org_id, facility_id`;
 
 interface MessageRow {
   id: string;
@@ -42,22 +44,40 @@ interface MessageRow {
   match_strategy: string | null;
   match_at: Date | string | null;
   match_reason: string | null;
+  org_id: string | null;
+  facility_id: string | null;
 }
 
 export class PostgresMessageStore implements MessageSink, StoreBackend {
   readonly kind = 'postgres' as const;
 
+  /**
+   * D11 write-through: when set, every recorded message also appends an outbox
+   * row in the same transaction (the edge's durable sync backlog). The cloud
+   * sync worker (OutboxSyncer) ships these rows to the cloud platform.
+   */
+  outbox?: { append: OutboxWriter['append'] };
+
+  /**
+   * H1 cloud tenancy write-through: when set, every recorded message is stamped
+   * with org_id/facility_id (the cloud org the edge ships for). Absent on a
+   * single-tenant edge (columns stay null, RLS permissive).
+   */
+  tenancy?: { orgId: string; facilityId: string };
+
   constructor(private readonly pool: Pool) {}
 
-  /** Persist a pipeline message plus its canonical clinical rows, atomically. */
+  /** Persist a pipeline message plus its canonical clinical rows, atomically.
+   *  With an outbox attached, the sync entry commits in the SAME transaction
+   *  — a committed message is always a pending sync entry (G4 no dual-write). */
   async record(message: CanonicalMessage): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(
         `INSERT INTO messages (id, protocol, direction, device_id, received_at, raw,
-                              records, payload, imaging, status, errors, timeline)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+                              records, payload, imaging, status, errors, timeline, org_id, facility_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           message.id,
           message.protocol,
@@ -71,9 +91,19 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
           message.status,
           JSON.stringify(message.errors),
           JSON.stringify(message.timeline),
+          message.orgId ?? this.tenancy?.orgId ?? null,
+          message.facilityId ?? this.tenancy?.facilityId ?? null,
         ],
       );
       if (message.payload) await insertClinical(client, message.id, message.payload);
+      if (this.outbox) {
+        await appendOutboxRow(
+          client,
+          this.outbox,
+          { table: 'messages', op: 'INSERT', pk: message.id },
+          messageToSyncRow(message, this.tenancy),
+        );
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -138,6 +168,20 @@ export class PostgresMessageStore implements MessageSink, StoreBackend {
         fields?.clearDlq ?? false,
       ],
     );
+    // D11 write-through: ship the status change (full-row UPDATE so the cloud
+    // copy converges without delta merge). Fire-and-forget: a sync entry must
+    // never fail a delivery transition — the next full write re-ships anyway.
+    if (this.outbox) {
+      const updated = await this.get(id);
+      if (updated) {
+        void appendOutboxRow(
+          this.pool,
+          this.outbox,
+          { table: 'messages', op: 'UPDATE', pk: id },
+          messageToSyncRow({ ...updated, orgId: updated.orgId ?? this.tenancy?.orgId, facilityId: updated.facilityId ?? this.tenancy?.facilityId }),
+        ).catch(() => undefined);
+      }
+    }
   }
 
   async recordAttempt(attempt: MessageAttempt): Promise<void> {
@@ -256,6 +300,55 @@ async function insertClinical(client: PoolClient, messageId: string, p: LabPaylo
   }
 }
 
+// ---------------------------------------------------------------------------
+// D11 write-through helpers (shared with pg-devices via outbox-write.ts)
+// ---------------------------------------------------------------------------
+
+/** Append an outbox row on the given client (same transaction as the source
+ *  row). Resolves the tenancy stamps from the payload itself so the cloud can
+ *  route the entry without extra context. */
+export async function appendOutboxRow(
+  client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  outbox: { append: OutboxWriter['append'] },
+  key: { table: 'messages' | 'devices'; op: 'INSERT' | 'UPDATE'; pk: string },
+  payload: SyncedMessageRow | SyncedDeviceRow,
+): Promise<void> {
+  await outbox.append(
+    {
+      table: key.table,
+      op: key.op,
+      pk: key.pk,
+      payload,
+      ...(payload.orgId ? { orgId: payload.orgId } : {}),
+      ...(payload.facilityId ? { facilityId: payload.facilityId } : {}),
+    },
+    client,
+  );
+}
+
+/** Project a CanonicalMessage into the shipped row shape (full envelope — the
+ *  cloud upsert is whole-row; no deltas to merge). Tenancy resolution: the
+ *  message's own stamps first, then the store's cloud tenancy (an edge shipping
+ *  for a cloud org stamps every row it writes). */
+export function messageToSyncRow(message: CanonicalMessage, tenancy?: { orgId: string; facilityId: string }): SyncedMessageRow {
+  return {
+    id: message.id,
+    protocol: message.protocol,
+    direction: message.direction,
+    deviceId: message.deviceId,
+    receivedAt: message.receivedAt,
+    raw: message.raw,
+    records: message.records ?? null,
+    payload: message.payload ?? null,
+    imaging: message.imaging ?? null,
+    status: message.status,
+    errors: message.errors,
+    timeline: message.timeline,
+    orgId: message.orgId ?? tenancy?.orgId,
+    facilityId: message.facilityId ?? tenancy?.facilityId,
+  };
+}
+
 function rowToMessage(row: MessageRow): CanonicalMessage {
   return {
     id: row.id,
@@ -282,5 +375,7 @@ function rowToMessage(row: MessageRow): CanonicalMessage {
           at: new Date(row.match_at ?? new Date()).toISOString(),
         }
       : undefined,
+    orgId: row.org_id ?? undefined,
+    facilityId: row.facility_id ?? undefined,
   };
 }

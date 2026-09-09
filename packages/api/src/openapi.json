@@ -4,34 +4,96 @@
     "title": "Integration Hub API",
     "description": "REST API for the Integration Hub healthcare device interoperability platform. Connects laboratory analyzers, imaging modalities, and medical devices to LIS/HIS/EMR/RIS/PACS systems.\n\n## Authentication\n\nAll `/api/v1` routes (except `/api/v1/health`) require `Authorization: Bearer <key>` header. Keys are created via `POST /api/v1/keys` (admin only). Roles: `admin`, `engineer`, `operator`, `viewer`.\n\n## Versioning\n\nThis is API version 1 (`/api/v1/`). Breaking changes will introduce a new version (`/api/v2/`) with both versions supported during a transition period. Non-breaking additions (new fields, new optional parameters, new endpoints) are added to v1 without notice.\n\n## Rate Limits\n\nNo rate limits enforced in v1. Cloud deployments may add per-tenant quotas in later phases.",
     "version": "1.0.0",
-    "contact": { "name": "Integration Hub" },
-    "license": { "name": "Proprietary" }
+    "contact": {
+      "name": "Integration Hub"
+    },
+    "license": {
+      "name": "Proprietary"
+    }
   },
   "servers": [
-    { "url": "http://127.0.0.1:3000", "description": "Local development" }
+    {
+      "url": "http://127.0.0.1:3000",
+      "description": "Local development"
+    }
   ],
-  "security": [{ "bearerAuth": [] }],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
   "tags": [
-    { "name": "Health", "description": "Liveness, stats, version" },
-    { "name": "Messages", "description": "Inbound message lifecycle — view, replay, retry, discard, release" },
-    { "name": "Queue", "description": "Dead-letter queue and held-message exception queue" },
-    { "name": "Devices", "description": "Device registry — register and list connected devices" },
-    { "name": "Profiles", "description": "Config-first device profiles and golden conformance (PRD §39–40)" },
-    { "name": "Routing", "description": "Destinations and route rules — where results are delivered" },
-    { "name": "Alerts", "description": "Alert rules and derived alert history (PRD §33)" },
-    { "name": "Orders", "description": "Expected-order registry — the LIS interface seam (PRD §27)" },
-    { "name": "Admissions", "description": "Patient-admission registry — the ADT feed seam (B2c)" },
-    { "name": "Imaging", "description": "Orthanc MWL worklist monitor and imaging study routing (M3)" },
-    { "name": "Results", "description": "Flattened result rows and test-code mapping table" },
-    { "name": "Webhooks", "description": "Signed webhook event bus — subscriptions, deliveries, replay, test (D3)" },
-    { "name": "FHIR", "description": "FHIR R4 outward surface — read/search Patient, ServiceRequest, Observation, etc. (D1)" },
-    { "name": "Security", "description": "API key management, identity, and audit log (M2)" },
-    { "name": "Updates", "description": "Signed remote updates — check, apply, rollback (M2 installer)" }
+    {
+      "name": "Health",
+      "description": "Liveness, stats, version"
+    },
+    {
+      "name": "Messages",
+      "description": "Inbound message lifecycle — view, replay, retry, discard, release"
+    },
+    {
+      "name": "Queue",
+      "description": "Dead-letter queue and held-message exception queue"
+    },
+    {
+      "name": "Devices",
+      "description": "Device registry — register and list connected devices"
+    },
+    {
+      "name": "Profiles",
+      "description": "Config-first device profiles and golden conformance (PRD §39–40)"
+    },
+    {
+      "name": "Routing",
+      "description": "Destinations and route rules — where results are delivered"
+    },
+    {
+      "name": "Alerts",
+      "description": "Alert rules and derived alert history (PRD §33)"
+    },
+    {
+      "name": "Orders",
+      "description": "Expected-order registry — the LIS interface seam (PRD §27)"
+    },
+    {
+      "name": "Admissions",
+      "description": "Patient-admission registry — the ADT feed seam (B2c)"
+    },
+    {
+      "name": "Imaging",
+      "description": "Orthanc MWL worklist monitor and imaging study routing (M3)"
+    },
+    {
+      "name": "Results",
+      "description": "Flattened result rows and test-code mapping table"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Signed webhook event bus — subscriptions, deliveries, replay, test (D3)"
+    },
+    {
+      "name": "FHIR",
+      "description": "FHIR R4 outward surface — read/search Patient, ServiceRequest, Observation, etc. (D1)"
+    },
+    {
+      "name": "Security",
+      "description": "API key management, identity, and audit log (M2)"
+    },
+    {
+      "name": "Updates",
+      "description": "Signed remote updates — check, apply, rollback (M2 installer)"
+    },
+    {
+      "name": "Fleet",
+      "description": "M4 cloud platform: gateway provisioning (H3), fleet overview (H2), platform flags/quotas (H4), licenses + entitlements + analytics (H5), and the D11 sync ingest."
+    }
   ],
   "paths": {
     "/api/v1/health": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Liveness probe",
         "description": "Returns hub status, uptime, storage backend, and version. No authentication required.",
         "security": [],
@@ -39,722 +101,2186 @@
         "responses": {
           "200": {
             "description": "Hub is running",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/stats": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Message totals by status",
         "operationId": "getStats",
         "responses": {
           "200": {
             "description": "Count per status",
-            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "integer" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/version": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Release version and build info",
         "operationId": "getVersion",
         "responses": {
           "200": {
             "description": "Version info",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/messages": {
       "get": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "List messages (newest first)",
         "operationId": "listMessages",
         "parameters": [
-          { "name": "deviceId", "in": "query", "schema": { "type": "string" }, "description": "Filter by device id" },
-          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["RECEIVED", "PARSED", "VALIDATED", "MAPPED", "QUEUED", "DELIVERING", "ROUTED", "FAILED", "DUPLICATE", "DISCARDED", "HELD"] } },
-          { "name": "dlq", "in": "query", "schema": { "type": "boolean" }, "description": "Filter to dead-lettered messages (FAILED + dlqAt set)" },
-          { "name": "held", "in": "query", "schema": { "type": "boolean" }, "description": "Filter to held messages (HELD status)" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 }, "description": "Max results (default 100)" }
+          {
+            "name": "deviceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by device id"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "RECEIVED",
+                "PARSED",
+                "VALIDATED",
+                "MAPPED",
+                "QUEUED",
+                "DELIVERING",
+                "ROUTED",
+                "FAILED",
+                "DUPLICATE",
+                "DISCARDED",
+                "HELD"
+              ]
+            }
+          },
+          {
+            "name": "dlq",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Filter to dead-lettered messages (FAILED + dlqAt set)"
+          },
+          {
+            "name": "held",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Filter to held messages (HELD status)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Max results (default 100)"
+          }
         ],
         "responses": {
           "200": {
             "description": "Message list",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Message"
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/messages/{id}": {
       "get": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Get message detail (raw, parsed, canonical, timeline)",
         "operationId": "getMessage",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Message detail", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageDetail" } } } },
-          "404": { "description": "Message not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "200": {
+            "description": "Message detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/messages/{id}/replay": {
       "post": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Replay a message through the pipeline",
         "operationId": "replayMessage",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "201": { "description": "Message replayed" },
-          "404": { "description": "Message not found" },
-          "501": { "description": "Replay not wired (in-memory mode)" }
+          "201": {
+            "description": "Message replayed"
+          },
+          "404": {
+            "description": "Message not found"
+          },
+          "501": {
+            "description": "Replay not wired (in-memory mode)"
+          }
         }
       }
     },
     "/api/v1/messages/{id}/retry": {
       "post": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Retry a dead-lettered message under current route rules (M3.4)",
         "operationId": "retryMessage",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Message requeued for delivery" },
-          "404": { "description": "Message not found" },
-          "409": { "description": "Message is not dead-lettered" },
-          "501": { "description": "Retry not wired" }
+          "200": {
+            "description": "Message requeued for delivery"
+          },
+          "404": {
+            "description": "Message not found"
+          },
+          "409": {
+            "description": "Message is not dead-lettered"
+          },
+          "501": {
+            "description": "Retry not wired"
+          }
         }
       }
     },
     "/api/v1/messages/{id}/discard": {
       "post": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Discard a dead-lettered message (terminal DISCARDED)",
         "operationId": "discardMessage",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Message discarded" },
-          "404": { "description": "Message not found" }
+          "200": {
+            "description": "Message discarded"
+          },
+          "404": {
+            "description": "Message not found"
+          }
         }
       }
     },
     "/api/v1/messages/{id}/release": {
       "post": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Release a held message into delivery",
         "operationId": "releaseMessage",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Message released" },
-          "404": { "description": "Message not found" },
-          "409": { "description": "Message is not held" },
-          "501": { "description": "Release not wired" }
+          "200": {
+            "description": "Message released"
+          },
+          "404": {
+            "description": "Message not found"
+          },
+          "409": {
+            "description": "Message is not held"
+          },
+          "501": {
+            "description": "Release not wired"
+          }
         }
       }
     },
     "/api/v1/dlq": {
       "get": {
-        "tags": ["Queue"],
+        "tags": [
+          "Queue"
+        ],
         "summary": "Dead-letter queue (PRD §23)",
         "operationId": "listDlq",
         "responses": {
-          "200": { "description": "DLQ messages", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } } }
+          "200": {
+            "description": "DLQ messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Message"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/held": {
       "get": {
-        "tags": ["Queue"],
+        "tags": [
+          "Queue"
+        ],
         "summary": "Held-message exception queue (PRD §27–28)",
         "operationId": "listHeld",
         "responses": {
-          "200": { "description": "Held messages", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } } }
+          "200": {
+            "description": "Held messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Message"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/devices": {
       "get": {
-        "tags": ["Devices"],
+        "tags": [
+          "Devices"
+        ],
         "summary": "List registered devices",
         "operationId": "listDevices",
         "responses": {
-          "200": { "description": "Device list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } } } } }
+          "200": {
+            "description": "Device list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Device"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Devices"],
+        "tags": [
+          "Devices"
+        ],
         "summary": "Register a device",
         "operationId": "registerDevice",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterDeviceInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDeviceInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Device registered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } },
-          "400": { "description": "Validation error or unknown profile" }
+          "201": {
+            "description": "Device registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or unknown profile"
+          }
         }
       }
     },
     "/api/v1/profiles": {
       "get": {
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "summary": "List device profiles",
         "operationId": "listProfiles",
         "responses": {
-          "200": { "description": "Profile list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/DeviceProfile" } } } } }
+          "200": {
+            "description": "Profile list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceProfile"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "summary": "Create or update a device profile",
         "operationId": "upsertProfile",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceProfile" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceProfile"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Profile upserted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceProfile" } } } }
+          "201": {
+            "description": "Profile upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceProfile"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/profiles/{id}": {
       "get": {
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "summary": "Get a device profile by id",
         "operationId": "getProfile",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Profile detail", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceProfile" } } } },
-          "404": { "description": "Profile not found" }
+          "200": {
+            "description": "Profile detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceProfile"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found"
+          }
         }
       },
       "delete": {
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "summary": "Delete a device profile (bound devices detach)",
         "operationId": "deleteProfile",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Profile deleted" }
+          "204": {
+            "description": "Profile deleted"
+          }
         }
       }
     },
     "/api/v1/profiles/{id}/conformance": {
       "get": {
-        "tags": ["Profiles"],
+        "tags": [
+          "Profiles"
+        ],
         "summary": "Re-run golden conformance for a stored profile",
         "operationId": "getProfileConformance",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Conformance result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConformanceResult" } } } },
-          "404": { "description": "Profile not found" }
+          "200": {
+            "description": "Conformance result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConformanceResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found"
+          }
         }
       }
     },
     "/api/v1/destinations": {
       "get": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "List outbound destinations",
         "operationId": "listDestinations",
         "responses": {
-          "200": { "description": "Destination list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Destination" } } } } }
+          "200": {
+            "description": "Destination list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Destination"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "Create or update a destination",
         "operationId": "upsertDestination",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DestinationInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Destination created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Destination" } } } },
-          "400": { "description": "Validation error or built-in destination" }
+          "201": {
+            "description": "Destination created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Destination"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or built-in destination"
+          }
         }
       }
     },
     "/api/v1/destinations/{id}": {
       "delete": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "Delete a destination",
         "operationId": "deleteDestination",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Destination deleted" },
-          "400": { "description": "Cannot delete built-in console destination" }
+          "204": {
+            "description": "Destination deleted"
+          },
+          "400": {
+            "description": "Cannot delete built-in console destination"
+          }
         }
       }
     },
     "/api/v1/routes": {
       "get": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "List route rules",
         "operationId": "listRoutes",
         "responses": {
-          "200": { "description": "Route rules", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/RouteRule" } } } } }
+          "200": {
+            "description": "Route rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RouteRule"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "Create or update a route rule",
         "operationId": "upsertRoute",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RouteRuleInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRuleInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Route rule created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RouteRule" } } } }
+          "201": {
+            "description": "Route rule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteRule"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/routes/{id}": {
       "delete": {
-        "tags": ["Routing"],
+        "tags": [
+          "Routing"
+        ],
         "summary": "Delete a route rule",
         "operationId": "deleteRoute",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Route rule deleted" }
+          "204": {
+            "description": "Route rule deleted"
+          }
         }
       }
     },
     "/api/v1/alert-rules": {
       "get": {
-        "tags": ["Alerts"],
+        "tags": [
+          "Alerts"
+        ],
         "summary": "List alert rules",
         "operationId": "listAlertRules",
         "responses": {
-          "200": { "description": "Alert rules", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AlertRule" } } } } }
+          "200": {
+            "description": "Alert rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertRule"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Alerts"],
+        "tags": [
+          "Alerts"
+        ],
         "summary": "Create or update an alert rule",
         "operationId": "upsertAlertRule",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlertRuleInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Alert rule created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlertRule" } } } }
+          "201": {
+            "description": "Alert rule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/alert-rules/{id}": {
       "delete": {
-        "tags": ["Alerts"],
+        "tags": [
+          "Alerts"
+        ],
         "summary": "Delete an alert rule",
         "operationId": "deleteAlertRule",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Alert rule deleted" }
+          "204": {
+            "description": "Alert rule deleted"
+          }
         }
       }
     },
     "/api/v1/alerts": {
       "get": {
-        "tags": ["Alerts"],
+        "tags": [
+          "Alerts"
+        ],
         "summary": "List derived alerts (fire/resolve history)",
         "operationId": "listAlerts",
         "parameters": [
-          { "name": "firing", "in": "query", "schema": { "type": "boolean" }, "description": "Filter to currently firing alerts" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }
+          {
+            "name": "firing",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Filter to currently firing alerts"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Alert records", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AlertRecord" } } } } }
+          "200": {
+            "description": "Alert records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertRecord"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/orders": {
       "get": {
-        "tags": ["Orders"],
+        "tags": [
+          "Orders"
+        ],
         "summary": "List expected orders (the LIS seam)",
         "operationId": "listOrders",
         "responses": {
-          "200": { "description": "Order list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } }
+          "200": {
+            "description": "Order list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Order"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Orders"],
+        "tags": [
+          "Orders"
+        ],
         "summary": "Register an expected order",
         "operationId": "registerOrder",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Order registered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } } }
+          "201": {
+            "description": "Order registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/orders/{id}": {
       "delete": {
-        "tags": ["Orders"],
+        "tags": [
+          "Orders"
+        ],
         "summary": "Delete an expected order",
         "operationId": "deleteOrder",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Order deleted" }
+          "204": {
+            "description": "Order deleted"
+          }
         }
       }
     },
     "/api/v1/admissions": {
       "get": {
-        "tags": ["Admissions"],
+        "tags": [
+          "Admissions"
+        ],
         "summary": "List patient admissions",
         "operationId": "listAdmissions",
         "responses": {
-          "200": { "description": "Admission list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Admission" } } } } }
+          "200": {
+            "description": "Admission list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Admission"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Admissions"],
+        "tags": [
+          "Admissions"
+        ],
         "summary": "Register a patient admission",
         "operationId": "registerAdmission",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdmissionInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmissionInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Admission registered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Admission" } } } }
+          "201": {
+            "description": "Admission registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Admission"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/mwl": {
       "get": {
-        "tags": ["Imaging"],
+        "tags": [
+          "Imaging"
+        ],
         "summary": "MWL study monitor status + live worklist",
         "description": "Returns the monitor's status (last run, errors, performed studies) and the current Orthanc worklist items. 404 if ORTHANC_URL is not configured.",
         "operationId": "getMwl",
         "responses": {
-          "200": { "description": "MWL status and worklist", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MwlResponse" } } } },
-          "404": { "description": "MWL not configured (set ORTHANC_URL)" }
+          "200": {
+            "description": "MWL status and worklist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MwlResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MWL not configured (set ORTHANC_URL)"
+          }
         }
       }
     },
     "/api/v1/imaging": {
       "get": {
-        "tags": ["Imaging"],
+        "tags": [
+          "Imaging"
+        ],
         "summary": "Imaging study messages by status (M3.3)",
         "description": "Performed-study messages routed through the dispatcher, with per-status counts. 404 if ORTHANC_URL is not configured.",
         "operationId": "listImaging",
         "responses": {
-          "200": { "description": "Imaging study messages", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImagingResponse" } } } },
-          "404": { "description": "Imaging not configured (set ORTHANC_URL)" }
+          "200": {
+            "description": "Imaging study messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagingResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Imaging not configured (set ORTHANC_URL)"
+          }
         }
       }
     },
     "/api/v1/results": {
       "get": {
-        "tags": ["Results"],
+        "tags": [
+          "Results"
+        ],
         "summary": "Flattened result rows from all messages",
         "operationId": "listResults",
         "responses": {
-          "200": { "description": "Result rows", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ResultRow" } } } } }
+          "200": {
+            "description": "Result rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResultRow"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/mappings": {
       "get": {
-        "tags": ["Results"],
+        "tags": [
+          "Results"
+        ],
         "summary": "Active test-code mapping table",
         "operationId": "getMappings",
         "responses": {
-          "200": { "description": "Mapping table (device code → canonical code)", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } } } }
+          "200": {
+            "description": "Mapping table (device code → canonical code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/webhooks": {
       "get": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "List webhook subscriptions",
         "operationId": "listWebhookSubscriptions",
         "responses": {
-          "200": { "description": "Subscription list (secrets never re-sent)", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WebhookSubscription" } } } } }
+          "200": {
+            "description": "Subscription list (secrets never re-sent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookSubscription"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "Create a webhook subscription",
         "description": "The secret is returned exactly once at creation. Events: result.received, result.validated, result.failed, order.received, device.connected, device.disconnected, message.failed.",
         "operationId": "createWebhookSubscription",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscriptionInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookSubscriptionInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Subscription created (secret in response)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscriptionCreated" } } } }
+          "201": {
+            "description": "Subscription created (secret in response)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionCreated"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/webhooks/{id}": {
       "patch": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "Update a webhook subscription",
         "operationId": "updateWebhookSubscription",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookSubscriptionPatch" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookSubscriptionPatch"
+              }
+            }
+          }
         },
         "responses": {
-          "200": { "description": "Subscription updated" },
-          "404": { "description": "Subscription not found" }
+          "200": {
+            "description": "Subscription updated"
+          },
+          "404": {
+            "description": "Subscription not found"
+          }
         }
       },
       "delete": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "Delete a webhook subscription",
         "operationId": "deleteWebhookSubscription",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Subscription deleted" },
-          "404": { "description": "Subscription not found" }
+          "204": {
+            "description": "Subscription deleted"
+          },
+          "404": {
+            "description": "Subscription not found"
+          }
         }
       }
     },
     "/api/v1/webhooks/deliveries": {
       "get": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "List webhook delivery attempts",
         "operationId": "listWebhookDeliveries",
         "parameters": [
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Delivery attempts", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WebhookDelivery" } } } } }
+          "200": {
+            "description": "Delivery attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookDelivery"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/webhooks/deliveries/{eventId}/replay": {
       "post": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "Replay a failed webhook delivery",
         "operationId": "replayWebhookDelivery",
         "parameters": [
-          { "name": "eventId", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Replay attempted", "content": { "application/json": { "schema": { "type": "object", "properties": { "attempted": { "type": "integer" } } } } } },
-          "404": { "description": "Event not found" }
+          "200": {
+            "description": "Replay attempted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attempted": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found"
+          }
         }
       }
     },
     "/api/v1/webhooks/test": {
       "post": {
-        "tags": ["Webhooks"],
+        "tags": [
+          "Webhooks"
+        ],
         "summary": "Fire a signed test ping through the event bus",
         "operationId": "testWebhook",
         "responses": {
-          "200": { "description": "Ping fired", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string" }, "matched": { "type": "integer" } } } } } }
+          "200": {
+            "description": "Ping fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "matched": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/fhir/metadata": {
       "get": {
-        "tags": ["FHIR"],
+        "tags": [
+          "FHIR"
+        ],
         "summary": "FHIR CapabilityStatement (R4)",
         "operationId": "fhirMetadata",
         "responses": {
-          "200": { "description": "CapabilityStatement", "content": { "application/fhir+json": { "schema": { "type": "object" } } } }
+          "200": {
+            "description": "CapabilityStatement",
+            "content": {
+              "application/fhir+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/fhir/{type}": {
       "get": {
-        "tags": ["FHIR"],
+        "tags": [
+          "FHIR"
+        ],
         "summary": "Search FHIR resources by type",
         "operationId": "fhirSearch",
         "parameters": [
-          { "name": "type", "in": "path", "required": true, "schema": { "type": "string", "enum": ["Patient", "ServiceRequest", "DiagnosticReport", "Observation", "ImagingStudy", "Device"] } },
-          { "name": "_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by resource id" }
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Patient",
+                "ServiceRequest",
+                "DiagnosticReport",
+                "Observation",
+                "ImagingStudy",
+                "Device"
+              ]
+            }
+          },
+          {
+            "name": "_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by resource id"
+          }
         ],
         "responses": {
-          "200": { "description": "FHIR searchset Bundle", "content": { "application/fhir+json": { "schema": { "type": "object" } } } }
+          "200": {
+            "description": "FHIR searchset Bundle",
+            "content": {
+              "application/fhir+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/fhir/{type}/{id}": {
       "get": {
-        "tags": ["FHIR"],
+        "tags": [
+          "FHIR"
+        ],
         "summary": "Read a single FHIR resource",
         "operationId": "fhirRead",
         "parameters": [
-          { "name": "type", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "FHIR resource" },
-          "404": { "description": "Resource not found (OperationOutcome)" }
+          "200": {
+            "description": "FHIR resource"
+          },
+          "404": {
+            "description": "Resource not found (OperationOutcome)"
+          }
         }
       }
     },
     "/api/v1/me": {
       "get": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Identify the calling API key",
         "operationId": "getMe",
         "responses": {
-          "200": { "description": "Key identity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiKeyIdentity" } } } }
+          "200": {
+            "description": "Key identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyIdentity"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/keys": {
       "get": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "List API keys (admin only)",
         "operationId": "listKeys",
         "responses": {
-          "200": { "description": "Key list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ApiKey" } } } } }
+          "200": {
+            "description": "Key list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKey"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "post": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Create an API key (admin only)",
         "description": "The plaintext secret is returned exactly once in the response. Only a SHA-256 hash is stored.",
         "operationId": "createKey",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateKeyInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyInput"
+              }
+            }
+          }
         },
         "responses": {
-          "201": { "description": "Key created (secret shown once)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiKeyCreated" } } } }
+          "201": {
+            "description": "Key created (secret shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/keys/{id}": {
       "patch": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Update an API key (rename, disable, expiry)",
         "operationId": "updateKey",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateKeyInput" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateKeyInput"
+              }
+            }
+          }
         },
         "responses": {
-          "200": { "description": "Key updated" },
-          "400": { "description": "Cannot disable key in use" },
-          "404": { "description": "Key not found" }
+          "200": {
+            "description": "Key updated"
+          },
+          "400": {
+            "description": "Cannot disable key in use"
+          },
+          "404": {
+            "description": "Key not found"
+          }
         }
       },
       "delete": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Delete an API key (admin only)",
         "operationId": "deleteKey",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "204": { "description": "Key deleted" },
-          "400": { "description": "Cannot delete key in use" }
+          "204": {
+            "description": "Key deleted"
+          },
+          "400": {
+            "description": "Cannot delete key in use"
+          }
         }
       }
     },
     "/api/v1/keys/{id}/rotate": {
       "post": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Rotate an API key secret (new secret, old revoked)",
         "operationId": "rotateKey",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Key rotated (new secret shown once, warning if old was never used)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiKeyRotated" } } } },
-          "404": { "description": "Key not found" }
+          "200": {
+            "description": "Key rotated (new secret shown once, warning if old was never used)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRotated"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Key not found"
+          }
         }
       }
     },
     "/api/v1/audit": {
       "get": {
-        "tags": ["Security"],
+        "tags": [
+          "Security"
+        ],
         "summary": "Audit log of mutating actions (PRD §30)",
         "operationId": "listAudit",
         "parameters": [
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } },
-          { "name": "result", "in": "query", "schema": { "type": "string", "enum": ["ok", "error", "denied"] } }
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "error",
+                "denied"
+              ]
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Audit log entries", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEntry" } } } } }
+          "200": {
+            "description": "Audit log entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/updates/status": {
       "get": {
-        "tags": ["Updates"],
+        "tags": [
+          "Updates"
+        ],
         "summary": "Signed-update agent status",
         "operationId": "getUpdateStatus",
         "responses": {
-          "200": { "description": "Update status" }
+          "200": {
+            "description": "Update status"
+          }
         }
       }
     },
     "/api/v1/updates/check": {
       "post": {
-        "tags": ["Updates"],
+        "tags": [
+          "Updates"
+        ],
         "summary": "Check for a new signed release (admin only)",
         "operationId": "checkUpdate",
         "responses": {
-          "200": { "description": "Check result" },
-          "501": { "description": "Update agent not configured" }
+          "200": {
+            "description": "Check result"
+          },
+          "501": {
+            "description": "Update agent not configured"
+          }
         }
       }
     },
     "/api/v1/updates/apply": {
       "post": {
-        "tags": ["Updates"],
+        "tags": [
+          "Updates"
+        ],
         "summary": "Apply a staged release (admin only)",
         "operationId": "applyUpdate",
         "responses": {
-          "202": { "description": "Release staged for swap" },
-          "409": { "description": "No release staged" },
-          "501": { "description": "Update agent not configured" }
+          "202": {
+            "description": "Release staged for swap"
+          },
+          "409": {
+            "description": "No release staged"
+          },
+          "501": {
+            "description": "Update agent not configured"
+          }
         }
       }
     },
     "/api/v1/updates/rollback": {
       "post": {
-        "tags": ["Updates"],
+        "tags": [
+          "Updates"
+        ],
         "summary": "Rollback to the previous release (admin only)",
         "operationId": "rollbackUpdate",
         "responses": {
-          "202": { "description": "Rollback staged" },
-          "409": { "description": "No release staged" },
-          "501": { "description": "Update agent not configured" }
+          "202": {
+            "description": "Rollback staged"
+          },
+          "409": {
+            "description": "No release staged"
+          },
+          "501": {
+            "description": "Update agent not configured"
+          }
         }
+      }
+    },
+    "/api/v1/fleet/gateways": {
+      "post": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Register an edge gateway (returns the pairing code exactly once)",
+        "responses": {
+          "201": {
+            "description": "Gateway registered"
+          }
+        },
+        "operationId": "registerGateway",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "facilityId"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "facilityId": {
+                    "type": "string"
+                  },
+                  "orgId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "List fleet gateways (pairing codes never listed)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "listGateways"
+      }
+    },
+    "/api/v1/fleet/gateways/{id}": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Get one gateway",
+        "responses": {
+          "200": {
+            "description": "Gateway"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        },
+        "operationId": "getGateway",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/fleet/gateways/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Revoke a gateway (its sync credential stops working)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "revokeGateway",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/fleet/overview": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Fleet overview: per-facility stats + totals (H2)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "fleetOverview"
+      }
+    },
+    "/api/v1/facilities": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "List facilities in the org",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "listFacilities"
+      },
+      "post": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Create a facility",
+        "responses": {
+          "201": {
+            "description": "Facility created"
+          }
+        },
+        "operationId": "createFacility",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provision/claim": {
+      "post": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Claim a pairing code (public; returns the provisioning bundle with the gateway API key exactly once)",
+        "responses": {
+          "201": {
+            "description": "Provisioning bundle"
+          },
+          "409": {
+            "description": "Code consumed or wrong state"
+          },
+          "410": {
+            "description": "Pairing code expired"
+          }
+        },
+        "operationId": "claimProvisioning",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "pairingCode"
+                ],
+                "properties": {
+                  "pairingCode": {
+                    "type": "string"
+                  },
+                  "edgeVersion": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/ingest": {
+      "post": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "D11 sync ingest (gateway credential: x-hub-gateway + Bearer)",
+        "responses": {
+          "200": {
+            "description": "Applied; returns appliedThrough + accepted"
+          },
+          "401": {
+            "description": "Invalid gateway credential"
+          }
+        },
+        "operationId": "syncIngest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "entries"
+                ],
+                "properties": {
+                  "entries": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "seq",
+                        "table",
+                        "op",
+                        "pk",
+                        "payload",
+                        "createdAt"
+                      ],
+                      "properties": {
+                        "seq": {
+                          "type": "integer"
+                        },
+                        "table": {
+                          "type": "string",
+                          "enum": [
+                            "messages",
+                            "devices"
+                          ]
+                        },
+                        "op": {
+                          "type": "string",
+                          "enum": [
+                            "INSERT",
+                            "UPDATE"
+                          ]
+                        },
+                        "pk": {
+                          "type": "string"
+                        },
+                        "payload": {},
+                        "facilityId": {
+                          "type": "string"
+                        },
+                        "orgId": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/cursors": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Per-facility ingest cursors",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "syncCursors"
+      }
+    },
+    "/api/v1/platform/flags": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "List feature flags (H4)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "listFlags"
+      }
+    },
+    "/api/v1/platform/flags/{key}": {
+      "put": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Set a feature flag",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "setFlag",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Remove a feature flag",
+        "responses": {
+          "204": {
+            "description": "Removed"
+          }
+        },
+        "operationId": "removeFlag",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/platform/quotas": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "List per-facility quotas (H4)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "listQuotas"
+      }
+    },
+    "/api/v1/platform/quotas/{facilityId}": {
+      "put": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Set a facility quota",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "setQuota",
+        "parameters": [
+          {
+            "name": "facilityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Remove a facility quota",
+        "responses": {
+          "204": {
+            "description": "Removed"
+          }
+        },
+        "operationId": "removeQuota",
+        "parameters": [
+          {
+            "name": "facilityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/licenses": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "List licenses (H5)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "listLicenses"
+      }
+    },
+    "/api/v1/licenses/{key}": {
+      "put": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Upsert a license",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "putLicense",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Remove a license",
+        "responses": {
+          "204": {
+            "description": "Removed"
+          }
+        },
+        "operationId": "removeLicense",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/licenses/{facilityId}/entitlement": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Entitlement evaluation for a facility (tier + feature gates)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "getEntitlement",
+        "parameters": [
+          {
+            "name": "facilityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/analytics/export": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "summary": "Analytics export (PRD §2 success metrics)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "operationId": "analyticsExport"
       }
     }
   },
@@ -770,52 +2296,147 @@
       "HealthResponse": {
         "type": "object",
         "properties": {
-          "status": { "type": "string", "example": "ok" },
-          "uptime": { "type": "number" },
-          "time": { "type": "string", "format": "date-time" },
-          "storage": { "type": "string", "enum": ["memory", "postgres"] },
-          "version": { "type": "string" }
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "uptime": {
+            "type": "number"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "memory",
+              "postgres"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
         }
       },
       "VersionResponse": {
         "type": "object",
         "properties": {
-          "version": { "type": "string" },
-          "apiVersion": { "type": "string", "example": "v1" }
+          "version": {
+            "type": "string"
+          },
+          "apiVersion": {
+            "type": "string",
+            "example": "v1"
+          }
         }
       },
       "Error": {
         "type": "object",
         "properties": {
-          "error": { "type": "string" },
-          "message": { "type": "string" }
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         }
       },
       "Message": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "deviceId": { "type": "string" },
-          "protocol": { "type": "string" },
-          "status": { "type": "string", "enum": ["RECEIVED", "PARSED", "VALIDATED", "MAPPED", "QUEUED", "DELIVERING", "ROUTED", "FAILED", "DUPLICATE", "DISCARDED", "HELD"] },
-          "receivedAt": { "type": "string", "format": "date-time" },
-          "dlqAt": { "type": "string", "format": "date-time", "nullable": true },
-          "payload": { "$ref": "#/components/schemas/LabPayload" },
-          "imaging": { "type": "object", "nullable": true },
-          "match": { "type": "object", "nullable": true },
-          "profile": { "type": "object", "nullable": true },
-          "timeline": { "type": "array", "items": { "type": "object" } }
+          "id": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "PARSED",
+              "VALIDATED",
+              "MAPPED",
+              "QUEUED",
+              "DELIVERING",
+              "ROUTED",
+              "FAILED",
+              "DUPLICATE",
+              "DISCARDED",
+              "HELD"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dlqAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/LabPayload"
+          },
+          "imaging": {
+            "type": "object",
+            "nullable": true
+          },
+          "match": {
+            "type": "object",
+            "nullable": true
+          },
+          "profile": {
+            "type": "object",
+            "nullable": true
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       },
       "MessageDetail": {
         "allOf": [
-          { "$ref": "#/components/schemas/Message" },
+          {
+            "$ref": "#/components/schemas/Message"
+          },
           {
             "type": "object",
             "properties": {
-              "raw": { "type": "string", "description": "Raw wire text" },
-              "parsed": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string" }, "fields": { "type": "array", "items": { "type": "string" } } } } },
-              "attempts": { "type": "array", "items": { "type": "object" } }
+              "raw": {
+                "type": "string",
+                "description": "Raw wire text"
+              },
+              "parsed": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "attempts": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
             }
           }
         ]
@@ -823,368 +2444,1144 @@
       "LabPayload": {
         "type": "object",
         "properties": {
-          "patient": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "dateOfBirth": { "type": "string" }, "sex": { "type": "string" } } },
-          "order": { "type": "object", "properties": { "id": { "type": "string" }, "sampleId": { "type": "string" }, "tests": { "type": "array", "items": { "type": "string" } } } },
-          "results": { "type": "array", "items": { "type": "object", "properties": { "test": { "type": "string" }, "value": { "type": "string" }, "unit": { "type": "string" }, "refRange": { "type": "string" }, "flag": { "type": "string" }, "status": { "type": "string" } } } }
+          "patient": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "dateOfBirth": {
+                "type": "string"
+              },
+              "sex": {
+                "type": "string"
+              }
+            }
+          },
+          "order": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sampleId": {
+                "type": "string"
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "test": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                },
+                "refRange": {
+                  "type": "string"
+                },
+                "flag": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       },
       "Device": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "manufacturer": { "type": "string" },
-          "model": { "type": "string" },
-          "protocol": { "type": "string", "enum": ["ASTM", "HL7", "FHIR", "DICOM"] },
-          "transport": { "type": "string", "enum": ["tcp", "serial", "api"] },
-          "host": { "type": "string" },
-          "port": { "type": "integer" },
-          "profileId": { "type": "string", "nullable": true },
-          "state": { "type": "string", "enum": ["connected", "disconnected"] },
-          "lastSeen": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "ASTM",
+              "HL7",
+              "FHIR",
+              "DICOM"
+            ]
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "serial",
+              "api"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "profileId": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "disconnected"
+            ]
+          },
+          "lastSeen": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "RegisterDeviceInput": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "manufacturer": { "type": "string" },
-          "model": { "type": "string" },
-          "protocol": { "type": "string", "enum": ["ASTM", "HL7", "FHIR", "DICOM"] },
-          "transport": { "type": "string", "enum": ["tcp", "serial", "api"] },
-          "host": { "type": "string" },
-          "port": { "type": "integer" },
-          "profileId": { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "ASTM",
+              "HL7",
+              "FHIR",
+              "DICOM"
+            ]
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "serial",
+              "api"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "profileId": {
+            "type": "string"
+          }
         }
       },
       "DeviceProfile": {
         "type": "object",
-        "required": ["id", "manufacturer", "model", "protocol"],
+        "required": [
+          "id",
+          "manufacturer",
+          "model",
+          "protocol"
+        ],
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-          "version": { "type": "integer" },
-          "manufacturer": { "type": "string" },
-          "model": { "type": "string" },
-          "protocol": { "type": "string" },
-          "transport": { "type": "string" },
-          "capabilities": { "type": "array", "items": { "type": "string" } },
-          "records": { "type": "object", "description": "Per-group field layout (1-based positions)" },
-          "mappings": { "type": "object", "additionalProperties": { "type": "string" } },
-          "hl7": { "type": "object", "description": "HL7 segment-level layout overrides (B4)" },
-          "connection": { "type": "object" },
-          "session": { "type": "object" }
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "records": {
+            "type": "object",
+            "description": "Per-group field layout (1-based positions)"
+          },
+          "mappings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "hl7": {
+            "type": "object",
+            "description": "HL7 segment-level layout overrides (B4)"
+          },
+          "connection": {
+            "type": "object"
+          },
+          "session": {
+            "type": "object"
+          }
         }
       },
       "ConformanceResult": {
         "type": "object",
         "properties": {
-          "available": { "type": "boolean" },
-          "passed": { "type": "integer" },
-          "total": { "type": "integer" },
-          "cases": { "type": "array", "items": { "type": "object" } }
+          "available": {
+            "type": "boolean"
+          },
+          "passed": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "cases": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       },
       "Destination": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["console", "http", "hl7"] },
-          "name": { "type": "string" },
-          "url": { "type": "string", "format": "uri" },
-          "hl7": { "type": "object", "nullable": true },
-          "enabled": { "type": "boolean" },
-          "retry": { "$ref": "#/components/schemas/RetryPolicy" }
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "console",
+              "http",
+              "hl7"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "hl7": {
+            "type": "object",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          }
         }
       },
       "DestinationInput": {
         "type": "object",
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["console", "http", "hl7"], "default": "http" },
-          "name": { "type": "string" },
-          "url": { "type": "string", "format": "uri" },
-          "hl7": { "type": "object", "properties": { "host": { "type": "string" }, "port": { "type": "integer" }, "sendingApp": { "type": "string" }, "sendingFacility": { "type": "string" }, "receivingApp": { "type": "string" }, "receivingFacility": { "type": "string" }, "version": { "type": "string" } } },
-          "enabled": { "type": "boolean", "default": true },
-          "retry": { "$ref": "#/components/schemas/RetryPolicy" }
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "console",
+              "http",
+              "hl7"
+            ],
+            "default": "http"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "hl7": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "sendingApp": {
+                "type": "string"
+              },
+              "sendingFacility": {
+                "type": "string"
+              },
+              "receivingApp": {
+                "type": "string"
+              },
+              "receivingFacility": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          }
         }
       },
       "RetryPolicy": {
         "type": "object",
         "properties": {
-          "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
-          "backoffMs": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 1000 },
-          "backoffFactor": { "type": "number", "minimum": 1, "maximum": 10, "default": 2 },
-          "jitter": { "type": "boolean", "default": true }
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "backoffMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000,
+            "default": 1000
+          },
+          "backoffFactor": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 2
+          },
+          "jitter": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "RouteRule": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "destinationId": { "type": "string" },
-          "deviceId": { "type": "string", "nullable": true },
-          "status": { "type": "string", "nullable": true },
-          "priority": { "type": "integer", "default": 100 },
-          "enabled": { "type": "boolean", "default": true }
+          "id": {
+            "type": "string"
+          },
+          "destinationId": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "RouteRuleInput": {
         "type": "object",
-        "required": ["id", "destinationId"],
+        "required": [
+          "id",
+          "destinationId"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "destinationId": { "type": "string" },
-          "deviceId": { "type": "string" },
-          "status": { "type": "string" },
-          "priority": { "type": "integer", "default": 100 },
-          "enabled": { "type": "boolean", "default": true }
+          "id": {
+            "type": "string"
+          },
+          "destinationId": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "AlertRule": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["device-offline", "destination-down", "dlq", "held-backlog", "profile-drift", "orthanc-down"] },
-          "name": { "type": "string" },
-          "subject": { "type": "string", "nullable": true },
-          "threshold": { "type": "integer", "default": 1 },
-          "cooldownMs": { "type": "integer", "nullable": true },
-          "channels": { "type": "array", "items": { "type": "string", "enum": ["console", "webhook"] }, "default": ["console"] },
-          "webhookUrl": { "type": "string", "format": "uri", "nullable": true },
-          "enabled": { "type": "boolean", "default": true }
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device-offline",
+              "destination-down",
+              "dlq",
+              "held-backlog",
+              "profile-drift",
+              "orthanc-down"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "nullable": true
+          },
+          "threshold": {
+            "type": "integer",
+            "default": 1
+          },
+          "cooldownMs": {
+            "type": "integer",
+            "nullable": true
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "console",
+                "webhook"
+              ]
+            },
+            "default": [
+              "console"
+            ]
+          },
+          "webhookUrl": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "AlertRuleInput": {
         "type": "object",
-        "required": ["id", "kind", "name"],
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["device-offline", "destination-down", "dlq", "held-backlog", "profile-drift", "orthanc-down"] },
-          "name": { "type": "string" },
-          "subject": { "type": "string" },
-          "threshold": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1 },
-          "cooldownMs": { "type": "integer", "minimum": 0, "maximum": 86400000 },
-          "channels": { "type": "array", "items": { "type": "string", "enum": ["console", "webhook"] }, "default": ["console"] },
-          "webhookUrl": { "type": "string", "format": "uri" },
-          "enabled": { "type": "boolean", "default": true }
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device-offline",
+              "destination-down",
+              "dlq",
+              "held-backlog",
+              "profile-drift",
+              "orthanc-down"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1
+          },
+          "cooldownMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400000
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "console",
+                "webhook"
+              ]
+            },
+            "default": [
+              "console"
+            ]
+          },
+          "webhookUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
         }
       },
       "AlertRecord": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "ruleId": { "type": "string" },
-          "kind": { "type": "string" },
-          "subject": { "type": "string", "nullable": true },
-          "message": { "type": "string" },
-          "status": { "type": "string", "enum": ["FIRING", "RESOLVED"] },
-          "firedAt": { "type": "string", "format": "date-time" },
-          "resolvedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "count": { "type": "integer" }
+          "id": {
+            "type": "string"
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "FIRING",
+              "RESOLVED"
+            ]
+          },
+          "firedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "count": {
+            "type": "integer"
+          }
         }
       },
       "Order": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "patientId": { "type": "string" },
-          "sampleId": { "type": "string", "nullable": true },
-          "tests": { "type": "array", "items": { "type": "string" } },
-          "status": { "type": "string", "enum": ["active", "completed", "cancelled"] },
-          "receivedAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "sampleId": {
+            "type": "string",
+            "nullable": true
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "OrderInput": {
         "type": "object",
-        "required": ["id", "patientId"],
+        "required": [
+          "id",
+          "patientId"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "patientId": { "type": "string" },
-          "sampleId": { "type": "string" },
-          "tests": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "status": { "type": "string", "enum": ["active", "completed", "cancelled"], "default": "active" }
+          "id": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "sampleId": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed",
+              "cancelled"
+            ],
+            "default": "active"
+          }
         }
       },
       "Admission": {
         "type": "object",
         "properties": {
-          "patientId": { "type": "string" },
-          "name": { "type": "string", "nullable": true },
-          "dateOfBirth": { "type": "string", "nullable": true },
-          "gender": { "type": "string", "nullable": true },
-          "visitId": { "type": "string", "nullable": true },
-          "status": { "type": "string", "enum": ["admitted", "discharged"] },
-          "receivedAt": { "type": "string", "format": "date-time" }
+          "patientId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "dateOfBirth": {
+            "type": "string",
+            "nullable": true
+          },
+          "gender": {
+            "type": "string",
+            "nullable": true
+          },
+          "visitId": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "admitted",
+              "discharged"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "AdmissionInput": {
         "type": "object",
-        "required": ["patientId"],
+        "required": [
+          "patientId"
+        ],
         "properties": {
-          "patientId": { "type": "string" },
-          "name": { "type": "string" },
-          "dateOfBirth": { "type": "string" },
-          "gender": { "type": "string" },
-          "visitId": { "type": "string" },
-          "status": { "type": "string", "enum": ["admitted", "discharged"], "default": "admitted" }
+          "patientId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "dateOfBirth": {
+            "type": "string"
+          },
+          "gender": {
+            "type": "string"
+          },
+          "visitId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "admitted",
+              "discharged"
+            ],
+            "default": "admitted"
+          }
         }
       },
       "MwlResponse": {
         "type": "object",
         "properties": {
-          "status": { "type": "object", "properties": { "enabled": { "type": "boolean" }, "baseUrl": { "type": "string" }, "lastRunAt": { "type": "string" }, "lastError": { "type": "string" }, "performed": { "type": "array" }, "totals": { "type": "object" } } },
-          "worklist": { "type": "array", "items": { "type": "object" } },
-          "worklistError": { "type": "string" }
+          "status": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "lastRunAt": {
+                "type": "string"
+              },
+              "lastError": {
+                "type": "string"
+              },
+              "performed": {
+                "type": "array"
+              },
+              "totals": {
+                "type": "object"
+              }
+            }
+          },
+          "worklist": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "worklistError": {
+            "type": "string"
+          }
         }
       },
       "ImagingResponse": {
         "type": "object",
         "properties": {
-          "total": { "type": "integer" },
-          "byStatus": { "type": "object", "additionalProperties": { "type": "integer" } },
-          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } }
+          "total": {
+            "type": "integer"
+          },
+          "byStatus": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          }
         }
       },
       "ResultRow": {
         "type": "object",
         "properties": {
-          "messageId": { "type": "string" },
-          "deviceId": { "type": "string" },
-          "receivedAt": { "type": "string", "format": "date-time" },
-          "patient": { "type": "object" },
-          "order": { "type": "object" },
-          "test": { "type": "string" },
-          "value": { "type": "string" },
-          "unit": { "type": "string" },
-          "refRange": { "type": "string" },
-          "flag": { "type": "string" },
-          "status": { "type": "string" }
+          "messageId": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "patient": {
+            "type": "object"
+          },
+          "order": {
+            "type": "object"
+          },
+          "test": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "refRange": {
+            "type": "string"
+          },
+          "flag": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
         }
       },
       "WebhookSubscription": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "url": { "type": "string", "format": "uri" },
-          "events": { "oneOf": [{ "type": "array", "items": { "type": "string" } }, { "type": "string", "example": "*" }] },
-          "enabled": { "type": "boolean" },
-          "retry": { "$ref": "#/components/schemas/RetryPolicy" },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "events": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string",
+                "example": "*"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "WebhookSubscriptionInput": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "url": { "type": "string", "format": "uri" },
-          "secret": { "type": "string", "description": "Omit to auto-generate" },
-          "events": { "oneOf": [{ "type": "array", "items": { "type": "string" } }, { "type": "string", "example": "*" }], "default": "*" },
-          "enabled": { "type": "boolean", "default": true },
-          "retry": { "$ref": "#/components/schemas/RetryPolicy" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Omit to auto-generate"
+          },
+          "events": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string",
+                "example": "*"
+              }
+            ],
+            "default": "*"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          }
         }
       },
       "WebhookSubscriptionCreated": {
         "allOf": [
-          { "$ref": "#/components/schemas/WebhookSubscription" },
-          { "type": "object", "properties": { "secret": { "type": "string", "description": "Shown once — save this!" } } }
+          {
+            "$ref": "#/components/schemas/WebhookSubscription"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "Shown once — save this!"
+              }
+            }
+          }
         ]
       },
       "WebhookSubscriptionPatch": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "url": { "type": "string", "format": "uri" },
-          "secret": { "type": "string", "description": "Replace the signing secret" },
-          "events": { "oneOf": [{ "type": "array", "items": { "type": "string" } }, { "type": "string" }] },
-          "enabled": { "type": "boolean" },
-          "retry": { "$ref": "#/components/schemas/RetryPolicy" }
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Replace the signing secret"
+          },
+          "events": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          }
         }
       },
       "WebhookDelivery": {
         "type": "object",
         "properties": {
-          "eventId": { "type": "string" },
-          "subscriptionId": { "type": "string" },
-          "attemptedAt": { "type": "string", "format": "date-time" },
-          "ok": { "type": "boolean" },
-          "status": { "type": "integer" }
+          "eventId": {
+            "type": "string"
+          },
+          "subscriptionId": {
+            "type": "string"
+          },
+          "attemptedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "integer"
+          }
         }
       },
       "ApiKey": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "role": { "type": "string", "enum": ["admin", "engineer", "operator", "viewer"] },
-          "prefix": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "engineer",
+              "operator",
+              "viewer"
+            ]
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
         }
       },
       "ApiKeyIdentity": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "role": { "type": "string" },
-          "prefix": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
         }
       },
       "CreateKeyInput": {
         "type": "object",
-        "required": ["name", "role"],
+        "required": [
+          "name",
+          "role"
+        ],
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-          "name": { "type": "string" },
-          "role": { "type": "string", "enum": ["admin", "engineer", "operator", "viewer"] },
-          "expiresAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "engineer",
+              "operator",
+              "viewer"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "ApiKeyCreated": {
         "allOf": [
-          { "$ref": "#/components/schemas/ApiKey" },
-          { "type": "object", "properties": { "secret": { "type": "string", "description": "Shown once — save this!" } } }
+          {
+            "$ref": "#/components/schemas/ApiKey"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "Shown once — save this!"
+              }
+            }
+          }
         ]
       },
       "UpdateKeyInput": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
         }
       },
       "ApiKeyRotated": {
         "type": "object",
         "properties": {
-          "key": { "$ref": "#/components/schemas/ApiKey" },
-          "secret": { "type": "string" },
-          "warning": { "type": "string" }
+          "key": {
+            "$ref": "#/components/schemas/ApiKey"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "warning": {
+            "type": "string"
+          }
         }
       },
       "AuditEntry": {
         "type": "object",
         "properties": {
-          "actorKey": { "type": "string" },
-          "actorName": { "type": "string" },
-          "actorRole": { "type": "string" },
-          "action": { "type": "string" },
-          "target": { "type": "string" },
-          "result": { "type": "string", "enum": ["ok", "error", "denied"] },
-          "statusCode": { "type": "integer" },
-          "ip": { "type": "string" },
-          "at": { "type": "string", "format": "date-time" }
+          "actorKey": {
+            "type": "string"
+          },
+          "actorName": {
+            "type": "string"
+          },
+          "actorRole": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "error",
+              "denied"
+            ]
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     }

@@ -252,7 +252,7 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 364 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 383 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
@@ -269,9 +269,12 @@ npm test           # 364 tests: codec, sessions, pipeline, matching/validation,
                    #   FHIR R4 (D1/D2: two-way translator + REST surface),
                    #   webhook event bus (D3: signed engine, subscriptions
                    #   CRUD + PG persistence, delivery log + replay, test
-                   #   ping, fire points), OpenAPI 3.1 spec (D4) (25
-                   #   DB-gated skip)
-npm run test:db    # 364 tests: same + PostgreSQL integration (needs db:up)
+                   #   ping, fire points), OpenAPI 3.1 spec (D4),
+                   #   D11 outbox syncer (ship/ack/redelivery),
+                   #   fleet surface (H3 pairing + gateway-credential
+                   #   isolation + H2 overview + H4 flags/quotas + H5
+                   #   licenses/entitlements/analytics) (31 DB-gated skip)
+npm run test:db    # 383 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire

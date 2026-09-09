@@ -26,6 +26,12 @@ export interface DeviceRecord {
   lastSeen?: string;
   autoRegistered?: boolean;
   createdAt: string;
+  /**
+   * Cloud tenancy stamps (H1 write-through, plan §5.2): the org + facility the
+   * device belongs to. Set on a cloud-mode hub; absent on a single-tenant edge.
+   */
+  orgId?: string;
+  facilityId?: string;
 }
 
 export interface RegisterDeviceInput {
@@ -39,6 +45,9 @@ export interface RegisterDeviceInput {
   port?: number;
   /** Bind this device to a DeviceProfile (validated against the profile store). */
   profileId?: string;
+  /** H1 cloud tenancy stamps (cloud write-through); absent on an edge. */
+  orgId?: string;
+  facilityId?: string;
 }
 
 export interface DeviceStats {

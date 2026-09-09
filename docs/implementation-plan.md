@@ -1790,9 +1790,83 @@ translator + round-trip oracle tests before any wiring).
    pipeline, and prints a curl-based walkthrough of every endpoint — enough
    for a reference LIS/EHR vendor to integrate without our help.
 
----
+### 13.17 M4 cloud platform — D11 sync + H2/H3/H4/H5 fleet surface: status
 
-## 14. Plan maintenance
+Shipped September 2026 — the remaining M4 workstreams after D1–D5 and H1:
+the edge→cloud outbox sync (D11/G4), gateway provisioning (H3), fleet
+aggregation (H2), platform ops (H4) and commercial hooks (H5). The cloud
+dependency `sync:write` is gateway-credentials-only — no user role holds it
+(admin included), enforced by the preHandler split in `server.ts` and pinned
+by the security matrix test.
+
+1. ✅ **D11 — edge→cloud outbox sync** (decision D11: the edge outbox IS the
+   cloud sync outbox; the `Dispatcher` seam unchanged). Migration
+   `0015_cloud_sync_outbox.sql` ships BOTH sync roles: `outbox` (edge — the
+   write-through log) and `ingest_ledger` (cloud — PK `(facility_id, seq)`,
+   the idempotency key). `PostgresOutbox` implements `OutboxReader` (unacked
+   FIFO + `markAcked(throughSeq)`) + `OutboxWriter`; `PostgresIngestStore`
+   applies batches as whole-row message/device upserts, claims the ledger
+   slot first (ON CONFLICT DO NOTHING), and reports the highest seq actually
+   applied — a redelivered batch is a truthful no-op. Write-through is the
+   no-dual-write invariant: `PostgresMessageStore.record` appends the sync
+   entry in the SAME transaction (message `mark` and device register/upsert
+   follow, best-effort so sync can never fail a lifecycle transition).
+   `OutboxSyncer` (`packages/core/src/outbox.ts`) ships batches to
+   `POST /api/v1/sync/ingest` over the outbound-only channel (PRD §42 —
+   `x-hub-gateway` + Bearer gateway key), tolerates outages (backlog grows,
+   pipeline never blocks) and drains on stop. startHub wiring: `cloudSync`
+   opts or `HUB_CLOUD_URL`+`HUB_GATEWAY_ID`+`HUB_GATEWAY_KEY` (the H3 bundle's
+   values) enable the syncer; PG stores get the outbox + tenancy stamps.
+   Cloud ingest: `PostgresIngestStore.applyBatch` behind the ingest route.
+2. ✅ **H3 — gateway provisioning**: pairing flow with the exact-once
+   semantics throughout. Cloud admin registers a gateway (`POST
+   /api/v1/fleet/gateways`) → pairing code `ihp_…` shown once (hash-stored,
+   15-min TTL); the edge claims it (`POST /api/v1/provision/claim`, PUBLIC —
+   the code IS the credential; 410 expired, 409 consumed) → gateway flips
+   `active`, mints its API key `ihk_gw_…` (shown exactly once, hash-verified
+   with timing-safe compare), and receives the provisioning bundle: gateway
+   identity, cloud URLs, org/facility tenancy stamps and the facility's
+   device profiles (config-first §6.3). Revoke (`POST
+   /api/v1/fleet/gateways/:id/revoke`) kills the credential. Gateway keys
+   authenticate ONLY the ingest route — fleet data is unreachable with them.
+3. ✅ **H2 — fleet aggregation**: `GET /api/v1/fleet/overview` joins
+   per-facility stats (messages / devices / connected via the tenancy stamps
+   the stores now write) with facility rows and totals; `GET/POST
+   /api/v1/facilities` manages the org's facility list. Console: a Fleet
+   panel (facilities table + gateway table with live sync seq + revoke),
+   shown only when the fleet surface is mounted.
+4. ✅ **H4 — platform ops**: feature flags (`FeatureFlagStore`, facility-
+   scoping optional) and per-facility quotas (`messagesPerDay`, `maxDevices`)
+   as DATA not code (§3.3 invariant 3) — `GET/PUT/DELETE
+   /api/v1/platform/flags|quotas`.
+5. ✅ **H5 — commercial hooks**: `LicenseRecord` (tier trial/standard/
+   enterprise, state, expiry, optional facility coverage) +
+   `evaluateEntitlement` (tier → feature gates: cloudSync/imaging/
+   multiFacility); `GET /api/v1/licenses/:facilityId/entitlement` is the
+   check the edge + API consume; `GET /api/v1/analytics/export` produces the
+   §2 success-metric shape (connected facilities/devices, message volume).
+6. ✅ **H1 completion — tenancy write-through**: the deferred seam from the
+   H1 test ("the message-level org/facility write-through is the D11 seam
+   that lands next") is closed: `tenancy` on the PG stores stamps every
+   device + message row in cloud mode; `CanonicalMessage` and `DeviceRecord`
+   carry optional `orgId`/`facilityId`; the sync entries ride the stamps so
+   the cloud routes them without extra context.
+7. Tests: outbox syncer unit suite (ship/ack/failure-keeps-backlog/
+   redelivery/stop-drain, `packages/core/src/outbox.test.ts`), PG-gated
+   edge→cloud convergence round-trip incl. the (facility, seq) idempotency
+   and per-facility isolation (`packages/api/src/pg/pg-outbox.test.ts`),
+   fleet route tests (pairing lifecycle, credential isolation, ingest
+   idempotency, RBAC matrix, analytics shape — `packages/api/src/fleet.test.ts`),
+   and the security matrix updated for the gateway-only `sync:write` scope.
+   OpenAPI: the Fleet tag documents all 16 new routes (62 paths total).
+
+**M4 gate status**: D1–D5 ✅, H1–H5 ✅, D11 ✅. The remaining exit criteria are
+operational rather than build items: a reference vendor integrating unaided
+(sandbox + SDK shipped — needs a real partner), the 48 h offline soak (needs
+a deployed edge + cloud pair), and two-tenant isolation is test-proven at the
+store level (`pg-tenancy.test.ts` + the D11 per-facility isolation test);
+full-stack two-tenant isolation arrives with production RLS roll-out (H1
+enablement is wired, real-fleet verification pending).
 
 ---
 

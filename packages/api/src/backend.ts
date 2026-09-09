@@ -8,6 +8,7 @@
 import type { CanonicalMessage, MappingTable, MessageAttempt, MessageMatch, MessageStatus } from '@integration-hub/shared';
 import type { DeviceRecord, RegisterDeviceInput } from './devices.js';
 import type { MessageFilter, StoreStats } from './store.js';
+import type { OutboxWriter } from '@integration-hub/core';
 
 export type StoreKind = 'memory' | 'postgres';
 export type DeviceKind = 'memory' | 'postgres';
@@ -33,6 +34,16 @@ export interface StoreBackend {
   recordAttempt(attempt: MessageAttempt): void | Promise<void>;
   /** DB-driven test-code mapping table (PRD §17–18); in-memory store returns its own table. */
   getMappings?(): MappingTable | Promise<MappingTable>;
+  /**
+   * D11 write-through: when set, local writes also append sync entries (the
+   * edge's durable outbox). Optional — in-memory stores don't sync.
+   */
+  outbox?: { append: OutboxWriter['append'] };
+  /**
+   * H1 cloud tenancy write-through: stamps written rows with org/facility.
+   * Set on cloud-mode hubs and edges shipping for a cloud org.
+   */
+  tenancy?: { orgId: string; facilityId: string };
 }
 
 export interface UpsertFromConnectionInput {
@@ -59,4 +70,8 @@ export interface DeviceBackend {
   /** Drop a device row — e.g. an auto-registered Orthanc modality that is no
    *  longer configured. Returns false when no such device exists. */
   remove(id: string): boolean | Promise<boolean>;
+  /** D11 write-through (optional; see StoreBackend.outbox). */
+  outbox?: { append: OutboxWriter['append'] };
+  /** H1 cloud tenancy write-through (optional; see StoreBackend.tenancy). */
+  tenancy?: { orgId: string; facilityId: string };
 }

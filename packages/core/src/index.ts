@@ -45,6 +45,19 @@ export { PostgresAlertStore } from './pg-alerts.js';
 export { InMemoryAlertStore, type AlertFilter, type AlertKind, type AlertRecord, type AlertRule, type AlertStore } from './alert-store.js';
 export { AlertService, type AlertServiceOptions } from './alerts.js';
 export {
+  GatewayProvisionError,
+  InMemoryGatewayRegistry,
+  generateGatewayApiKey,
+  generatePairingCode,
+  hashToken,
+  type GatewayPairing,
+  type GatewayRecord,
+  type GatewayRegistry,
+  type GatewayState,
+  type ProvisionBundle,
+  type RegisterGatewayInput,
+} from './gateways.js';
+export {
   EVENT_HEADER,
   EVENT_ID_HEADER,
   EventBus,
@@ -84,6 +97,16 @@ export {
   type ProfileStore,
 } from './profiles.js';
 export { PostgresProfileStore } from './pg-profiles.js';
+export {
+  OutboxSyncer,
+  shipBatch,
+  type OutboxEntry,
+  type OutboxOp,
+  type OutboxReader,
+  type OutboxWriter,
+  type OutboxSyncOptions,
+  type OutboxSyncStatus,
+} from './outbox.js';
 export {
   loadGoldenForProfile,
   runConformance,

@@ -38,9 +38,13 @@
     "db:down": "docker compose down"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.7.0",
     "@types/pg": "^8.23.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
   }
 }

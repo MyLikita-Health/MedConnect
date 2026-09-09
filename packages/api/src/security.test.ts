@@ -27,17 +27,23 @@ test('role-scope matrix grants least privilege per role', () => {
   assert.ok(roleHasScope('engineer', 'config:write'));
   assert.ok(!roleHasScope('engineer', 'keys:manage'));
   assert.ok(!roleHasScope('engineer', 'audit:read'));
-  // admin: everything.
+  // admin: everything EXCEPT sync:write — that scope belongs to gateway
+  // credentials (H3), which are not a user role; the ingest route is the only
+  // route a gateway key can reach (enforced by the preHandler in server.ts).
   for (const scope of [...new Set(Object.values(ROUTE_SCOPES))]) {
+    if (scope === 'sync:write') continue;
     assert.ok(roleHasScope('admin', scope), `admin should hold ${scope}`);
   }
+  assert.ok(!roleHasScope('admin', 'sync:write'), 'sync:write is gateway-only — no user role holds it');
   assert.ok(!roleHasScope(undefined, 'api:read'));
   assert.ok(!roleHasScope('viewer', 'does-not-exist' as never));
 });
 
 test('every protected route in ROUTE_SCOPES maps to a role that can reach it', () => {
   for (const [route, scope] of Object.entries(ROUTE_SCOPES)) {
-    assert.match(route, /^(GET|POST|PATCH|DELETE) \/api\/v1\//, `bad route key ${route}`);
+    assert.match(route, /^(GET|POST|PUT|PATCH|DELETE) \/api\/v1\//, `bad route key ${route}`);
+    // sync:write routes are gateway-credential territory (no user role grant).
+    if (scope === 'sync:write') continue;
     const holders = Object.entries(ROLE_SCOPES).filter(([, scopes]) => scopes.includes(scope));
     assert.ok(holders.length >= 1, `scope ${scope} (${route}) has no role grant`);
     // Fail-closed invariant: the route table covers the current route surface.

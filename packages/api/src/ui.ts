@@ -641,6 +641,29 @@ export function renderUi(): string {
   <!-- Right column -->
   <section>
 
+    <!-- Fleet (M4 cloud — shown when the hub runs the fleet surface) -->
+    <div class="panel" id="fleet-panel" style="display:none">
+      <h2>Fleet <span class="sub">facilities + gateways (M4 cloud)</span></h2>
+      <div class="rad-block">
+        <h3>Facilities <span class="section-sub" id="fleet-totals"></span></h3>
+        <div class="tbl-wrap">
+          <table id="fleet-facilities">
+            <thead><tr><th>Facility</th><th>Messages</th><th>Devices</th><th>Connected</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="rad-block">
+        <h3>Gateways <span class="section-sub">H3 provisioning + D11 sync</span></h3>
+        <div class="tbl-wrap">
+          <table id="fleet-gateways">
+            <thead><tr><th>Gateway</th><th>State</th><th>Last sync</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- Radiology console (M3.4 — shown when Orthanc is configured; wide
          tables live in the right column next to the detail route) -->
     <div class="panel" id="radiology-panel" style="display:none">
@@ -767,10 +790,13 @@ async function refresh() {
   // stay hidden unless the hub is wired (the monitor is running).
   const imagingReq = api('/api/v1/imaging').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
   const mwlReq     = api('/api/v1/mwl').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
+  // M4 fleet surface: 404/501 on a plain edge — the panel stays hidden there.
+  const fleetReq = api('/api/v1/fleet/overview').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
+  const fleetGatewaysReq = api('/api/v1/fleet/gateways').then(async r => r.ok ? r.json() : []);
   // D3 webhook event bus: subscription + delivery views (api:read — any role).
   const webhooksReq   = api('/api/v1/webhooks').then(async r => r.ok ? r.json() : []);
   const deliveriesReq = api('/api/v1/webhooks/deliveries?limit=50').then(async r => r.ok ? r.json() : []);
-  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView, webhookSubs, webhookDeliveries] = await Promise.all([
+  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView, webhookSubs, webhookDeliveries, fleetView, fleetGateways] = await Promise.all([
     api('/api/v1/health').then(r => r.json()),
     api('/api/v1/stats').then(r => r.json()),
     api('/api/v1/devices').then(r => r.json()),
@@ -783,6 +809,8 @@ async function refresh() {
     mwlReq,
     webhooksReq,
     deliveriesReq,
+    fleetReq,
+    fleetGatewaysReq,
   ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -798,6 +826,7 @@ async function refresh() {
     renderKeys(keys);
     renderRadiology(mwlView, imagingView);
     renderWebhooks(webhookSubs, webhookDeliveries);
+    renderFleet(fleetView, fleetGateways);
     if (selectedId) renderDetail(selectedId);
     renderUpdates();
   } catch {
@@ -805,6 +834,44 @@ async function refresh() {
     h.textContent = 'offline';
     h.className   = 'badge off';
   }
+}
+
+/* ── Fleet (M4 cloud) ─────────────────────────────────────────────── */
+function renderFleet(fleetView, gateways) {
+  const panel = document.getElementById('fleet-panel');
+  if (!fleetView || !fleetView.on || !fleetView.body) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  const body = fleetView.body;
+  document.getElementById('fleet-totals').textContent =
+    body.totals.messages + ' messages · ' + body.totals.connected + '/' + body.totals.devices + ' devices connected';
+  document.getElementById('fleet-facilities').querySelector('tbody').innerHTML =
+    (body.facilities || []).map(row =>
+      '<tr>' +
+      '<td><span class="dev-name">' + esc(row.facility.name) + '</span><br/><span class="dev-id">' + esc(row.facility.slug) + '</span></td>' +
+      '<td>' + (row.messages ?? 0) + '</td>' +
+      '<td>' + (row.devices ?? 0) + '</td>' +
+      '<td>' + (row.connected ?? 0) + '</td>' +
+      '</tr>'
+    ).join('') || '<tr class="empty-row"><td colspan="4">No facilities yet.</td></tr>';
+  document.getElementById('fleet-gateways').querySelector('tbody').innerHTML =
+    (gateways || []).map(g =>
+      '<tr>' +
+      '<td><span class="dev-name">' + esc(g.name) + '</span><br/><span class="dev-id">' + esc(g.id) + '</span></td>' +
+      '<td><span class="pill ' + esc(g.state) + '">' + esc(g.state) + '</span></td>' +
+      '<td class="dim mono">' + (g.lastSyncAt ? new Date(g.lastSyncAt).toLocaleTimeString() + ' · seq ' + (g.lastSyncSeq ?? 0) : '—') + '</td>' +
+      '<td>' + (g.state !== 'revoked' && (meRole === 'admin')
+        ? '<button class="ghost" style="font-size:11px;padding:3px 8px" onclick="revokeGateway(\'' + esc(g.id) + '\')">Revoke</button>'
+        : '') + '</td>' +
+      '</tr>'
+    ).join('') || '<tr class="empty-row"><td colspan="4">No gateways registered.</td></tr>';
+}
+async function revokeGateway(id) {
+  if (!confirm('Revoke gateway ' + id + '? Its sync credential stops working.')) return;
+  await api('/api/v1/fleet/gateways/' + encodeURIComponent(id) + '/revoke', { method: 'POST' });
+  refresh();
 }
 
 /* ── Stats ─────────────────────────────────────────────────────────── */

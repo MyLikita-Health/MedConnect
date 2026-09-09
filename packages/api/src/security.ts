@@ -38,13 +38,17 @@ export type ApiScope =
   | 'config:write' // destinations/routes, profiles, alert rules, expected orders
   | 'keys:manage' // create/list/delete API keys
   | 'audit:read' // view the audit log
-  | 'updates:manage'; // check/apply/rollback hub releases (signed)
+  | 'updates:manage' // check/apply/rollback hub releases (signed)
+  | 'fleet:manage' // M4 cloud: gateway registry, facilities, licenses, platform ops
+  | 'sync:write'; // M4/D11: edge→cloud ingest (gateway credentials only)
 
 export const API_KEY_ROLES: readonly ApiKeyRole[] = ['admin', 'engineer', 'operator', 'viewer'];
 
-/** Per-role scope grants (PRD §34 RBAC). `admin` gets everything. */
+/** Per-role scope grants (PRD §34 RBAC). `admin` gets everything.
+ *  Gateway credentials (sync:write) are NOT a role — they are verified against
+ *  the gateway registry (H3) and can only touch /api/v1/sync/*. */
 export const ROLE_SCOPES: Record<ApiKeyRole, readonly ApiScope[]> = {
-  admin: ['api:read', 'messages:write', 'devices:write', 'config:write', 'keys:manage', 'audit:read', 'updates:manage'],
+  admin: ['api:read', 'messages:write', 'devices:write', 'config:write', 'keys:manage', 'audit:read', 'updates:manage', 'fleet:manage'],
   engineer: ['api:read', 'messages:write', 'devices:write', 'config:write'],
   operator: ['api:read', 'messages:write'],
   viewer: ['api:read'],
@@ -128,7 +132,38 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'POST /api/v1/updates/check': 'updates:manage',
   'POST /api/v1/updates/apply': 'updates:manage',
   'POST /api/v1/updates/rollback': 'updates:manage',
+  // M4 cloud surface (plan §7.H). Gateway credentials (H3) authenticate the
+  // ingest route separately — see the preHandler in server.ts.
+  'POST /api/v1/fleet/gateways': 'fleet:manage',
+  'GET /api/v1/fleet/gateways': 'fleet:manage',
+  'GET /api/v1/fleet/gateways/:id': 'fleet:manage',
+  'POST /api/v1/fleet/gateways/:id/revoke': 'fleet:manage',
+  'GET /api/v1/fleet/overview': 'fleet:manage',
+  'GET /api/v1/facilities': 'fleet:manage',
+  'POST /api/v1/facilities': 'fleet:manage',
+  'POST /api/v1/sync/ingest': 'sync:write',
+  'GET /api/v1/sync/cursors': 'fleet:manage',
+  'GET /api/v1/platform/flags': 'api:read',
+  'PUT /api/v1/platform/flags/:key': 'fleet:manage',
+  'DELETE /api/v1/platform/flags/:key': 'fleet:manage',
+  'GET /api/v1/platform/quotas': 'fleet:manage',
+  'PUT /api/v1/platform/quotas/:facilityId': 'fleet:manage',
+  'DELETE /api/v1/platform/quotas/:facilityId': 'fleet:manage',
+  'GET /api/v1/licenses': 'fleet:manage',
+  'PUT /api/v1/licenses/:key': 'fleet:manage',
+  'DELETE /api/v1/licenses/:key': 'fleet:manage',
+  'GET /api/v1/licenses/:facilityId/entitlement': 'api:read',
+  'GET /api/v1/analytics/export': 'fleet:manage',
 };
+
+/** Routes that skip API-key auth entirely (public): health probes, the OpenAPI
+ *  spec, and the H3 pairing claim (the pairing code IS the credential — the
+ *  edge has no key yet the first time it calls home). */
+export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
+  '/api/v1/health',
+  '/api/v1/openapi.json',
+  '/api/v1/provision/claim',
+]);
 
 // ---------------------------------------------------------------------------
 // Key model + stores

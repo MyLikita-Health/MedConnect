@@ -6,7 +6,7 @@
  * and devices in PostgreSQL (migrations auto-applied) and serves the default
  * mapping table from the DB; otherwise it falls back to the in-memory stores.
  */
-import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryKeyStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
+import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryFeatureFlagStore, InMemoryKeyStore, InMemoryLicenseStore, InMemoryQuotaStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresIngestStore, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, PostgresOutbox, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
@@ -14,7 +14,8 @@ import { DEFAULT_MAPPINGS, defaultLayoutFor, type CanonicalMessage } from '@inte
 import { ImagingRouter } from './imaging-router.js';
 import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
-import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore,  InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, PostgresWebhookStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
+import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore,  InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, InMemoryGatewayRegistry, OutboxSyncer, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, PostgresWebhookStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
+import { evaluateEntitlement, type FleetRoutesOptions } from '@integration-hub/api';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -105,6 +106,33 @@ export interface HubOptions {
    * down to the PG stores for write-through.
    */
   cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
+
+  /**
+   * D11 edge→cloud sync (plan §7.G G4): when set, the hub runs the outbox
+   * syncer — unacked outbox rows ship to the cloud ingest over the
+   * outbound-only channel (PRD §42). Env: HUB_CLOUD_URL + HUB_GATEWAY_ID +
+   * HUB_GATEWAY_KEY (the H3 provisioning bundle's values).
+   */
+  cloudSync?: {
+    cloudBaseUrl: string;
+    gatewayId: string;
+    apiKey: string;
+    /** Batch size per POST (default 200). */
+    batchSize?: number;
+    /** Poll cadence ms (default 5000). */
+    pollMs?: number;
+  };
+
+  /**
+   * M4 cloud mode (plan §7.H): mount the fleet surface on the API — gateway
+   * registry (H3 pairing), sync ingest (D11), facilities + fleet overview
+   * (H2), platform flags/quotas (H4), licenses + entitlements + analytics
+   * export (H5). Requires cloudOrg (the fleet belongs to an org) + Postgres.
+   */
+  fleet?: {
+    /** Profiles handed to edges in the provisioning bundle (default: none). */
+    provisioningProfiles?: (facilityId: string) => Promise<unknown[]>;
+  };
   };
 
 export interface Hub {
@@ -145,6 +173,10 @@ export interface Hub {
    */
   webhooks: EventBus;
   ports: { device: number; hl7?: number; http: number };
+  /** Present when the M4 fleet surface is mounted (cloud mode). */
+  fleetRegistry?: InMemoryGatewayRegistry | undefined;
+  /** Present when the D11 edge→cloud syncer runs (paired edge). */
+  syncer?: OutboxSyncer | undefined;
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool } | undefined;
   stop(): Promise<void>;
@@ -175,6 +207,17 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
   const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
   const orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
+  // D11 edge→cloud sync (env fallback: the H3 provisioning bundle writes these
+  // into the edge's environment/state dir; opts win).
+  const cloudSyncOpts = opts.cloudSync
+    ? opts.cloudSync
+    : process.env.HUB_CLOUD_URL && process.env.HUB_GATEWAY_ID && process.env.HUB_GATEWAY_KEY
+      ? {
+          cloudBaseUrl: process.env.HUB_CLOUD_URL,
+          gatewayId: process.env.HUB_GATEWAY_ID,
+          apiKey: process.env.HUB_GATEWAY_KEY,
+        }
+      : undefined;
   const orthancUser = opts.orthanc?.username ?? process.env.ORTHANC_USER;
   const orthancPass = opts.orthanc?.password ?? process.env.ORTHANC_PASSWORD;
   const envPollMs = Number(process.env.MWL_POLL_MS);
@@ -189,6 +232,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     const pgStore = new PostgresMessageStore(pool);
     store = pgStore;
     devices = new PostgresDeviceRegistry(pool);
+    // D11 + H1 write-through: attach the outbox + cloud tenancy stamps BEFORE
+    // the stores see their first write. On a cloud instance (cloudOrg) the
+    // same stamps scope the API to the org; on a paired edge (cloudSync) they
+    // mark every row with the facility it ships for.
+    if (cloudSyncOpts) {
+      const outbox = new PostgresOutbox(pool);
+      pgStore.outbox = outbox;
+      devices.outbox = outbox;
+    }
     routes = new PostgresRouteStore(pool);
     dedup = new PostgresDedupStore(pool);
     orders = new PostgresOrderRegistry(pool);
@@ -216,6 +268,16 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       cloudContext = { orgId: boot.org.id, facilityId: boot.facility.id, admin: false };
       // Point RLS at the cloud org so tenant-scoped reads are isolated to this org.
       await orgStore.enableRlPolicies(boot.org.id, boot.facility.id);
+      // H1 write-through (completing the D11 seam the tenancy test named): a
+      // cloud instance stamps every device + message it writes with its org.
+      (pgStore as { tenancy?: { orgId: string; facilityId: string } }).tenancy = {
+        orgId: boot.org.id,
+        facilityId: boot.facility.id,
+      };
+      (devices as { tenancy?: { orgId: string; facilityId: string } }).tenancy = {
+        orgId: boot.org.id,
+        facilityId: boot.facility.id,
+      };
       if (opts.cloudOrg.adminKeyName) {
         const ks = keys as PostgresKeyStore;
         const created = await ks.create({ name: opts.cloudOrg.adminKeyName, role: 'admin', createdBy: 'cloud-bootstrap' });
@@ -304,6 +366,87 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   if (pool) await webhooks.ready;
   const fireEvent = (type: WebhookEventType, data: Record<string, unknown>) =>
     webhooks.fire({ type, data, source: webhookSource });
+
+  // ---------------------------------------------------------------------------
+  // M4 cloud mode (plan §7.H): fleet surface + D11 syncer.
+  // ---------------------------------------------------------------------------
+  let fleet: FleetRoutesOptions | undefined;
+
+  // D11 — the edge syncer: ships unacked outbox rows to the cloud over the
+  // outbound-only channel. Started only when configured (a plain edge or a
+  // cloud instance has nothing to ship). Never blocks the pipeline: failures
+  // log + retry on the next tick; the outbox IS the durable backlog.
+  let syncer: OutboxSyncer | undefined;
+  if (cloudSyncOpts && pool) {
+    const outbox = new PostgresOutbox(pool);
+    syncer = new OutboxSyncer({
+      reader: outbox,
+      ...cloudSyncOpts,
+      pollMs: cloudSyncOpts.pollMs ?? (Number.isFinite(Number(process.env.HUB_SYNC_POLL_MS)) && Number(process.env.HUB_SYNC_POLL_MS) > 0 ? Number(process.env.HUB_SYNC_POLL_MS) : undefined),
+      log: (line) => console.log(line),
+    });
+    syncer.start();
+    console.log(`[sync]    outbox syncer enabled — shipping to ${cloudSyncOpts.cloudBaseUrl} as gateway ${cloudSyncOpts.gatewayId}`);
+  }
+
+  // H3/H2/H4/H5 — the fleet surface (cloud instances only; needs the org).
+  let fleetRegistry: InMemoryGatewayRegistry | undefined;
+  if (opts.fleet && pool && cloudContext) {
+    fleetRegistry = new InMemoryGatewayRegistry(
+      15 * 60 * 1000,
+      '', // cloudBaseUrl is per-deployment; the bundle stamps it from env
+      opts.fleet.provisioningProfiles ?? (async () => []),
+    );
+    const ingestStore = new PostgresIngestStore(pool);
+    const flags = new InMemoryFeatureFlagStore();
+    const quotas = new InMemoryQuotaStore();
+    const licenses = new InMemoryLicenseStore();
+    fleet = {
+      gateways: fleetRegistry,
+      ingest: {
+        store: ingestStore,
+        // Gateway credentials verify against the H3 registry (hash compare).
+        authorizer: {
+          verify: (gatewayId, apiKey) => fleetRegistry!.verifyIngestCredential(gatewayId, apiKey),
+        },
+        recordSync: (gatewayId, seq) => fleetRegistry!.recordSync(gatewayId, seq).then(() => undefined),
+      },
+      orgs: {
+        get: async (idOrSlug) => {
+          const org = await new PostgresOrgStore(pool!).get(idOrSlug);
+          return org ? { id: org.id, name: org.name, slug: org.slug } : undefined;
+        },
+      },
+      facilities: new PostgresFacilityStore(pool!),
+      flags,
+      quotas,
+      licenses,
+      overview: {
+        facilities: () => new PostgresFacilityStore(pool!).list(cloudContext!.orgId),
+        facilityStats: async (facilityId) => {
+          const [messages, deviceStats] = await Promise.all([
+            pool!.query<{ n: string }>(`SELECT count(*) AS n FROM messages WHERE facility_id = $1`, [facilityId]),
+            pool!.query<{ total: string; connected: string }>(
+              `SELECT count(*) AS total, count(*) FILTER (WHERE state = 'connected') AS connected FROM devices WHERE facility_id = $1`,
+              [facilityId],
+            ),
+          ]);
+          return {
+            messages: Number(messages.rows[0]!.n),
+            devices: Number(deviceStats.rows[0]!.total),
+            connected: Number(deviceStats.rows[0]!.connected),
+          };
+        },
+      },
+      entitlements: {
+        forFacility: async (facilityId) => {
+          const license = await licenses.forFacility(facilityId);
+          return evaluateEntitlement(license);
+        },
+      },
+    };
+    console.log('[fleet]   cloud fleet surface enabled (H2/H3/H4/H5) — /api/v1/fleet, /api/v1/provision, /api/v1/sync, /api/v1/licenses');
+  }
 
   // The dispatcher owns delivery: match (E6) → validate (E5) → dedup → route
   // → queue → retry → DLQ (plan §5.3). Matching is the clinical safety gate:
@@ -679,6 +822,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     imaging: imaging !== undefined,
     // D3 slice 3: the REST surface manages subscriptions on the live bus.
     webhooks,
+    // M4 cloud surface (H2/H3/H4/H5 + D11 ingest) — undefined on an edge.
+    fleet,
     alerts: alertStore,
     profiles: profileStore,
     mappings,
@@ -736,6 +881,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       if (mwl) await mwl.stop();
       if (modalities) await modalities.stop();
       if (imaging) await imaging.dispatcher.stop();
+      if (syncer) await syncer.stop();
       await dispatcher.stop();
       await api.stop();
       await gateway.stop();
@@ -744,6 +890,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       if (pool) await closeDbPool(pool);
     },
     cloudContext,
+    ...(fleetRegistry ? { fleetRegistry } : {}),
+    ...(syncer ? { syncer } : {}),
   };
   return hub;
 }

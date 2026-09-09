@@ -31,7 +31,8 @@ import {
 } from '@integration-hub/core';
 import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
-import { InMemoryAuditStore, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
+import { InMemoryAuditStore, PUBLIC_ROUTES, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
+import { registerFleetRoutes, type FleetRoutesOptions } from './fleet.js';
 import { registerFhirRoutes } from './fhir.js';
 import { registerWebhookRoutes } from './webhooks.js';
 import { renderUi } from './ui.js';
@@ -161,6 +162,13 @@ export interface ApiServerOptions {
    * bus (in-memory; PG persistence is a documented deferral).
    */
   webhooks?: EventBus;
+  /**
+   * M4 cloud surface (plan §7.H): gateway registry (H3), sync ingest (D11),
+   * facilities/fleet overview (H2), platform flags/quotas (H4), licenses +
+   * entitlements + analytics (H5). Mounted by registerFleetRoutes when the
+   * hub runs as a cloud instance (cloud mode); absent on a plain edge.
+   */
+  fleet?: FleetRoutesOptions;
 }
 
 const createKeySchema = z.object({
@@ -323,7 +331,24 @@ export class ApiServer {
       app.addHook('preHandler', async (req, reply) => {
         // Console UI + health probes stay public (no data exposure).
         const pattern: string | undefined = req.routeOptions.url;
-        if (!req.url.startsWith('/api/v1/') || pattern === '/api/v1/health' || pattern === '/api/v1/openapi.json') return;
+        if (!req.url.startsWith('/api/v1/') || (pattern !== undefined && PUBLIC_ROUTES.has(pattern))) return;
+
+        // D11 ingest: gateway credentials (H3) — not user keys. The edge sends
+        // `x-hub-gateway: <id>` + `Authorization: Bearer <gateway key>`; the
+        // ingest route requires a VALID gateway credential (verified against
+        // the fleet registry) and never a user role. Any other route with a
+        // gateway-only credential falls through to the normal 401/403 path.
+        if (pattern === '/api/v1/sync/ingest' && this.opts.fleet?.ingest) {
+          const gatewayId = (req.headers['x-hub-gateway'] as string | undefined) ?? '';
+          const header = req.headers.authorization;
+          const gwSecret = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
+          const ok = gatewayId && gwSecret ? await this.opts.fleet.ingest.authorizer.verify(gatewayId, gwSecret) : false;
+          if (!ok) {
+            return reply.code(401).send({ error: 'unauthorized', message: 'invalid gateway credential' });
+          }
+          req.auth = undefined; // gateway credentials carry no user role
+          return;
+        }
 
         const header = req.headers.authorization;
         const secret = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
@@ -674,6 +699,10 @@ export class ApiServer {
     // D3 webhook event bus (slice 3): subscription CRUD, the delivery log,
     // replay of failed deliveries and a test ping, at /api/v1/webhooks.
     registerWebhookRoutes(app, { bus: this.opts.webhooks });
+
+    // M4 cloud surface (plan §7.H): fleet + provisioning + sync ingest +
+    // platform ops. No-op when the hub runs without a fleet configuration.
+    if (this.opts.fleet) registerFleetRoutes(app, this.opts.fleet);
 
     // Security endpoints (only meaningful with auth enabled): identify the
     // calling key, manage API keys, and query the audit log.
