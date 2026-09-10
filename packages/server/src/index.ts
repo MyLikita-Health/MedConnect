@@ -7,6 +7,7 @@
  * mapping table from the DB; otherwise it falls back to the in-memory stores.
  */
 import BetterSqlite3 from 'better-sqlite3';
+import { SqliteLocalSettingsStore } from '@integration-hub/api';
 import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryFeatureFlagStore, InMemoryKeyStore, InMemoryLicenseStore, InMemoryQuotaStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresIngestStore, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, PostgresOutbox, SqliteAuditStore, SqliteAdmissionRegistry, SqliteAlertStore, SqliteDeviceRegistry, SqliteDedupStore, SqliteKeyStore, SqliteMessageStore, SqliteOrderRegistry, SqliteOutbox, SqliteProfileStore, SqliteRouteStore, SqliteWebhookStore, openSqliteDatabase, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type SqliteDb, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DicomOrthancAdapter } from '@integration-hub/dicom';
@@ -144,6 +145,13 @@ export interface HubOptions {
     /** Profiles handed to edges in the provisioning bundle (default: none). */
     provisioningProfiles?: (facilityId: string) => Promise<unknown[]>;
   };
+  /**
+   * W2 first-boot setup (docs/windows-desktop-installer.md §4.5): serve the
+   * /api/v1/setup/* flow and defer the auto admin-key print until completion.
+   * Default: auto-on for the SQLite backend (local mode), off otherwise.
+   * Env: HUB_LOCAL_SETUP=1 forces on; =0 forces off.
+   */
+  localSetup?: { enabled?: boolean };
   };
 
 export interface Hub {
@@ -192,6 +200,8 @@ export interface Hub {
   db?: { pool: Pool } | undefined;
   /** Present when running on the embedded SQLite store (W1 edge mode). */
   sqlite?: { db: SqliteDb; file: string } | undefined;
+  /** W2 first-boot setup surface (local mode) — settings store + key store. */
+  setup?: { settings: SqliteLocalSettingsStore; keys?: KeyStore } | undefined;
   stop(): Promise<void>;
   cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
 }
@@ -218,6 +228,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let audit: AuditStore | undefined;
   let cloudContext: { orgId: string; facilityId: string; admin: boolean } | undefined;
   let sqliteDb: SqliteDb | undefined;
+  let localSettings: SqliteLocalSettingsStore | undefined;
 
   const authDisabled = opts.authDisabled ?? process.env.AUTH_DISABLED === '1';
   const adminKeySecret = opts.adminKey ?? process.env.HUB_ADMIN_KEY;
@@ -242,6 +253,11 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const envPollMs = Number(process.env.MWL_POLL_MS);
   const orthancPollMs = opts.orthanc?.pollMs ?? (Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : 60_000);
   const tls = opts.tls ?? (await loadTlsFromEnv());
+  // W2 first-boot setup (§4.5): auto-on for the SQLite local edge, off for
+  // cloud/PG/in-memory unless explicitly forced via env or opts.
+  const envLocalSetup = process.env.HUB_LOCAL_SETUP;
+  const localSetupEnabled =
+    opts.localSetup?.enabled ?? (envLocalSetup === '1' ? true : envLocalSetup === '0' ? false : sqliteRequested);
 
   if (sqliteRequested) {
     // W1 SQLite edge mode (D12): the embedded single-file store. No Docker,
@@ -249,6 +265,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // auth bootstrap as the PG path below.
     sqliteDb = openSqliteDatabase((file) => new BetterSqlite3(file), sqliteFile, { log: (line) => console.log(line) });
     console.log(`[db] sqlite edge store: ${sqliteFile}`);
+    // W2 first-boot settings live in the same store (same durability).
+    localSettings = new SqliteLocalSettingsStore(sqliteDb);
     const sqliteStore = new SqliteMessageStore(sqliteDb);
     const sqliteDevices = new SqliteDeviceRegistry(sqliteDb);
     store = sqliteStore;
@@ -353,6 +371,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   // M2 security: every API call is authenticated by default. Bootstrap an
   // admin key — from HUB_ADMIN_KEY when set (idempotent: recreates 'admin'
   // to match), otherwise generate one and print it once.
+  // W2 local mode: when the hub is unconfigured, the SETUP FLOW mints the
+  // key at completion (shown once in the wizard) — so skip the auto print.
+  const setupPending = localSetupEnabled && localSettings !== undefined && !localSettings.isConfigured();
   if (keys) {
     const admin = await keys.get('admin');
     if (adminKeySecret) {
@@ -362,6 +383,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
         await keys.create({ id: 'admin', name: 'Administrator (HUB_ADMIN_KEY)', role: 'admin', secret: adminKeySecret });
         console.log('[api]     admin key configured from HUB_ADMIN_KEY');
       }
+    } else if (!admin && setupPending) {
+      console.log('[setup]   first boot — complete setup in the console to create the admin key');
     } else if (!admin) {
       const { secret } = await keys.create({ id: 'admin', name: 'Administrator (auto-generated)', role: 'admin' });
       console.log(`[api]     API auth enabled — generated admin API key:`);
@@ -873,6 +896,10 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     webhooks,
     // M4 cloud surface (H2/H3/H4/H5 + D11 ingest) — undefined on an edge.
     fleet,
+    // W2 first-boot setup surface (local mode) — undefined elsewhere.
+    ...(localSetupEnabled && localSettings
+      ? { setup: { settings: localSettings, keys } }
+      : {}),
     alerts: alertStore,
     profiles: profileStore,
     mappings,
@@ -927,6 +954,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     ...(sqliteDb ? { sqlite: { db: sqliteDb, file: sqliteFile } } : {}),
+    ...(localSetupEnabled && localSettings ? { setup: { settings: localSettings, keys } } : {}),
     stop: async () => {
       if (mwl) await mwl.stop();
       if (modalities) await modalities.stop();

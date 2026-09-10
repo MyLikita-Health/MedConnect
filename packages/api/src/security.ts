@@ -115,6 +115,11 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   'POST /api/v1/orders': 'config:write',
   'DELETE /api/v1/orders/:id': 'config:write',
   'POST /api/v1/admissions': 'config:write',
+  // W2 first-boot setup: status is public (PUBLIC_ROUTES); completion is
+  // public only while unconfigured (auth hook special case); settings edits
+  // are config:write (admin) — later changes go through normal RBAC.
+  'GET /api/v1/setup/settings': 'config:write',
+  'PATCH /api/v1/setup/settings': 'config:write',
   // D3 webhook event bus (config:write — engineer and up)
   'POST /api/v1/webhooks': 'config:write',
   'PATCH /api/v1/webhooks/:id': 'config:write',
@@ -163,7 +168,15 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   '/api/v1/health',
   '/api/v1/openapi.json',
   '/api/v1/provision/claim',
+  // W2 first-boot setup: status is a screen-picker (no secrets). The
+  // completion route is handled separately in the auth hook — public only
+  // while the hub is unconfigured; it 403s itself once done (fail closed).
+  '/api/v1/setup/status',
 ]);
+
+/** W2 setup completion: public ONLY while the hub is unconfigured. The auth
+ *  hook consults this when the caller presented no valid key. */
+export const SETUP_COMPLETE_ROUTE = 'POST /api/v1/setup/complete';
 
 // ---------------------------------------------------------------------------
 // Key model + stores

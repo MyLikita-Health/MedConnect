@@ -16,3 +16,4 @@ export {
 } from './sqlite-core-stores.js';
 export { SqliteOutbox } from './sqlite-outbox.js';
 export { SqliteKeyStore, SqliteAuditStore } from './sqlite-security.js';
+export { SqliteLocalSettingsStore } from './sqlite-settings.js';

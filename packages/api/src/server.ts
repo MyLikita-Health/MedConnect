@@ -33,6 +33,7 @@ import type { DeviceBackend, StoreBackend } from './backend.js';
 import type { AuditStore, KeyStore } from './security.js';
 import { InMemoryAuditStore, PUBLIC_ROUTES, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
 import { registerFleetRoutes, type FleetRoutesOptions } from './fleet.js';
+import { registerSetupRoutes, type SetupRoutesOptions } from './setup.js';
 import { registerFhirRoutes } from './fhir.js';
 import { registerWebhookRoutes } from './webhooks.js';
 import { renderUi } from './ui.js';
@@ -169,6 +170,12 @@ export interface ApiServerOptions {
    * hub runs as a cloud instance (cloud mode); absent on a plain edge.
    */
   fleet?: FleetRoutesOptions;
+  /**
+   * W2 first-boot setup surface (docs/windows-desktop-installer.md §4.5):
+   * /api/v1/setup/* — public status + one-shot completion (mints the admin
+   * key exactly once) while unconfigured; auth'd settings edits after.
+   */
+  setup?: SetupRoutesOptions;
 }
 
 const createKeySchema = z.object({
@@ -354,6 +361,14 @@ export class ApiServer {
         const secret = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
         const key = secret ? await this.keys!.findBySecret(secret) : undefined;
         if (!key) {
+          // W2 first-boot: the setup completion is the ONE unauthenticated
+          // write allowed while the hub is unconfigured (there is no key yet
+          // to present — the flow itself mints it). Once configured the route
+          // 403s itself (fail closed), and everything else stays 401.
+          if (req.method === 'POST' && pattern === '/api/v1/setup/complete' && this.opts.setup && !this.opts.setup.settings.isConfigured()) {
+            req.auth = undefined;
+            return;
+          }
           // 401 for everything under /api/v1 — unknown paths included, so the
           // surface is not enumerable without a valid key.
           return reply.code(401).send({ error: 'unauthorized', message: 'missing or invalid API key — send Authorization: Bearer <key>' });
@@ -703,6 +718,11 @@ export class ApiServer {
     // M4 cloud surface (plan §7.H): fleet + provisioning + sync ingest +
     // platform ops. No-op when the hub runs without a fleet configuration.
     if (this.opts.fleet) registerFleetRoutes(app, this.opts.fleet);
+
+    // W2 first-boot setup surface (local mode). The auth hook lets the setup
+    // routes through PUBLIC_ROUTES while unconfigured; the completion route
+    // itself re-checks and 403s once configured (fail closed).
+    if (this.opts.setup) registerSetupRoutes(app, this.opts.setup);
 
     // Security endpoints (only meaningful with auth enabled): identify the
     // calling key, manage API keys, and query the audit log.

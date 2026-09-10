@@ -259,6 +259,18 @@ const MIGRATIONS: { version: string; statements: string[] }[] = [
       `CREATE INDEX IF NOT EXISTS idx_outbox_unacked ON outbox (acked, seq)`,
     ],
   },
+  {
+    version: '0006_local_settings',
+    statements: [
+      // W2 first-boot config: key/value JSON rows written through the store
+      // seam (same durability as everything else; no parallel file format).
+      `CREATE TABLE IF NOT EXISTS local_settings (
+         key        TEXT PRIMARY KEY,
+         value      TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       )`,
+    ],
+  },
 ];
 
 /** Open (creating if needed) + configure + migrate a SQLite edge database. */

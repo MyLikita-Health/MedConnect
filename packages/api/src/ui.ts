@@ -483,6 +483,25 @@ export function renderUi(): string {
   <button class="ghost" id="keybtn" style="display:none" onclick="showSignIn()">🔑 API key</button>
 </header>
 
+<!-- ── First-boot setup overlay (W2) ────────────────────────────── -->
+<div class="overlay" id="setup-overlay" style="display:none">
+  <div class="modal" style="max-width:520px">
+    <h2>⚙️ Set up your hub</h2>
+    <p id="setup-intro">First boot: give this hub its facility identity. You can change everything later in Settings.</p>
+    <label>Facility name<br/><input id="setup-facility" placeholder="e.g. St. Mary's Laboratory" style="width:100%"/></label>
+    <label>Org slug (optional, for cloud pairing later)<br/><input id="setup-org" placeholder="st-marys" style="width:100%"/></label>
+    <fieldset style="border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:8px 10px">
+      <legend>Domains</legend>
+      <label style="margin-right:16px"><input type="checkbox" id="setup-lab" checked/> Laboratory (ASTM/HL7 results)</label>
+      <label><input type="checkbox" id="setup-imaging"/> Imaging (DICOM via Orthanc — requires ORTHANC_URL)</label>
+    </fieldset>
+    <div class="modal-actions">
+      <button id="setup-btn" onclick="completeSetup()">Finish setup</button>
+    </div>
+    <pre id="setup-out" style="display:none;white-space:pre-wrap;color:var(--ok);font-size:12px;margin-top:8px"></pre>
+  </div>
+</div>
+
 <!-- ── Sign-in overlay ──────────────────────────────────────────────── -->
 <div class="overlay" id="overlay" style="display:none">
   <div class="modal">
@@ -783,6 +802,15 @@ function manageProfiles(){ return meRole === 'admin' || meRole === 'engineer'; }
 /* ── Full refresh ──────────────────────────────────────────────────── */
 async function refresh() {
   try {
+  // W2 first-boot: the setup wizard replaces the dashboard until complete.
+  // Status is public — checked before any auth'd fetch.
+  const setupStatus = await fetch(apiBase + '/api/v1/setup/status').then(r => r.json()).catch(() => null);
+  if (setupStatus && setupStatus.firstBoot) {
+    document.getElementById('setup-overlay').style.display = '';
+    return; // skip the dashboard refresh entirely while unconfigured
+  } else {
+    document.getElementById('setup-overlay').style.display = 'none';
+  }
   const keysReq = meRole === 'admin'
     ? api('/api/v1/keys').then(r => r.json())
     : Promise.resolve(null);
@@ -833,6 +861,52 @@ async function refresh() {
     const h = document.getElementById('health');
     h.textContent = 'offline';
     h.className   = 'badge off';
+  }
+}
+
+/* ── First-boot setup (W2) ────────────────────────────────────────── */
+async function completeSetup() {
+  const btn = document.getElementById('setup-btn');
+  const out = document.getElementById('setup-out');
+  const name = document.getElementById('setup-facility').value.trim();
+  if (!name) { out.style.display = ''; out.style.color = 'var(--bad)'; out.textContent = 'Facility name is required.'; return; }
+  const orgSlug = document.getElementById('setup-org').value.trim();
+  btn.disabled = true;
+  try {
+    const res = await fetch(apiBase + '/api/v1/setup/complete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        facility: { name, ...(orgSlug ? { orgSlug } : {}) },
+        domains: {
+          lab: document.getElementById('setup-lab').checked,
+          imaging: document.getElementById('setup-imaging').checked,
+        },
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      out.style.display = ''; out.style.color = 'var(--bad)';
+      out.textContent = body.message || body.error || ('setup failed (' + res.status + ')');
+      return;
+    }
+    out.style.display = ''; out.style.color = 'var(--ok)';
+    let text = '✓ Hub configured for ' + esc(name) + '.';
+    if (body.adminKey && body.adminKey.secret) {
+      text += '\n\nADMIN API KEY (shown once — copy it now):\n' + body.adminKey.secret;
+    }
+    out.textContent = text;
+    // Sign in with the new key immediately so the dashboard renders.
+    if (body.adminKey && body.adminKey.secret) {
+      localStorage.setItem('hubkey', body.adminKey.secret);
+      meRole = 'admin';
+    }
+    setTimeout(() => { location.reload(); }, 4000);
+  } catch (err) {
+    out.style.display = ''; out.style.color = 'var(--bad)';
+    out.textContent = 'setup failed: ' + err.message;
+  } finally {
+    btn.disabled = false;
   }
 }
 

@@ -219,6 +219,91 @@ nothing else changes; that is the point of the seams.
 bundling (W3), pairing artifact + update delivery (W4). W1 delivers the storage seam + the
 local-run proof only.
 
+#### W2 implementation plan (recorded 2026-09-10, before coding)
+
+**Scope (§8.2):** the OS service wrapper, the installer skeleton, and the first-boot config
+flow. What already exists and is reused unchanged: the supervisor story (G2/G3) —
+`HubSupervisor` (`packages/core/src/updates/supervisor.ts`) already spawns the hub, restarts
+on crash, health-gates boots and rolls back — and the signed-update agent + state dir
+(`HUB_STATE_DIR`). W2 packages that as a Windows service and adds the end-user setup flow.
+
+**1. Service wrapper (`packages/server/src/service-cli.ts`) — cross-platform code,
+Windows-flavored packaging.**
+
+The service entry is a small headless launcher that runs the supervisor directly with
+local-mode defaults: SQLite store under the data dir, `HUB_STATE_DIR` under the data dir,
+service-mode logging to a file under the data dir (console logging is unreliable under a
+service context), and first-boot detection. Signals (SIGINT/SIGTERM — the Windows service
+host maps service-stop onto them) trigger `supervisor.stop()`.
+
+A companion **service control CLI** (`scripts/service-cli.ts`, commands `install` /
+`uninstall` / `status`) emits the platform service definition from a template + install
+params (install dir, data dir, ports):
+- **Windows:** generates `install-service.ps1`, which registers the hub under the Service
+  Control Manager (sc.exe wrapper) with auto-start + restart-on-crash; the generated script
+  bakes in the install dir + data dir + env contract.
+- **macOS/Linux (dev + on-prem parity):** a launchd plist / systemd unit template using the
+  same env contract, so the wrapper is exercised on every dev machine, not only Windows.
+
+Templates live under `packaging/` (installer skeleton input). Supervision semantics stay
+`HubSupervisor`'s — the service layer only decides **how the supervisor process is launched
+and kept alive by the OS**, not how crashes are handled (duplicating restart policy would
+risk divergent behavior).
+
+**2. First-boot config (the end-user setup flow, §4.5).**
+
+A local-mode hub boots **unconfigured** on first run and serves a setup flow that records
+facility identity, enables the API key (minted at completion, shown once), and records the
+chosen domains/network basics.
+
+- **State:** a `local_settings` table in the SQLite store (`SqliteLocalSettingsStore`,
+  key/value JSON rows) written through the store seam — same durability as everything
+  else, no parallel file format. Keys: `facility` (name, optional org slug), `domains`
+  (lab/imaging), `network` (host, device/hl7/http ports, TLS on/off), `firstBootComplete`
+  (bool + completedAt).
+- **API (`packages/api/src/setup.ts`, mounted by ApiServer when a `setup` option is wired):**
+  - `GET /api/v1/setup/status` — public (added to PUBLIC_ROUTES): returns
+    `{ firstBoot, configuredAt?, facility?, domains? }` — enough for the console to pick a
+    screen, no secrets.
+  - `POST /api/v1/setup/complete` — public ONLY while unconfigured. Validates (facility
+    name required; domain flags; network basics; optional pinned admin key), writes
+    settings + flips `firstBootComplete` in one transaction, and (when no key exists)
+    creates the admin API key **returned exactly once** — the H3 pairing-bundle pattern.
+    After completion the route 403s; a second concurrent POST sees the flag already true
+    and 403s (the flip is the same transaction as the write).
+  - Auth'd edits: `GET/PATCH /api/v1/setup/settings` under `config:write` (admin;
+    local mode has exactly one privileged role by default).
+- **Console (`ui.ts`):** on load the console calls setup status; when `firstBoot`, it
+  renders the setup wizard panel (facility → domains → network → done, admin key shown
+  once at the end) instead of the dashboard.
+- **startHub wiring:** `opts.localSetup?: { enabled?: boolean }` (env `HUB_LOCAL_SETUP=1`;
+  auto-on when the backend is SQLite unless explicitly disabled). When enabled and
+  unconfigured, startHub skips the auto-generated admin key print (setup completion is the
+  key-minting moment) but keeps auth ON for every other route.
+
+**3. Installer skeleton (`packaging/`).**
+
+Artifacts a W2.5 packaging pass turns into the real installer (MSI/MSIX/NSIS pick deferred):
+the service-definition templates per platform, the env contract (ports, data dir, TLS,
+update source), a first-boot smoke checklist, and the uninstall note (service unregister +
+data-dir removal with backup prompt). `docs/windows-service.md` captures the hub's own
+install/uninstall behavior and the data-dir layout (`hub.sqlite`, state dir, logs).
+
+**W2 exit proof (tests, Docker-free):**
+
+1. **First-boot flow** (`packages/api/src/setup.test.ts`): status starts `firstBoot: true`;
+   anonymous completion mints the admin key (shown once) and flips status; re-completion
+   403s; settings land in `local_settings` and survive reopen; every other route enforces
+   auth throughout; the settings PATCH requires an admin key.
+2. **Service entry** (`packages/server/src/service-cli.test.ts`): the local-service entry
+   boots with local defaults (SQLite + state dir under the data dir), logs to a file, and
+   stops cleanly on SIGTERM.
+3. **No-Docker e2e** (extends `sqlite-hub.test.ts`): boot unconfigured → complete setup via
+   the API → restart → still configured (persisted in SQLite).
+
+**Explicitly deferred:** the real MSI/MSIX build + code signing (W2.5), Orthanc bundling
+(W3), cloud pairing artifact (W4).
+
 ### 8.2 Phase W2 — Windows service + packaging skeleton
 
 - Wrap the hub as a Windows service / supervised process: auto-start, crash recovery, safe shutdown, logs, uninstall.
