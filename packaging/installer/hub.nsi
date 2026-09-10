@@ -143,6 +143,13 @@ Section "Install"
   FileWrite $tmp '  <env name="PORT" value="$HttpPort"/>$\r$\n'
   FileWrite $tmp '  <env name="DEVICE_PORT" value="$DevicePort"/>$\r$\n'
   FileWrite $tmp '  <env name="HUB_LOCAL_SETUP" value="1"/>$\r$\n'
+!ifdef ORTHANC
+  ; W3 bundle: point the hub at the colocated Orthanc REST endpoint so the
+  ; imaging wiring (MWL monitor + modality health) is on from the first boot.
+  ; The REST server answers only the hub's localhost (RemoteAccessAllowed=false
+  ; in the config written below).
+  FileWrite $tmp '  <env name="ORTHANC_URL" value="http://127.0.0.1:8042"/>$\r$\n'
+!endif
   FileWrite $tmp '  <executable>%BASE%\\node.exe</executable>$\r$\n'
   FileWrite $tmp '  <arguments>--import tsx %BASE%\\app\\packages\\server\\src\\service-cli.ts</arguments>$\r$\n'
   FileWrite $tmp '  <workingdirectory>%BASE%\\app</workingdirectory>$\r$\n'
@@ -163,14 +170,89 @@ Section "Install"
   SetOutPath "$INSTDIR\app"
   File /r "${STAGE}\payload\app\*.*"
 
+!ifdef ORTHANC
+  ; ------------------------------------------------------------- W3 Orthanc
+  ; The AGPL imaging engine as its OWN Windows service (adjacent process,
+  ; REST-only contact with the hub — §3.2/§7.5.5). Own shim, own config,
+  ; own data dir under %ProgramData%.
+  SetOutPath "$INSTDIR\orthanc"
+  File "/oname=Orthanc.exe" "${STAGE}\payload\orthanc\Orthanc.exe"
+  File "/oname=OrthancHub.exe" "${STAGE}\payload\WinSW-x64.exe"
+  CreateDirectory "$INSTDIR\orthanc\plugins"
+  CreateDirectory "$INSTDIR\orthanc\worklists"
+  File "/oname=plugins\ModalityWorklists.dll" "${STAGE}\payload\orthanc\ModalityWorklists.dll"
+
+  DetailPrint "Writing the Orthanc service configuration…"
+  FileOpen $tmp "$INSTDIR\orthanc\orthanc.json" w
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Cannot write the Orthanc configuration to $INSTDIR\orthanc."
+    Abort
+  ${EndIf}
+  ; REST stays localhost-only (the hub is the only client); DICOM 4242 must
+  ; accept C-STORE/C-FIND from the facility modalities on the LAN.
+  FileWrite $tmp '{$\r$\n'
+  FileWrite $tmp '  "Name": "IntegrationHub-Orthanc",$\r$\n'
+  FileWrite $tmp '  "DicomAet": "INTEGRATIONHUB",$\r$\n'
+  FileWrite $tmp '  "DicomPort": 4242,$\r$\n'
+  FileWrite $tmp '  "HttpPort": 8042,$\r$\n'
+  FileWrite $tmp '  "RemoteAccessAllowed": false,$\r$\n'
+  FileWrite $tmp '  "AuthenticationEnabled": false,$\r$\n'
+  FileWrite $tmp '  "Plugins": ["$INSTDIR\\orthanc\\plugins"],$\r$\n'
+  FileWrite $tmp '  "StorageDirectory": "$COMMONPROGRAMDATA\\IntegrationHub\\orthanc\\storage",$\r$\n'
+  FileWrite $tmp '  "IndexDirectory": "$COMMONPROGRAMDATA\\IntegrationHub\\orthanc\\index",$\r$\n'
+  FileWrite $tmp '  "Worklists": { "Enabled": true, "Database": "$INSTDIR\\orthanc\\worklists" }$\r$\n'
+  FileWrite $tmp '}$\r$\n'
+  FileClose $tmp
+  CreateDirectory "$COMMONPROGRAMDATA\IntegrationHub\orthanc\storage"
+  CreateDirectory "$COMMONPROGRAMDATA\IntegrationHub\orthanc\index"
+
+  FileOpen $tmp "$INSTDIR\orthanc\OrthancHub.xml" w
+  ${If} ${Errors}
+    MessageBox MB_ICONSTOP "Cannot write the Orthanc service definition."
+    Abort
+  ${EndIf}
+  FileWrite $tmp '<service>$\r$\n'
+  FileWrite $tmp '  <id>integration-hub-orthanc</id>$\r$\n'
+  FileWrite $tmp '  <name>Integration Hub Orthanc (local)</name>$\r$\n'
+  FileWrite $tmp '  <description>AGPL DICOM engine for Integration Hub — adjacent REST service</description>$\r$\n'
+  FileWrite $tmp '  <executable>%BASE%\\Orthanc.exe</executable>$\r$\n'
+  FileWrite $tmp '  <arguments>%BASE%\\orthanc.json</arguments>$\r$\n'
+  FileWrite $tmp '  <workingdirectory>%BASE%</workingdirectory>$\r$\n'
+  FileWrite $tmp '  <startmode>Automatic</startmode>$\r$\n'
+  FileWrite $tmp '  <onfailure action="restart" delay="5 sec"/>$\r$\n'
+  FileWrite $tmp '  <onfailure action="restart" delay="10 sec"/>$\r$\n'
+  FileWrite $tmp '  <stoptimeout>20 sec</stoptimeout>$\r$\n'
+  FileWrite $tmp '  <log mode="roll-by-size">$\r$\n'
+  FileWrite $tmp '    <logpath>%ProgramData%\\IntegrationHub\\logs</logpath>$\r$\n'
+  FileWrite $tmp '    <sizeThreshold>10240</sizeThreshold>$\r$\n'
+  FileWrite $tmp '    <keepFiles>8</keepFiles>$\r$\n'
+  FileWrite $tmp '  </log>$\r$\n'
+  FileWrite $tmp '</service>$\r$\n'
+  FileClose $tmp
+!endif
+
   ; 2. Firewall: inbound TCP for the device listener on the private profile
   ;    (conservative LAN default — analyzers live on the local network; the
   ;    rule is deliberately NOT created for the public profile).
   DetailPrint "Firewall rule for the device listener (TCP $DevicePort, private profile)…"
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Integration Hub device listener" dir=in action=allow protocol=TCP localport=$DevicePort profile=private'
   Pop $tmp
+!ifdef ORTHANC
+  ; Modalities C-STORE/C-FIND the imaging engine on the LAN — DICOM port in,
+  ; same conservative private profile (never public).
+  DetailPrint "Firewall rule for the DICOM listener (TCP 4242, private profile)…"
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Integration Hub DICOM listener" dir=in action=allow protocol=TCP localport=4242 profile=private'
+  Pop $tmp
+!endif
 
-  ; 3. Register + start the service (WinSW serves the SCM protocol).
+  ; 3. Register + start the service(s) (WinSW serves the SCM protocol).
+!ifdef ORTHANC
+  DetailPrint "Registering the Orthanc (imaging) service…"
+  nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" install'
+  Pop $tmp
+  nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" start'
+  Pop $tmp
+!endif
   DetailPrint "Registering the Integration Hub service…"
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" install'
   Pop $tmp
@@ -194,8 +276,14 @@ SectionEnd
 
 ; -------------------------------------------------------------- uninstall
 Section "Uninstall"
-  ; Order matters (the W2 contract): the service is stopped and unregistered
-  ; BEFORE anything touches the payload or the data dir.
+  ; Order matters (the W2 contract): the service(s) are stopped and
+  ; unregistered BEFORE anything touches the payload or the data dir.
+!ifdef ORTHANC
+  nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" stop'
+  Pop $tmp
+  nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" uninstall'
+  Pop $tmp
+!endif
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" stop'
   Pop $tmp
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" uninstall'
@@ -205,12 +293,19 @@ Section "Uninstall"
   DetailPrint "Removing the firewall rule…"
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Integration Hub device listener"'
   Pop $tmp
+!ifdef ORTHANC
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Integration Hub DICOM listener"'
+  Pop $tmp
+!endif
 
   RMDir /r "$INSTDIR\app"
   Delete "$INSTDIR\node.exe"
   Delete "$INSTDIR\IntegrationHub.exe"
   Delete "$INSTDIR\IntegrationHub.xml"
   Delete "$INSTDIR\uninstall.exe"
+!ifdef ORTHANC
+  RMDir /r "$INSTDIR\orthanc"
+!endif
   RMDir "$INSTDIR"
 
   Delete "$SMPROGRAMS\Integration Hub\Integration Hub Console.lnk"

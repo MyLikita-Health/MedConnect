@@ -44,6 +44,7 @@ export { PostgresOutbox, PostgresIngestStore, type SyncedMessageRow, type Synced
 export * from './sqlite/index.js';
 export { InMemoryFeatureFlagStore, InMemoryQuotaStore, InMemoryLicenseStore, evaluateEntitlement, type Entitlement, type FacilityQuota, type FeatureFlag, type FeatureFlagStore, type FleetRoutesOptions, type LicenseRecord, type LicenseStore, type QuotaStore } from './fleet.js';
 export { PUBLIC_ROUTES } from './security.js';
+export { registerSetupRoutes, type DomainSettings, type FacilitySettings, type NetworkSettings, type OrthancSettings, type SetupStatus } from './setup.js';
 
 /**
  * JS/TS SDK (workstream D5): typed client wrapping the v1 REST surface —

@@ -89,6 +89,27 @@ npx tsx scripts/service-cli.ts uninstall
    /api/v1/setup/status` → `firstBoot: true`).
 3. Completing setup mints the **admin API key — shown exactly once** — and
    flips the hub to configured; the dashboard renders after that.
-4. LAN note: analyzers connect to `DEVICE_PORT`; open that port in the Windows
-   firewall for the local network profile when the installer asks (W3 polish:
-   first-boot firewall guidance).
+4. LAN note: analyzers connect to `DEVICE_PORT`; the W2.5 installer opens
+   that port in the Windows firewall for the local-network profile (never
+   public). The setup wizard's stored network host (e.g. `0.0.0.0`) applies on
+   the next restart — env still wins.
+
+## W3 imaging (optional `--orthanc` bundle)
+
+- The installer can bundle the official Orthanc Windows build as its OWN
+  service (`integration-hub-orthanc`): REST on `127.0.0.1:8042`
+  (localhost-only, no auth needed — the hub is the only client), DICOM on
+  `4242` (private-profile firewall rule; modalities C-STORE/C-FIND here),
+  worklists plugin included for MWL. Data under
+  `%ProgramData%\IntegrationHub\orthanc`.
+- The hub gets `ORTHANC_URL=http://127.0.0.1:8042` in its service env; the
+  MWL monitor + modality health monitor wire up automatically (M3.2/C6), and
+  Orthanc appears in the Devices panel like any other device.
+- The AGPL boundary (§3.2) is unchanged: Orthanc is an adjacent, separate
+  process the hub drives over REST — never embedded or linked.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ORTHANC_URL` | unset (or the bundle's `http://127.0.0.1:8042`) | imaging engine REST endpoint |
+| `ORTHANC_USER` / `ORTHANC_PASSWORD` | unset | only for remote Orthanc instances with auth |
+| `MWL_POLL_MS` | `60000` | MWL sync+poll cadence |

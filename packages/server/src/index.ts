@@ -18,6 +18,7 @@ import { ModalityMonitor } from './modality-monitor.js';
 import { MwlMonitor } from './mwl-monitor.js';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore,  InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, InMemoryGatewayRegistry, OutboxSyncer, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, PostgresWebhookStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
 import { evaluateEntitlement, type FleetRoutesOptions } from '@integration-hub/api';
+import type { NetworkSettings, OrthancSettings } from '@integration-hub/api';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -200,14 +201,21 @@ export interface Hub {
   db?: { pool: Pool } | undefined;
   /** Present when running on the embedded SQLite store (W1 edge mode). */
   sqlite?: { db: SqliteDb; file: string } | undefined;
-  /** W2 first-boot setup surface (local mode) — settings store + key store. */
-  setup?: { settings: SqliteLocalSettingsStore; keys?: KeyStore } | undefined;
+  /** W2 first-boot setup surface (local mode) — settings store + key store.
+   *  W3 §8.3: `listeners` reports the ports this process actually bound. */
+  setup?:
+    | {
+        settings: SqliteLocalSettingsStore;
+        keys?: KeyStore;
+        listeners?: () => { host: string; device?: number; hl7?: number; http?: number };
+      }
+    | undefined;
   stop(): Promise<void>;
   cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
 }
 
 export async function startHub(opts: HubOptions = {}): Promise<Hub> {
-  const host = opts.host ?? '127.0.0.1';
+  let host = opts.host ?? '127.0.0.1';
   // W1 backend selection (D12): explicit SQLite opts > DB=sqlite env > PG
   // (DATABASE_URL) > in-memory. SQLite is checked first because a local edge
   // must never accidentally reach for a DB server that is not there.
@@ -236,7 +244,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const sqliteFile = opts.sqlite?.file ?? process.env.HUB_SQLITE_FILE ?? (stateDir ? `${stateDir}/hub.sqlite` : 'hub.sqlite');
   const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
   const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
-  const orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
+  let orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
   // D11 edge→cloud sync (env fallback: the H3 provisioning bundle writes these
   // into the edge's environment/state dir; opts win).
   const cloudSyncOpts = opts.cloudSync
@@ -248,8 +256,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
           apiKey: process.env.HUB_GATEWAY_KEY,
         }
       : undefined;
-  const orthancUser = opts.orthanc?.username ?? process.env.ORTHANC_USER;
-  const orthancPass = opts.orthanc?.password ?? process.env.ORTHANC_PASSWORD;
+  let orthancUser = opts.orthanc?.username ?? process.env.ORTHANC_USER;
+  let orthancPass = opts.orthanc?.password ?? process.env.ORTHANC_PASSWORD;
   const envPollMs = Number(process.env.MWL_POLL_MS);
   const orthancPollMs = opts.orthanc?.pollMs ?? (Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : 60_000);
   const tls = opts.tls ?? (await loadTlsFromEnv());
@@ -365,6 +373,34 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     if (!authDisabled) {
       keys = new InMemoryKeyStore();
       audit = new InMemoryAuditStore();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // W3 — first-boot settings apply (§8.3 LAN/imaging polish): a local (SQLite)
+  // hub re-reads the W2 setup settings each boot. Stored values FILL UNSET env
+  // (env/opts still win — the service definition carries the install-time env
+  // contract), so changes made in the console are picked up on the next
+  // restart without editing service definitions.
+  // ---------------------------------------------------------------------------
+  if (localSettings?.isConfigured()) {
+    const domains = localSettings.get<{ lab: boolean; imaging: boolean }>('domains');
+    const network = localSettings.get<NetworkSettings>('network');
+    const orthanc = localSettings.get<OrthancSettings>('orthanc');
+
+    // LAN reach (§8.3): the stored host wins when the env left the listener
+    // on loopback — a wizard-configured 0.0.0.0 (LAN) must take effect.
+    if (network?.host && host === '127.0.0.1') {
+      host = network.host;
+      console.log(`[setup]   network host from first-boot settings: ${host}`);
+    }
+    // Imaging (§8.3): domains.imaging enables the Orthanc wiring — URL from
+    // the wizard (default: the colocated bundle endpoint), env can override.
+    if (domains?.imaging && !orthancUrl && orthanc?.baseUrl) {
+      orthancUrl = orthanc.baseUrl;
+      orthancUser = orthancUser ?? orthanc.username;
+      orthancPass = orthancPass ?? orthanc.password;
+      console.log(`[setup]   imaging enabled — Orthanc at ${orthancUrl}`);
     }
   }
 
@@ -878,6 +914,19 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     console.log(`[modality] Orthanc modality health monitor enabled — C-ECHO ${modalityPollMs}ms cadence`);
   }
 
+  // W3 §8.3: the setup status echoes the listeners this process actually
+  // bound — evaluated per request via these lets (ports are assigned by the
+  // .start() calls below, after the ApiServer is constructed).
+  let boundDevice: number | undefined;
+  let boundHl7: number | undefined;
+  let boundHttp: number | undefined;
+  const setupListeners = (): { host: string; device?: number; hl7?: number; http?: number } => ({
+    host,
+    ...(boundDevice !== undefined ? { device: boundDevice } : {}),
+    ...(boundHl7 !== undefined ? { hl7: boundHl7 } : {}),
+    ...(boundHttp !== undefined ? { http: boundHttp } : {}),
+  });
+
   const api = new ApiServer({
     host,
     port: opts.httpPort ?? 0,
@@ -897,8 +946,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     // M4 cloud surface (H2/H3/H4/H5 + D11 ingest) — undefined on an edge.
     fleet,
     // W2 first-boot setup surface (local mode) — undefined elsewhere.
+    // W3 §8.3: the status route also reports the bound listeners.
     ...(localSetupEnabled && localSettings
-      ? { setup: { settings: localSettings, keys } }
+      ? { setup: { settings: localSettings, keys, listeners: setupListeners } }
       : {}),
     alerts: alertStore,
     profiles: profileStore,
@@ -922,6 +972,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const { port: devicePort } = await gateway.start();
   const hl7Port = hl7Gateway ? (await hl7Gateway.start()).port : undefined;
   const { port: httpPort } = await api.start();
+  boundDevice = devicePort;
+  boundHl7 = hl7Port;
+  boundHttp = httpPort;
   if (hl7Gateway && hl7Port !== undefined) {
     console.log(`[gateway] HL7 v2 (MLLP) listening on tcp://${host}:${hl7Port} — ORU^R01 in, app ACK out`);
   }
@@ -954,7 +1007,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     ...(sqliteDb ? { sqlite: { db: sqliteDb, file: sqliteFile } } : {}),
-    ...(localSetupEnabled && localSettings ? { setup: { settings: localSettings, keys } } : {}),
+    ...(localSetupEnabled && localSettings ? { setup: { settings: localSettings, keys, listeners: setupListeners } } : {}),
     stop: async () => {
       if (mwl) await mwl.stop();
       if (modalities) await modalities.stop();

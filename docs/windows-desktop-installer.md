@@ -381,6 +381,31 @@ install/uninstall behavior and the data-dir layout (`hub.sqlite`, state dir, log
 - Harden LAN device connectivity: listen ports, TLS option, firewall guidance, analyzer/modal binding.
 - Ensure outbound LIS/HIS/EMR reach works cleanly in local mode with retry/DLQ.
 
+#### W3 resolution (implemented)
+
+- **Orthanc bundling (`--orthanc`)**: `build.sh` stages the official Windows
+  build (`Orthanc.exe` + prebuilt `ModalityWorklists.dll` for MWL) beside the
+  hub payload; `hub.nsi` (`!ifdef ORTHANC`) registers it as its OWN Windows
+  service (`integration-hub-orthanc` via WinSW), with its own config and data
+  dirs under `%ProgramData%\IntegrationHub\orthanc`, REST bound localhost-only
+  (`RemoteAccessAllowed=false`; the hub is the only client), DICOM 4242 on the
+  private-profile firewall. The hub's service definition carries
+  `ORTHANC_URL=http://127.0.0.1:8042`. The AGPL boundary is unchanged: adjacent
+  process, REST-only (§3.2) — no DICOM stack in hub code.
+- **First-boot network/imaging apply**: the setup wizard collects the Orthanc
+  REST URL (and network host) at completion; a local hub re-applies stored
+  settings on every restart (env still wins). The status route echoes the
+  stored network/orthanc config plus the listeners this process actually bound
+  (`runtime`), so the operator can verify LAN reach from the console.
+- **LAN/firewall**: the installer's private-profile device-port rule (W2.5)
+  carries to the DICOM port when imaging is bundled; TLS stays the existing
+  `HUB_TLS_CERT/KEY` contract; outbound LIS/HIS/EMR reach keeps the dispatcher
+  retry→DLQ machinery (B3.3) — no local-mode special casing needed.
+- **Exit proof**: the extended SQLite e2e (`sqlite-hub.test.ts`) completes
+  setup with imaging on, restarts, and proves the MWL monitor boots against
+  the stored Orthanc URL (mock REST contract), the Orthanc device row flips
+  connected, and the stored LAN host becomes the bind host.
+
 ### 8.4 Phase W4 — cloud-pairing readiness + update delivery
 
 - Make the local install cloud-pairing-ready: outbox + tenant context + pairing artifact, so later pairing to a cloud org/facility is a controlled flow rather than a re-install.

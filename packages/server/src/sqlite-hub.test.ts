@@ -136,3 +136,128 @@ test('startHub runs fully-local on SQLite: setup → wire → pipeline → API �
   assert.ok(profile, 'seeded profile persisted');
   await hub2.stop();
 });
+
+/**
+ * W3 §8.3 — first-boot settings APPLY + the imaging endpoint: a configured
+ * local hub picks up the wizard's network host (loopback env → stored LAN
+ * host) and the wizard's Orthanc REST URL (domains.imaging) on the next
+ * boot; the status route echoes the effective listeners. The imaging wiring
+ * is proven against a mock Orthanc (the same REST contract the W3 bundle
+ * serves): /system, /worklists CRUD, /tools/find.
+ */
+test('W3: stored network + imaging settings apply on restart (mock Orthanc over REST)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'hub-w3-e2e-'));
+  const file = join(dir, 'hub.sqlite');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const savedAdminKey = process.env.HUB_ADMIN_KEY;
+  delete process.env.HUB_ADMIN_KEY;
+  t.after(() => {
+    if (savedAdminKey !== undefined) process.env.HUB_ADMIN_KEY = savedAdminKey;
+  });
+
+  // ---------- Boot 1: complete setup with the W3 fields ----------
+  const hub1 = await startHub({
+    sqlite: { file },
+    httpPort: 0,
+    devicePort: 0,
+    seedDefaultAlerts: false,
+  });
+  t.after(() => hub1.stop().catch(() => undefined));
+  const base1 = `http://127.0.0.1:${hub1.ports.http}`;
+
+  const complete = await fetch(`${base1}/api/v1/setup/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      facility: { name: 'Imaging Lab' },
+      domains: { lab: true, imaging: true },
+      network: { host: '0.0.0.0', devicePort: 5000, httpPort: 3000, tls: false },
+      orthanc: { baseUrl: 'http://REPLACE-ME' }, // patched below (mock port unknown yet)
+    }),
+  });
+  assert.equal(complete.status, 201);
+  const { adminKey } = (await complete.json()) as { adminKey?: { secret: string } };
+  assert.ok(adminKey?.secret);
+
+  // ---------- Mock Orthanc (the W3 bundle's REST contract) ----------
+  const { startMockOrthanc: mock } = await import('@integration-hub/dicom/mock');
+  const worklistCreated: string[] = [];
+  const { base: orthancBase } = await mock(t, (req, res, entry) => {
+    if (req.method === 'GET' && entry.path === '/system') {
+      return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ Version: '1.12.6', Name: 'IntegrationHub-Orthanc' }));
+    }
+    if (req.method === 'GET' && entry.path === '/worklists') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(worklistCreated));
+    if (req.method === 'POST' && entry.path === '/worklists') {
+      const id = `wl-${worklistCreated.length + 1}`;
+      worklistCreated.push(id);
+      return res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify(id));
+    }
+    if (req.method === 'GET' && entry.path.startsWith('/worklists/')) {
+      return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ID: entry.path.split('/')[2], Tags: {} }));
+    }
+    if (req.method === 'DELETE' && entry.path.startsWith('/worklists/')) return res.writeHead(200).end();
+    if (req.method === 'POST' && entry.path === '/tools/find') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify([]));
+    res.writeHead(404).end();
+  });
+
+  // Record the real Orthanc base (settings are editable via the auth'd PATCH).
+  const patched = await fetch(`${base1}/api/v1/setup/settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminKey.secret}` },
+    body: JSON.stringify({ orthanc: { baseUrl: orthancBase } }),
+  });
+  assert.equal(patched.status, 200, 'settings PATCH (config:write) accepts the orthanc endpoint');
+
+  // The status surface echoes the stored config + the runtime listeners (W3).
+  const status1 = (await fetch(`${base1}/api/v1/setup/status`, { headers: { Authorization: `Bearer ${adminKey.secret}` } }).then((r) => r.json())) as {
+    firstBoot: boolean;
+    network?: { host: string };
+    orthanc?: { baseUrl: string };
+    runtime?: { host: string; device?: number; http?: number };
+  };
+  assert.equal(status1.network?.host, '0.0.0.0', 'stored network settings echo back');
+  assert.equal(status1.orthanc?.baseUrl, orthancBase, 'imaging endpoint echoes (never the password)');
+  assert.equal(status1.runtime?.device, hub1.ports.device, 'runtime listener ports echo');
+
+  await hub1.stop();
+
+  // ---------- Boot 2: stored settings apply ----------
+  // No HOST env (loopback default) → the stored 0.0.0.0 wins; no ORTHANC_URL
+  // env → the stored imaging endpoint wins. The MWL monitor boots against it.
+  const hub2 = await startHub({
+    sqlite: { file },
+    httpPort: 0,
+    devicePort: 0,
+    seedDefaultAlerts: false,
+  });
+  t.after(() => hub2.stop().catch(() => undefined));
+
+  assert.ok(hub2.mwl, 'imaging wiring came up from the stored settings (domains.imaging + orthanc.baseUrl)');
+  assert.equal(hub2.mwl.status().baseUrl, orthancBase);
+
+  // The mock saw the real MWL poll chain (the imaging engine is reachable).
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && hub2.mwl.status().lastRunAt === undefined) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(hub2.mwl.status().lastRunAt, 'the MWL monitor polled the configured Orthanc');
+
+  // The Orthanc device row flipped connected through the health seam (C6).
+  const deadline2 = Date.now() + 5000;
+  let orthancRow: { state: string } | undefined;
+  while (Date.now() < deadline2) {
+    orthancRow = (await hub2.devices.get('orthanc')) as { state: string } | undefined;
+    if (orthancRow?.state === 'connected') break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(orthancRow?.state, 'connected', 'Orthanc surfaced as a connected device');
+
+  // LAN reach: with no HOST env, the stored 0.0.0.0 became the bind host —
+  // the console answer (via the setup status) reports it as the runtime host.
+  const status2 = (await fetch(`http://127.0.0.1:${hub2.ports.http}/api/v1/setup/status`, { headers: { Authorization: `Bearer ${adminKey.secret}` } }).then((r) => r.json())) as {
+    runtime?: { host: string };
+  };
+  assert.equal(status2.runtime?.host, '0.0.0.0', 'stored LAN host applied on restart');
+
+  await hub2.stop();
+});

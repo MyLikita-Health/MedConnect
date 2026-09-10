@@ -70,7 +70,7 @@ test('build.sh stages the same payload the NSIS script embeds', () => {
   assert.match(buildSh, /npm ci --omit=dev/, 'prod node_modules');
   assert.match(buildSh, /npm install --no-save[^\n]*tsx/, 'tsx retained (the runtime loader)');
   assert.match(buildSh, /prebuilds\/win32-x64\.node|prebuilds/, 'the sqlite win32 prebuild ships in the tarball');
-  assert.match(buildSh, /makensis \/DVERSION/, 'compiles with the version define');
+  assert.match(buildSh, /makensis -DVERSION/, 'compiles with the POSIX-style version define (Windows makensis accepts it too; POSIX rejects /D)');
 });
 
 test('service-cli Windows template matches the WinSW mechanism (no bare sc.exe)', () => {
@@ -79,6 +79,27 @@ test('service-cli Windows template matches the WinSW mechanism (no bare sc.exe)'
   assert.doesNotMatch(serviceCli, /sc\.exe create/, 'the broken bare sc.exe create is gone');
   assert.match(serviceDoc, /WinSW/, 'docs describe the WinSW mechanism');
   assert.match(serviceDoc, /1053/, 'docs explain why sc.exe alone fails');
+});
+
+test('W3 orthanc bundle: staged beside the payload, own service, AGPL boundary intact', () => {
+  // Stage script fetches the official Windows build + the prebuilt MWL plugin.
+  assert.match(buildSh, /--orthanc/, 'an explicit opt-in stage');
+  assert.match(buildSh, /orthanc\.uclouvain\.be/, 'the official download server');
+  assert.match(buildSh, /Orthanc\.exe/);
+  assert.match(buildSh, /ModalityWorklists\.dll/, 'the MWL plugin (worklists for MWL sync)');
+  // NSIS: the bundle is compiled in via !ifdef and keeps its own identity.
+  assert.match(nsi, /!ifdef ORTHANC/, 'compile-time opt-in');
+  assert.match(nsi, /integration-hub-orthanc/, 'its OWN service id (adjacent process)');
+  assert.match(nsi, /RemoteAccessAllowed.*false|"RemoteAccessAllowed": false/, 'REST stays localhost-only');
+  assert.match(nsi, /ORTHANC_URL/, 'the hub service env points at the bundle');
+  assert.match(nsi, /Integration Hub DICOM listener/, 'DICOM 4242 firewall rule when bundled');
+  assert.match(nsi, /profile=private/, 'private profile only (never public)');
+  // The uninstaller tears the orthanc service down BEFORE the payload goes.
+  const unSection = nsi.slice(nsi.indexOf('Section "Uninstall"'));
+  const orthancStop = unSection.indexOf('OrthancHub.exe" stop');
+  const hubStop = unSection.indexOf('IntegrationHub.exe" stop');
+  assert.ok(orthancStop >= 0 && orthancStop < hubStop, 'orthanc service stopped first (dependency order)');
+  assert.match(unSection, /RMDir \/r "\$INSTDIR\\orthanc"/, 'bundle removed with the payload');
 });
 
 test('package.json wires installer:build / installer:stage', () => {

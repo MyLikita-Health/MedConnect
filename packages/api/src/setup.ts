@@ -42,11 +42,29 @@ export interface NetworkSettings {
   tls: boolean;
 }
 
+/** Imaging endpoint recorded at first boot (W3): the colocated/hooked Orthanc
+ *  REST API the hub drives (AGPL boundary — REST only, §3.2). Applied by
+ *  startHub on later boots when domains.imaging is on. */
+export interface OrthancSettings {
+  baseUrl: string;
+  username?: string;
+  password?: string;
+}
+
 export interface SetupStatus {
   firstBoot: boolean;
   configuredAt?: string;
   facility?: FacilitySettings;
   domains?: DomainSettings;
+  /** W3 §8.3: the stored network settings echoed back (the wizard's values —
+   *  what the NEXT restart will apply when env does not override). */
+  network?: NetworkSettings;
+  /** W3 §8.3: the imaging endpoint (baseUrl only — the password never
+   *  echoes back over the API). */
+  orthanc?: { baseUrl: string };
+  /** W3 §8.3 LAN reach: the listeners this hub process actually bound
+   *  (present when the mount provides the runtime getter). */
+  runtime?: { host: string; device?: number; hl7?: number; http?: number };
 }
 
 const completeSchema = z.object({
@@ -69,6 +87,16 @@ const completeSchema = z.object({
       tls: z.boolean().default(false),
     })
     .optional(),
+  /** W3 imaging: the Orthanc REST endpoint for the imaging domain. When
+   *  domains.imaging is true but orthanc is omitted, startHub falls back to
+   *  the default colocated-bundle address http://127.0.0.1:8042. */
+  orthanc: z
+    .object({
+      baseUrl: z.string().url().max(200).default('http://127.0.0.1:8042'),
+      username: z.string().max(100).optional(),
+      password: z.string().max(200).optional(),
+    })
+    .optional(),
   /** Pin the admin key to a caller-chosen secret (idempotent recreate) —
    *  automation-friendly; when absent a random secret is generated. */
   adminKey: z.string().min(20).max(200).optional(),
@@ -86,12 +114,23 @@ const settingsPatchSchema = z.object({
       tls: z.boolean().optional(),
     })
     .optional(),
+  orthanc: z
+    .object({
+      baseUrl: z.string().url().max(200).optional(),
+      username: z.string().max(100).nullable().optional(),
+      password: z.string().max(200).nullable().optional(),
+    })
+    .optional(),
 });
 
 export interface SetupRoutesOptions {
   settings: SqliteLocalSettingsStore;
   /** When auth is disabled (dev), key minting is skipped. */
   keys?: KeyStore;
+  /** W3 §8.3: getter for the listeners this process bound (device/hl7/http
+   *  ports + host) — evaluated per status request so late-bound ports
+   *  (gateway.start() after route registration) are correct. */
+  listeners?: () => { host: string; device?: number; hl7?: number; http?: number };
 }
 
 /** Mount /api/v1/setup/* on the API. */
@@ -101,11 +140,21 @@ export function registerSetupRoutes(app: FastifyInstance, opts: SetupRoutesOptio
   const status = (): SetupStatus => {
     const facility = settings.get<FacilitySettings>('facility');
     const domains = settings.get<DomainSettings>('domains');
+    const network = settings.get<NetworkSettings>('network');
+    const orthanc = settings.get<OrthancSettings>('orthanc');
     const flag = settings.get<{ complete: boolean; completedAt?: string }>('firstBootComplete');
     const firstBoot = flag?.complete !== true;
-    return firstBoot
-      ? { firstBoot: true }
-      : { firstBoot: false, configuredAt: flag?.completedAt, ...(facility ? { facility } : {}), ...(domains ? { domains } : {}) };
+    const runtime = opts.listeners?.();
+    return {
+      firstBoot,
+      ...(firstBoot ? {} : { configuredAt: flag?.completedAt }),
+      ...(facility ? { facility } : {}),
+      ...(domains ? { domains } : {}),
+      ...(network ? { network } : {}),
+      // baseUrl only — the stored orthanc password never echoes back.
+      ...(orthanc ? { orthanc: { baseUrl: orthanc.baseUrl } } : {}),
+      ...(runtime ? { runtime } : {}),
+    };
   };
 
   app.get('/api/v1/setup/status', async () => status());
@@ -122,6 +171,7 @@ export function registerSetupRoutes(app: FastifyInstance, opts: SetupRoutesOptio
     settings.set('facility', input.facility);
     settings.set('domains', input.domains);
     if (input.network) settings.set('network', input.network);
+    if (input.orthanc) settings.set('orthanc', input.orthanc);
     settings.set('firstBootComplete', { complete: true, completedAt: now });
 
     // Mint the admin key at completion (shown exactly once). When a key with
@@ -156,6 +206,15 @@ export function registerSetupRoutes(app: FastifyInstance, opts: SetupRoutesOptio
     if (patch.network) {
       const current = settings.get<NetworkSettings>('network') ?? { host: '0.0.0.0', devicePort: 5000, httpPort: 3000, tls: false };
       settings.set('network', { ...current, ...patch.network });
+    }
+    if (patch.orthanc) {
+      const current = settings.get<OrthancSettings>('orthanc') ?? { baseUrl: 'http://127.0.0.1:8042' };
+      const merged: OrthancSettings = {
+        baseUrl: patch.orthanc.baseUrl ?? current.baseUrl,
+        ...(patch.orthanc.username !== undefined ? { username: patch.orthanc.username ?? undefined } : current.username !== undefined ? { username: current.username } : {}),
+        ...(patch.orthanc.password !== undefined ? { password: patch.orthanc.password ?? undefined } : current.password !== undefined ? { password: current.password } : {}),
+      };
+      settings.set('orthanc', merged);
     }
     return { ok: true, ...status() };
   });

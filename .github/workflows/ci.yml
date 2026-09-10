@@ -1,0 +1,124 @@
+# CI for the Integration Hub (repo's first workflow — added with W2.5).
+#
+# Two jobs:
+#   test      — typecheck + the full test suite with Postgres up, so the
+#               DB-gated tests (pg-*.test.ts, 32 of them locally) actually run
+#               instead of skipping. They gate on TEST_DATABASE_URL/DATABASE_URL.
+#   installer — build BOTH Windows installer variants (W2.5 base + W3
+#               `--orthanc` imaging bundle) exactly like local
+#               `npm run installer:build`: stage the payload, then compile
+#               NSIS inside debian:bookworm-slim (apt nsis) — no Windows
+#               runner needed. Each exe is uploaded as its own artifact.
+#
+# Node is pinned from .nvmrc because better-sqlite3@13 segfaults on Node 21
+# (documented in the W1 notes); ubuntu-latest's default Node is not trusted.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hub
+          POSTGRES_PASSWORD: hub
+          POSTGRES_DB: hub
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U hub -d hub"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Node version
+        id: node
+        run: echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "${{ steps.node.outputs.version }}"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (with Postgres — DB-gated tests run, not skip)
+        env:
+          TEST_DATABASE_URL: postgres://hub:hub@localhost:5434/hub
+        run: npm test
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Node version
+        id: node
+        run: echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "${{ steps.node.outputs.version }}"
+          cache: npm
+
+      # Stage ONCE with --orthanc: the superset payload (hub + orthanc dir)
+      # serves both variants — the base compile just ignores payload/orthanc.
+      - name: Stage the payload (incl. the W3 orthanc bundle)
+        run: bash packaging/installer/build.sh --stage --orthanc
+
+      # Two variants from one stage: the bundle compiles with -DORTHANC.
+      # Compile the bundle FIRST and rename it — both OutFiles are the same
+      # default name, and the base compile then lands under the canonical name.
+      - name: Compute the artifact names
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Compile both installers (makensis in debian:bookworm-slim)
+        run: |
+          VERSION=$VERSION
+          docker run --rm \
+            -v "$PWD/packaging/installer:/src" -w /src \
+            debian:bookworm-slim \
+            bash -c "apt-get update -qq \
+              && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nsis nsis-common \
+              && makensis -V2 -DVERSION=$VERSION -DORTHANC hub.nsi \
+              && mv build/IntegrationHub-$VERSION-setup.exe build/IntegrationHub-$VERSION-orthanc-setup.exe \
+              && makensis -V2 -DVERSION=$VERSION hub.nsi"
+
+      - name: Verify the artifacts
+        run: |
+          test -f "packaging/installer/build/IntegrationHub-$VERSION-setup.exe"
+          test -f "packaging/installer/build/IntegrationHub-$VERSION-orthanc-setup.exe"
+          ls -la packaging/installer/build/
+
+      - name: Upload the base installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: IntegrationHub-${{ github.sha }}-setup.exe
+          # Exact names — the *-setup.exe glob would also match the orthanc exe.
+          path: packaging/installer/build/IntegrationHub-${{ env.VERSION }}-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the imaging-bundle installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: IntegrationHub-${{ github.sha }}-orthanc-setup.exe
+          path: packaging/installer/build/IntegrationHub-${{ env.VERSION }}-orthanc-setup.exe
+          if-no-files-found: error
+          retention-days: 14

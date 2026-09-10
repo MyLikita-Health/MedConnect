@@ -493,7 +493,11 @@ export function renderUi(): string {
     <fieldset style="border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:8px 10px">
       <legend>Domains</legend>
       <label style="margin-right:16px"><input type="checkbox" id="setup-lab" checked/> Laboratory (ASTM/HL7 results)</label>
-      <label><input type="checkbox" id="setup-imaging"/> Imaging (DICOM via Orthanc — requires ORTHANC_URL)</label>
+      <label><input type="checkbox" id="setup-imaging" onchange="document.getElementById('setup-imaging-block').style.display=this.checked?'':'none'"/> Imaging (DICOM via Orthanc — W3 bundles a local service)</label>
+    </fieldset>
+    <fieldset id="setup-imaging-block" style="display:none;border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:8px 10px">
+      <legend>Imaging endpoint (Orthanc REST — AGPL, out-of-process)</legend>
+      <label>Orthanc REST URL<br/><input id="setup-orthanc-url" placeholder="http://127.0.0.1:8042 (the W3 local bundle)" style="width:100%"/></label>
     </fieldset>
     <div class="modal-actions">
       <button id="setup-btn" onclick="completeSetup()">Finish setup</button>
@@ -882,6 +886,9 @@ async function completeSetup() {
           lab: document.getElementById('setup-lab').checked,
           imaging: document.getElementById('setup-imaging').checked,
         },
+        ...(document.getElementById('setup-imaging').checked
+          ? { orthanc: { baseUrl: document.getElementById('setup-orthanc-url').value.trim() || 'http://127.0.0.1:8042' } }
+          : {}),
       }),
     });
     const body = await res.json();

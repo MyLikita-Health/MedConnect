@@ -8,6 +8,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./mock": {
+      "types": "./src/mock-orthanc.ts",
+      "default": "./src/mock-orthanc.ts"
     }
   },
   "dependencies": {

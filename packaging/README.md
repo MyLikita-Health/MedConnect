@@ -34,6 +34,11 @@ distribution-time step (W4/delivery), not a build gate.
 ```bash
 npm run installer:build          # stages payload + compiles the NSIS script
 # → packaging/installer/build/IntegrationHub-<version>-setup.exe
+
+bash packaging/installer/build.sh --stage --orthanc   # + W3 imaging bundle
+npm run installer:build -- --orthanc                  # same, + compile
+# → the installer registers a SECOND service (integration-hub-orthanc) and
+#   carries ORTHANC_URL in the hub's service env — see below.
 ```
 
 `build.sh` fetches node.exe, WinSW and the sqlite win32 prebuild into
@@ -59,9 +64,30 @@ All three run the same entry (`packages/server/src/service-cli.ts`), which drive
 state, file logging, first-boot setup surface). Supervision semantics stay in
 `HubSupervisor` — the OS keeps exactly ONE process alive.
 
-## Remaining checklist (W3/W4)
+## W3 imaging bundle (`--orthanc`, optional)
 
-- [ ] Orthanc bundling as a separate Windows process (W3, AGPL boundary: out-of-process, REST-only).
+`build.sh --orthanc` stages the **official Orthanc Windows build**
+(`Orthanc.exe`, pinned version) + the prebuilt **ModalityWorklists.dll** (the
+MWL plugin) from `orthanc.uclouvain.be` beside the hub payload. The installer
+then:
+
+- installs `Orthanc.exe` + `OrthancHub.exe` (a second WinSW shim) under
+  `<install>\orthanc`, with `orthanc.json` written at install time;
+- registers its OWN service `integration-hub-orthanc` (adjacent AGPL process —
+  the §3.2 boundary is unchanged: REST-only contact, never embedded/linked);
+- keeps REST localhost-only (`RemoteAccessAllowed: false`, auth disabled — the
+  hub is the only client) and opens DICOM `4242` for modalities on the
+  private-profile firewall (never public);
+- puts Orthanc data under `%ProgramData%\IntegrationHub\orthanc` (deleted only
+  with the data-dir prompt's explicit consent at uninstall);
+- adds `ORTHANC_URL=http://127.0.0.1:8042` to the hub's service env, so the
+  MWL + modality monitors wire up on first boot (M3.2/C6) and Orthanc shows in
+  the Devices panel like any other device.
+
+## Remaining checklist (W4)
+
+- [x] Orthanc bundling as a separate Windows process (W3 — `--orthanc`; AGPL boundary: out-of-process, REST-only).
+- [x] LAN device-connectivity polish (W3 — private-profile firewall rules for the device + DICOM ports; wizard network/imaging settings apply on restart).
 - [ ] Authenticode code signing + the distribution story (W4/delivery).
 - [ ] Update delivery on top of the signed-update supervisor (W4).
 - [ ] First-boot smoke on a real Windows box: install → service starts → console
