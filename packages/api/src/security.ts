@@ -120,6 +120,10 @@ export const ROUTE_SCOPES: Record<string, ApiScope> = {
   // are config:write (admin) — later changes go through normal RBAC.
   'GET /api/v1/setup/settings': 'config:write',
   'PATCH /api/v1/setup/settings': 'config:write',
+  // W4 cloud pairing: status is public (no secrets); the CLAIM is public
+  // only while unpaired (auth hook special case, like setup completion —
+  // the pairing code itself is the credential); unpair is config:write.
+  'POST /api/v1/pairing/unpair': 'config:write',
   // D3 webhook event bus (config:write — engineer and up)
   'POST /api/v1/webhooks': 'config:write',
   'PATCH /api/v1/webhooks/:id': 'config:write',
@@ -172,11 +176,20 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   // completion route is handled separately in the auth hook — public only
   // while the hub is unconfigured; it 403s itself once done (fail closed).
   '/api/v1/setup/status',
+  // W4 cloud pairing: status is public (no secrets — gateway/facility ids
+  // only). The claim is handled in the auth hook — public only while
+  // unpaired; it 409s itself once paired (fail closed).
+  '/api/v1/pairing/status',
 ]);
 
 /** W2 setup completion: public ONLY while the hub is unconfigured. The auth
  *  hook consults this when the caller presented no valid key. */
 export const SETUP_COMPLETE_ROUTE = 'POST /api/v1/setup/complete';
+
+/** W4 pairing claim: public ONLY while the hub is unpaired (same pattern —
+ *  the pairing code itself is the credential, and the route 409s itself once
+ *  paired). The auth hook consults this when no valid key was presented. */
+export const PAIRING_CLAIM_ROUTE = 'POST /api/v1/pairing/claim';
 
 // ---------------------------------------------------------------------------
 // Key model + stores

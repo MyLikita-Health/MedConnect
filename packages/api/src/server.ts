@@ -34,6 +34,7 @@ import type { AuditStore, KeyStore } from './security.js';
 import { InMemoryAuditStore, PUBLIC_ROUTES, ROUTE_SCOPES, roleHasScope, secretNeverSeen, type ApiScope } from './security.js';
 import { registerFleetRoutes, type FleetRoutesOptions } from './fleet.js';
 import { registerSetupRoutes, type SetupRoutesOptions } from './setup.js';
+import { registerPairingRoutes, type PairingRoutesOptions, type PairingState as PairingStateLike } from './pairing.js';
 import { registerFhirRoutes } from './fhir.js';
 import { registerWebhookRoutes } from './webhooks.js';
 import { renderUi } from './ui.js';
@@ -176,6 +177,12 @@ export interface ApiServerOptions {
    * key exactly once) while unconfigured; auth'd settings edits after.
    */
   setup?: SetupRoutesOptions;
+  /**
+   * W4 cloud-pairing surface (docs/windows-desktop-installer.md §8.4):
+   * /api/v1/pairing/* — public status + one-shot claim (proxies the H3
+   * provisioning bundle) + auth'd unpair. Present on the local edge.
+   */
+  pairing?: PairingRoutesOptions;
 }
 
 const createKeySchema = z.object({
@@ -366,6 +373,14 @@ export class ApiServer {
           // to present — the flow itself mints it). Once configured the route
           // 403s itself (fail closed), and everything else stays 401.
           if (req.method === 'POST' && pattern === '/api/v1/setup/complete' && this.opts.setup && !this.opts.setup.settings.isConfigured()) {
+            req.auth = undefined;
+            return;
+          }
+          // W4 cloud pairing: the claim is public only while UNPAIRED — the
+          // pairing code in the body is the credential. Once paired the route
+          // 409s itself (fail closed) and re-pairing needs an explicit
+          // authenticated unpair first.
+          if (req.method === 'POST' && pattern === '/api/v1/pairing/claim' && this.opts.pairing && !this.opts.pairing.settings.get<PairingStateLike>('pairing')) {
             req.auth = undefined;
             return;
           }
@@ -723,6 +738,7 @@ export class ApiServer {
     // routes through PUBLIC_ROUTES while unconfigured; the completion route
     // itself re-checks and 403s once configured (fail closed).
     if (this.opts.setup) registerSetupRoutes(app, this.opts.setup);
+    if (this.opts.pairing) registerPairingRoutes(app, this.opts.pairing);
 
     // Security endpoints (only meaningful with auth enabled): identify the
     // calling key, manage API keys, and query the audit log.

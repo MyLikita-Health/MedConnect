@@ -18,6 +18,7 @@ const nsi = readFileSync(join(packagingDir, 'installer', 'hub.nsi'), 'utf8');
 const buildSh = readFileSync(join(packagingDir, 'installer', 'build.sh'), 'utf8');
 const serviceTpl = readFileSync(join(packagingDir, 'installer', 'service.xml.tpl'), 'utf8');
 const serviceCli = readFileSync(join(repoRoot, 'scripts', 'service-cli.ts'), 'utf8');
+const serverIndex = readFileSync(join(repoRoot, 'packages', 'server', 'src', 'index.ts'), 'utf8');
 const serviceDoc = readFileSync(join(repoRoot, 'docs', 'windows-service.md'), 'utf8');
 
 test('hub.nsi installs the staged payload: node.exe, WinSW shim, app/ workspace', () => {
@@ -100,6 +101,22 @@ test('W3 orthanc bundle: staged beside the payload, own service, AGPL boundary i
   const hubStop = unSection.indexOf('IntegrationHub.exe" stop');
   assert.ok(orthancStop >= 0 && orthancStop < hubStop, 'orthanc service stopped first (dependency order)');
   assert.match(unSection, /RMDir \/r "\$INSTDIR\\orthanc"/, 'bundle removed with the payload');
+});
+
+test('W4 signed-update delivery: installer injects the agent env, agent consumes it', () => {
+  // Compile-time opt-in with both defines (an update channel is USELESS
+  // without the pinned signing key — verify-not-trust).
+  assert.match(nsi, /!ifdef UPDATES/, 'compile-time opt-in');
+  assert.match(nsi, /UPDATE_SOURCE/, 'the manifest source is injected into the service env');
+  assert.match(nsi, /UPDATE_PUBLIC_KEY/, 'the pinned Ed25519 key rides the service env');
+  // The hub-side consumer (the agent runs inside the supervised service;
+  // startHub reads the same env names the installer writes).
+  assert.match(serverIndex, /UPDATE_SOURCE/, 'startHub reads the injected env');
+  assert.match(serverIndex, /UPDATE_PUBLIC_KEY/, 'startHub reads the pinned key');
+  assert.match(serverIndex, /new UpdateAgent/, 'the agent is constructed at boot');
+  // The service template documents the optional env block (kept in sync with
+  // the NSIS writer, like the W2.5/W3 pairs).
+  assert.match(serviceTpl, /W4 update delivery/, 'the template documents the UPDATES block');
 });
 
 test('package.json wires installer:build / installer:stage', () => {

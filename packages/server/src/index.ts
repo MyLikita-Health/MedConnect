@@ -19,6 +19,7 @@ import { MwlMonitor } from './mwl-monitor.js';
 import { ACME_CHEM_200_PROFILE, AlertService, DEFAULT_UNIT_CATALOG, Dispatcher, EventBus, InMemoryAdmissionRegistry, InMemoryAlertStore, InMemoryDedupStore,  InMemoryOrderRegistry, InMemoryProfileStore, InMemoryRouteStore, InMemoryGatewayRegistry, OutboxSyncer, PostgresAdmissionRegistry, PostgresAlertStore, PostgresDedupStore, PostgresOrderRegistry, PostgresProfileStore, PostgresRouteStore, PostgresWebhookStore, REFERENCE_PROFILE, UpdateAgent, loadGoldenForProfile, type AdmissionRegistry, type AlertRule, type AlertStore, type Destination, type DispatcherOptions, type OrderRegistry, type ProfileStore, type RouteStore, type ValidationConfig, type WebhookEventType, type WebhookSubscription } from '@integration-hub/core';
 import { evaluateEntitlement, type FleetRoutesOptions } from '@integration-hub/api';
 import type { NetworkSettings, OrthancSettings } from '@integration-hub/api';
+import type { CloudSyncSettings, PairingState } from '@integration-hub/api';
 import type { Pool } from 'pg';
 
 /** PEM key + cert pair (HUB_TLS_KEY / HUB_TLS_CERT). */
@@ -210,6 +211,8 @@ export interface Hub {
         listeners?: () => { host: string; device?: number; hl7?: number; http?: number };
       }
     | undefined;
+  /** W4 cloud-pairing surface (local mode) — shares the settings store. */
+  pairing?: { settings: SqliteLocalSettingsStore } | undefined;
   stop(): Promise<void>;
   cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
 }
@@ -247,7 +250,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
   // D11 edge→cloud sync (env fallback: the H3 provisioning bundle writes these
   // into the edge's environment/state dir; opts win).
-  const cloudSyncOpts = opts.cloudSync
+  let cloudSyncOpts: HubOptions['cloudSync'] = opts.cloudSync
     ? opts.cloudSync
     : process.env.HUB_CLOUD_URL && process.env.HUB_GATEWAY_ID && process.env.HUB_GATEWAY_KEY
       ? {
@@ -293,11 +296,22 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     if (!opts.mappings) sqliteStore.setMappings(DEFAULT_MAPPINGS);
     mappings = opts.mappings ?? sqliteStore.getMappings();
     // D11 write-through on a paired edge: the outbox is the sync backlog AND
-    // the local crash-recovery journal (same-transaction append, G4).
-    if (cloudSyncOpts) {
+    // the local crash-recovery journal (same-transaction append, G4). W4: the
+    // stored pairing counts too — a cloud-paired SQLite edge (via the W4
+    // pairing flow, no env) gets the same outbox + tenancy stamps.
+    const sqliteSync = cloudSyncOpts ?? storedCloudSync(localSettings);
+    if (sqliteSync) {
       const outbox = new SqliteOutbox(sqliteDb);
       sqliteStore.outbox = outbox;
       sqliteDevices.outbox = outbox;
+      // W1-prepared H1/W4 tenancy stamps: every message/device row is marked
+      // with the facility it ships for (the cloud routes on the stamps).
+      const pairing = localSettings?.get<PairingState>('pairing');
+      if (pairing?.state === 'paired') {
+        const tenancy = { orgId: pairing.orgId ?? '', facilityId: pairing.facilityId };
+        sqliteStore.tenancy = tenancy;
+        sqliteDevices.tenancy = tenancy;
+      }
     }
   } else if (databaseUrl) {
     pool = createDbPool(databaseUrl);
@@ -402,6 +416,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       orthancPass = orthancPass ?? orthanc.password;
       console.log(`[setup]   imaging enabled — Orthanc at ${orthancUrl}`);
     }
+    // W4 cloud pairing (§8.4): a paired edge syncs without any env — the
+    // stored bundle fills the cloud-sync config (env/opts still win).
+    if (!cloudSyncOpts) {
+      const stored = storedCloudSync(localSettings);
+      if (stored) {
+        cloudSyncOpts = stored;
+        console.log(`[setup]   paired to ${stored.cloudBaseUrl} as gateway ${stored.gatewayId} (from the pairing flow)`);
+      }
+    }
   }
 
   // M2 security: every API call is authenticated by default. Bootstrap an
@@ -484,6 +507,8 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   // outbound-only channel. Started only when configured (a plain edge or a
   // cloud instance has nothing to ship). Never blocks the pipeline: failures
   // log + retry on the next tick; the outbox IS the durable backlog.
+  // W4: the SQLite edge syncs too (the W1 outbox behind the same OutboxSyncer
+  // seam) — a paired edge must not grow an endless local backlog.
   let syncer: OutboxSyncer | undefined;
   if (cloudSyncOpts && pool) {
     const outbox = new PostgresOutbox(pool);
@@ -495,6 +520,15 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     });
     syncer.start();
     console.log(`[sync]    outbox syncer enabled — shipping to ${cloudSyncOpts.cloudBaseUrl} as gateway ${cloudSyncOpts.gatewayId}`);
+  } else if (cloudSyncOpts && sqliteDb) {
+    syncer = new OutboxSyncer({
+      reader: new SqliteOutbox(sqliteDb),
+      ...cloudSyncOpts,
+      pollMs: cloudSyncOpts.pollMs ?? (Number.isFinite(Number(process.env.HUB_SYNC_POLL_MS)) && Number(process.env.HUB_SYNC_POLL_MS) > 0 ? Number(process.env.HUB_SYNC_POLL_MS) : undefined),
+      log: (line) => console.log(line),
+    });
+    syncer.start();
+    console.log(`[sync]    outbox syncer enabled (SQLite edge) — shipping to ${cloudSyncOpts.cloudBaseUrl} as gateway ${cloudSyncOpts.gatewayId}`);
   }
 
   // H3/H2/H4/H5 — the fleet surface (cloud instances only; needs the org).
@@ -947,8 +981,9 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     fleet,
     // W2 first-boot setup surface (local mode) — undefined elsewhere.
     // W3 §8.3: the status route also reports the bound listeners.
+    // W4 §8.4: the cloud-pairing surface (status/claim/unpair) on the edge.
     ...(localSetupEnabled && localSettings
-      ? { setup: { settings: localSettings, keys, listeners: setupListeners } }
+      ? { setup: { settings: localSettings, keys, listeners: setupListeners }, pairing: { settings: localSettings } }
       : {}),
     alerts: alertStore,
     profiles: profileStore,
@@ -1007,7 +1042,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
     ...(sqliteDb ? { sqlite: { db: sqliteDb, file: sqliteFile } } : {}),
-    ...(localSetupEnabled && localSettings ? { setup: { settings: localSettings, keys, listeners: setupListeners } } : {}),
+    ...(localSetupEnabled && localSettings ? { setup: { settings: localSettings, keys, listeners: setupListeners }, pairing: { settings: localSettings } } : {}),
     stop: async () => {
       if (mwl) await mwl.stop();
       if (modalities) await modalities.stop();
@@ -1033,6 +1068,19 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
  * the active mapping table (canonical codes); unit and plausibility rules are
  * conservative (warn-level) so the safe matching hold stays the main gate.
  */
+
+/**
+ * W4 §8.4 — the cloud-sync config a COMPLETED pairing persisted (settings
+ * keys `pairing` + `cloud`). Undefined when unpaired or incomplete (a torn
+ * claim must never half-enable syncing).
+ */
+function storedCloudSync(settings: SqliteLocalSettingsStore | undefined): { cloudBaseUrl: string; gatewayId: string; apiKey: string } | undefined {
+  if (!settings) return undefined;
+  const pairing = settings.get<PairingState>('pairing');
+  const cloud = settings.get<CloudSyncSettings>('cloud');
+  if (pairing?.state !== 'paired' || !cloud?.gatewayKey || !cloud.cloudBaseUrl) return undefined;
+  return { cloudBaseUrl: cloud.cloudBaseUrl, gatewayId: pairing.gatewayId, apiKey: cloud.gatewayKey };
+}
 
 /** Reads HUB_TLS_CERT / HUB_TLS_KEY (file paths) when both are set. */
 async function loadTlsFromEnv(): Promise<HubTls | undefined> {

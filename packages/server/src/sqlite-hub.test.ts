@@ -261,3 +261,135 @@ test('W3: stored network + imaging settings apply on restart (mock Orthanc over 
 
   await hub2.stop();
 });
+
+test('W4 pairing → restart → the paired edge ships its outbox to the cloud (docs §8.4 exit proof b)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'hub-pairing-e2e-'));
+  const file = join(dir, 'hub.sqlite');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Hermetic: no ambient admin key; a fast sync poll for the test window.
+  const savedAdminKey = process.env.HUB_ADMIN_KEY;
+  const savedSyncPoll = process.env.HUB_SYNC_POLL_MS;
+  delete process.env.HUB_ADMIN_KEY;
+  process.env.HUB_SYNC_POLL_MS = '50';
+  t.after(() => {
+    if (savedAdminKey !== undefined) process.env.HUB_ADMIN_KEY = savedAdminKey;
+    else delete process.env.HUB_SYNC_POLL_MS;
+    if (savedSyncPoll !== undefined) process.env.HUB_SYNC_POLL_MS = savedSyncPoll;
+  });
+
+  // ---------- The mock cloud: H3 claim + D11 ingest on one origin ----------
+  const BUNDLE = {
+    gateway: { id: 'gw-1', name: 'St. Mary edge', facilityId: 'fac-9', orgId: 'org-7' },
+    cloud: { baseUrl: '', ingestPath: '/api/v1/sync/ingest' }, // stamped after bind
+    apiKey: 'ihk_gw_secret_1234567890',
+    tenancy: { orgId: 'org-7', facilityId: 'fac-9' },
+    claimedAt: '2026-09-10T00:00:00.000Z',
+  };
+  interface Ingest { gateway?: string; authorization?: string; entries: Array<Record<string, unknown>> }
+  const ingests: Ingest[] = [];
+  let claims = 0;
+  const { createServer } = await import('node:http');
+  const cloudServer = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.method === 'POST' && req.url === '/api/v1/provision/claim') {
+      claims += 1;
+      res.writeHead(201).end(JSON.stringify(BUNDLE));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/v1/sync/ingest') {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString() || '{}') as { entries?: Array<{ seq: number }> };
+        const entries = body.entries ?? [];
+        ingests.push({
+          gateway: typeof req.headers['x-hub-gateway'] === 'string' ? req.headers['x-hub-gateway'] : undefined,
+          authorization: typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined,
+          entries: entries as Array<Record<string, unknown>>,
+        });
+        const through = entries.length > 0 ? Math.max(...entries.map((e) => Number(e.seq))) : 0;
+        res.writeHead(200).end(JSON.stringify({ appliedThrough: through }));
+      });
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  await new Promise<void>((resolve) => cloudServer.listen(0, '127.0.0.1', resolve));
+  const cloudPort = (cloudServer.address() as { port: number }).port;
+  BUNDLE.cloud.baseUrl = `http://127.0.0.1:${cloudPort}`;
+  t.after(() => new Promise<void>((resolve) => cloudServer.close(() => resolve())));
+
+  // ---------- Boot 1: complete setup, then pair via the API ----------
+  const hub1 = await startHub({ sqlite: { file }, httpPort: 0, devicePort: 0, seedDefaultAlerts: false });
+  t.after(() => hub1.stop().catch(() => undefined));
+  const base1 = `http://127.0.0.1:${hub1.ports.http}`;
+
+  const complete = await fetch(`${base1}/api/v1/setup/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ facility: { name: 'St. Mary Lab', orgSlug: 'st-mary' }, domains: { lab: true } }),
+  });
+  assert.equal(complete.status, 201, 'setup completion succeeds');
+  const { adminKey } = (await complete.json()) as { adminKey?: { secret: string } };
+  assert.ok(adminKey?.secret);
+
+  assert.ok(!hub1.syncer, 'an unpaired edge runs no syncer');
+
+  const claim = await fetch(`${base1}/api/v1/pairing/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cloudBaseUrl: BUNDLE.cloud.baseUrl, pairingCode: 'ihp_e2e-code-123' }),
+  });
+  assert.equal(claim.status, 201, 'the claim succeeds against the mock cloud');
+  assert.equal(claims, 1);
+  assert.ok(hub1.pairing, 'the pairing surface is mounted');
+  const paired = (await fetch(`${base1}/api/v1/pairing/status`).then((r) => r.json())) as { paired: boolean; gatewayId: string };
+  assert.equal(paired.paired, true);
+  assert.equal(paired.gatewayId, 'gw-1');
+  // The outbox attaches at boot — pairing at runtime takes effect on restart
+  // (the service model: operators pair once, the service picks it up).
+  assert.ok(!hub1.syncer, 'the runtime hub does not hot-attach the syncer; restart does');
+
+  await hub1.stop();
+
+  // ---------- Boot 2: the stored pairing drives the syncer ----------
+  const hub2 = await startHub({ sqlite: { file }, httpPort: 0, devicePort: 0, seedDefaultAlerts: false });
+  t.after(() => hub2.stop().catch(() => undefined));
+  assert.ok(hub2.syncer, 'the paired edge boots a syncer from stored settings (no env)');
+
+  // A write with tenancy stamps lands in the outbox (the device write-through).
+  const reg = await fetch(`http://127.0.0.1:${hub2.ports.http}/api/v1/devices`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminKey.secret}` },
+    body: JSON.stringify({ id: 'analyzer-1', name: 'Sysmex XN', protocol: 'ASTM', transport: 'tcp' }),
+  });
+  assert.equal(reg.status, 201, 'device registration succeeds on the paired edge');
+
+  // The syncer ships it: the mock ingest sees the batch with the H3 identity.
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && ingests.length === 0) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(ingests.length >= 1, true, 'the syncer shipped at least one batch to the cloud');
+  const batch = ingests[0]!;
+  assert.equal(batch.gateway, 'gw-1', 'the gateway identity rides the header');
+  assert.equal(batch.authorization, `Bearer ihk_gw_secret_1234567890`, 'the claimed gateway key authenticates the ingest');
+  assert.equal(batch.entries.length >= 1, true);
+  const deviceRow = batch.entries.find((e) => e['table'] === 'devices');
+  assert.ok(deviceRow, 'the device write reached the outbox');
+  assert.equal(deviceRow?.['facilityId'], 'fac-9', 'rows carry the paired facility stamp (H1/W4)');
+  assert.equal(deviceRow?.['orgId'], 'org-7', 'rows carry the paired org stamp');
+
+  // And the cloud acked it: the local outbox drains (no endless backlog).
+  const deadline2 = Date.now() + 5000;
+  let pending = -1;
+  while (Date.now() < deadline2) {
+    pending = (hub2.sqlite!.db.prepare('SELECT COUNT(*) AS c FROM outbox WHERE acked = 0').get() as { c: number }).c;
+    if (pending === 0) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(pending, 0, 'acked rows drain — the outbox is not an endless backlog');
+
+  await hub2.stop();
+});

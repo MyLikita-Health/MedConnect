@@ -664,6 +664,27 @@ export function renderUi(): string {
   <!-- Right column -->
   <section>
 
+    <!-- Cloud pairing (W4 — shown when the pairing surface exists, local mode) -->
+    <div class="panel" id="pairing-panel" style="display:none">
+      <h2>Cloud pairing <span class="sub">pair this edge to a cloud org/facility (W4)</span></h2>
+      <div id="pairing-paired" style="display:none">
+        <p id="pairing-detail" class="muted" style="font-size:12px;margin:0 0 8px"></p>
+        <div class="btn-row">
+          <button class="ghost" onclick="unpairHub()">Unpair</button>
+          <span class="muted" id="pairing-result" style="font-size:12px;align-self:center"></span>
+        </div>
+      </div>
+      <div id="pairing-unpaired">
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Enter the cloud base URL and the pairing code from the cloud admin. The gateway key comes back to the hub only — it is never displayed.</p>
+        <div class="key-add-row" style="flex-wrap:wrap">
+          <label>Cloud URL <input id="pairing-url" placeholder="https://cloud.example.com" style="width:220px"/></label>
+          <label>Pairing code <input id="pairing-code" placeholder="ihp_…" style="width:180px"/></label>
+          <button onclick="claimPairing()">Pair</button>
+          <span class="muted" id="pairing-result" style="font-size:12px;align-self:center"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- Fleet (M4 cloud — shown when the hub runs the fleet surface) -->
     <div class="panel" id="fleet-panel" style="display:none">
       <h2>Fleet <span class="sub">facilities + gateways (M4 cloud)</span></h2>
@@ -825,10 +846,12 @@ async function refresh() {
   // M4 fleet surface: 404/501 on a plain edge — the panel stays hidden there.
   const fleetReq = api('/api/v1/fleet/overview').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null }));
   const fleetGatewaysReq = api('/api/v1/fleet/gateways').then(async r => r.ok ? r.json() : []);
+  // W4 cloud pairing: status is public — no auth needed, 404 when absent.
+  const pairingReq = fetch(apiBase + '/api/v1/pairing/status').then(async r => ({ on: r.ok, body: r.ok ? await r.json() : null })).catch(() => ({ on: false, body: null }));
   // D3 webhook event bus: subscription + delivery views (api:read — any role).
   const webhooksReq   = api('/api/v1/webhooks').then(async r => r.ok ? r.json() : []);
   const deliveriesReq = api('/api/v1/webhooks/deliveries?limit=50').then(async r => r.ok ? r.json() : []);
-  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView, webhookSubs, webhookDeliveries, fleetView, fleetGateways] = await Promise.all([
+  const [health, stats, devices, admissions, alerts, messages, profiles, keys, imagingView, mwlView, webhookSubs, webhookDeliveries, fleetView, fleetGateways, pairingView] = await Promise.all([
     api('/api/v1/health').then(r => r.json()),
     api('/api/v1/stats').then(r => r.json()),
     api('/api/v1/devices').then(r => r.json()),
@@ -843,6 +866,7 @@ async function refresh() {
     deliveriesReq,
     fleetReq,
     fleetGatewaysReq,
+    pairingReq,
   ]);
     const h = document.getElementById('health');
     h.textContent = health.status === 'ok' ? 'online' : 'degraded';
@@ -852,6 +876,7 @@ async function refresh() {
     renderStats(stats);
     renderDevices(devices);
     renderAdmissions(admissions);
+    renderPairing(pairingView);
     renderAlerts(alerts);
     renderMessages(messages);
     renderProfiles(profiles);
@@ -914,6 +939,68 @@ async function completeSetup() {
     out.textContent = 'setup failed: ' + err.message;
   } finally {
     btn.disabled = false;
+  }
+}
+
+/* ── Cloud pairing (W4) ───────────────────────────────────────────── */
+function renderPairing(pairing) {
+  const panel = document.getElementById('pairing-panel');
+  if (!pairing || !pairing.on || !pairing.body) {
+    panel.style.display = 'none'; // no pairing surface (cloud/PG mode)
+    return;
+  }
+  panel.style.display = '';
+  const b = pairing.body;
+  document.getElementById('pairing-paired').style.display = b.paired ? '' : 'none';
+  document.getElementById('pairing-unpaired').style.display = b.paired ? 'none' : '';
+  if (b.paired) {
+    const name = b.gatewayName ? esc(b.gatewayName) + ' · ' : '';
+    document.getElementById('pairing-detail').textContent =
+      'Paired to ' + name + esc(b.gatewayId) + ' — facility ' + esc(b.facilityId) +
+      (b.syncEndpoint ? ' — syncing via ' + esc(b.syncEndpoint) : '') +
+      (b.claimedAt ? ' (since ' + new Date(b.claimedAt).toLocaleString() + ')' : '');
+  }
+}
+async function claimPairing() {
+  const resEl = document.getElementById('pairing-result');
+  const btn = resEl.closest('.key-add-row').querySelector('button');
+  const cloudBaseUrl = document.getElementById('pairing-url').value.trim();
+  const pairingCode = document.getElementById('pairing-code').value.trim();
+  if (!cloudBaseUrl || !pairingCode) { resEl.textContent = 'Cloud URL and pairing code are both required.'; return; }
+  btn.disabled = true; resEl.textContent = 'Pairing…';
+  try {
+    const r = await fetch(apiBase + '/api/v1/pairing/claim', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cloudBaseUrl, pairingCode }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) {
+      resEl.textContent = '';
+      document.getElementById('pairing-url').value = '';
+      document.getElementById('pairing-code').value = '';
+      await refresh();
+    } else {
+      resEl.textContent = body.message || body.error || ('Pairing failed (' + r.status + ')');
+    }
+  } catch (e) {
+    resEl.textContent = 'Pairing failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function unpairHub() {
+  if (!confirm('Unpair this hub? The cloud sync credential stops working; local data stays.')) return;
+  const resEl = document.getElementById('pairing-result');
+  try {
+    const r = await api('/api/v1/pairing/unpair', { method: 'POST' });
+    if (r.ok) { resEl.textContent = ''; await refresh(); }
+    else {
+      const body = await r.json().catch(() => ({}));
+      resEl.textContent = body.message || ('Unpair failed (' + r.status + ') — admin role required');
+    }
+  } catch (e) {
+    resEl.textContent = 'Unpair failed: ' + e.message;
   }
 }
 

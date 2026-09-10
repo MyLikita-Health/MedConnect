@@ -14,6 +14,10 @@
   <env name="DEVICE_PORT" value="__DEVICE_PORT__"/>
   <!-- W2 first-boot setup: auto-on for the SQLite local edge -->
   <env name="HUB_LOCAL_SETUP" value="1"/>
+  <!-- W4 update delivery (written only when the installer is compiled with
+       /DUPDATES + /DUPDATE_SOURCE=… + /DUPDATE_PUBLIC_KEY=…): the in-hub
+       agent polls the signed-manifest source; the service process IS the
+       supervisor, so swaps are health-gated + auto-rollback in-place. -->
   <executable>%BASE%\node.exe</executable>
   <arguments>--import tsx %BASE%\app\packages\server\src\service-cli.ts</arguments>
   <workingdirectory>%BASE%\app</workingdirectory>

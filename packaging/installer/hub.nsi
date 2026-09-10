@@ -150,6 +150,14 @@ Section "Install"
   ; in the config written below).
   FileWrite $tmp '  <env name="ORTHANC_URL" value="http://127.0.0.1:8042"/>$\r$\n'
 !endif
+!ifdef UPDATES
+  ; W4 update delivery: the in-hub agent polls UPDATE_SOURCE for signed
+  ; manifests (Ed25519, UPDATE_PUBLIC_KEY pins the signing key) and stages
+  ; desired.json; the service process IS the HubSupervisor, so the swap is
+  ; health-gated + auto-rollback WITHOUT touching the SCM registration.
+  FileWrite $tmp '  <env name="UPDATE_SOURCE" value="${UPDATE_SOURCE}"/>$\r$\n'
+  FileWrite $tmp '  <env name="UPDATE_PUBLIC_KEY" value="${UPDATE_PUBLIC_KEY}"/>$\r$\n'
+!endif
   FileWrite $tmp '  <executable>%BASE%\\node.exe</executable>$\r$\n'
   FileWrite $tmp '  <arguments>--import tsx %BASE%\\app\\packages\\server\\src\\service-cli.ts</arguments>$\r$\n'
   FileWrite $tmp '  <workingdirectory>%BASE%\\app</workingdirectory>$\r$\n'

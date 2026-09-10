@@ -411,6 +411,80 @@ install/uninstall behavior and the data-dir layout (`hub.sqlite`, state dir, log
 - Make the local install cloud-pairing-ready: outbox + tenant context + pairing artifact, so later pairing to a cloud org/facility is a controlled flow rather than a re-install.
 - Settle Windows update delivery mechanics on top of the existing signed-update supervisor story.
 
+#### W4 plan (recorded before coding)
+
+1. **Pairing artifact (edge side)** — `packages/api/src/pairing.ts`: the H3
+   claim flow driven FROM the edge console. Settings keys in the same
+   `local_settings` store: `pairing` (state, gateway/facility/org identity,
+   claimedAt) + `cloud.*` (baseUrl, gatewayId, gatewayKey — the gateway key
+   is a credential at rest in the SQLite file, same trust domain as the
+   already-at-rest admin key hash + data). Routes: `GET
+   /api/v1/pairing/status` (public, no secrets), `POST /api/v1/pairing/claim`
+   (public ONLY while unpaired — the W2 setup-completion pattern, fail-closed
+   in the route AND the auth hook), `POST /api/v1/pairing/unpair`
+   (config:write). The claim proxies to `<cloudBaseUrl>/api/v1/provision/claim`
+   with the operator's pairing code, persists the returned bundle, and NEVER
+   echoes the gateway API key back over the API (it is for the syncer, not
+   the operator).
+2. **Syncer on SQLite** — the D11 syncer currently gates on `pool` (PG only);
+   the W1 outbox on a paired edge would grow forever. W4: when paired, the
+   SQLite stores get the outbox + tenancy stamps (the W1-prepared seams) and
+   `OutboxSyncer` runs against the stored cloud config. Precedence stays
+   opts > env > stored pairing (the W3 pattern). Sync starts at pairing time
+   — historical messages were never outboxed (no outbox attached before
+   pairing) and stay local by design.
+3. **Update delivery on Windows** — the service process IS the supervisor
+   (W2 service-cli), so a staged signed release swaps the hub child in-place
+   with health-gate + auto-rollback, without touching the SCM. W4 wires the
+   installer: `UPDATE_SOURCE` + `UPDATE_PUBLIC_KEY` land in the service env
+   (`!ifdef`), the agent becomes enabled on install, and docs record the
+   keygen/sign/verify loop (`scripts/update-cli.ts`). Artifact download
+   remains the existing manifest/env-level release mechanism (unchanged
+   scope); Authenticode stays distribution-time.
+4. **Exit proofs** — (a) pairing API tests: state machine + error mapping
+   (401/409/410 from the cloud) + one-shot claim (re-claim 403/409) + no
+   secret in any response; (b) SQLite e2e: claim against a mock cloud →
+   restart → syncer ships outbox rows to the mock ingest → acks drain the
+   backlog; unpair requires admin and survives restart; (c) installer
+   invariants for the update env lines.
+
+#### W4 resolution (implemented)
+
+- **Pairing flow (`packages/api/src/pairing.ts`)**: `GET
+  /api/v1/pairing/status` (public; identity + sync endpoint, never the key),
+  `POST /api/v1/pairing/claim` (public ONLY while unpaired — the W2
+  setup-completion pattern; the route checks fail-closed AND the auth hook
+  bypasses only while unpaired, so once paired every caller 403s at the
+  scope gate and re-pairing is unpair→claim), `POST /api/v1/pairing/unpair`
+  (config:write). The claim proxies the operator's pairing code to
+  `<cloudBaseUrl>/api/v1/provision/claim` (H3), maps cloud errors
+  (410 expired / 401 invalid / 409 consumed / 501→502 / timeout→504),
+  validates the returned bundle, and persists `pairing` + `cloud` settings
+  (the gateway key at rest in the SQLite file; never echoed back).
+- **Syncer on the paired edge**: `startHub` applies the stored bundle at
+  boot (opts > env > stored, the W3 precedence), attaches the W1 SQLite
+  outbox + H1 tenancy stamps, and runs `OutboxSyncer` against
+  `SqliteOutbox` — the same syncer the PG edge uses, one code path. The
+  outbox attaches at boot, so pairing at runtime takes effect on the next
+  restart (the service model: pair once, the service picks it up). Acked
+  rows drain; the outbox is never an endless backlog.
+- **Update delivery**: the installer takes `!ifdef UPDATES` (+
+  `UPDATE_SOURCE` / `UPDATE_PUBLIC_KEY` defines) and writes both into the
+  hub service env; `startHub` reads the same env names, and the agent runs
+  inside the supervised service — a staged signed release swaps the hub
+  child in-place with health-gate + auto-rollback, never touching the SCM
+  registration. Keygen/sign/verify stays `scripts/update-cli.ts`;
+  Authenticode stays distribution-time.
+- **Exit proofs**: (a) `pairing.test.ts` — full claim surface against a
+  mock cloud (bundle persisted at rest, no secret in any response,
+  fail-closed re-claim, RBAC'd unpair, restart persistence via store
+  close/reopen); (b) the extended `sqlite-hub.test.ts` — pair → restart →
+  the syncer boots from stored settings (no env), ships the device
+  write-through with `x-hub-gateway` + the claimed key and the paired
+  org/facility stamps, and acks drain the backlog; (c) `installer.test.ts`
+  pins the `UPDATES` env lines on both sides (NSIS writer + `startHub`
+  reader).
+
 ---
 
 ## 9. What is NOT in scope for the desktop track
