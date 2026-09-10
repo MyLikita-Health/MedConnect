@@ -141,6 +141,84 @@ To avoid blocking the current M4 cloud work, the Windows desktop track should be
 - Prove a fully-local, no-Docker run on Windows (or cross-platform where the same code path is used): SQLite store, listeners, routing, HELD, console, admin key, first-boot config.
 - Define "local mode" vs "cloud mode" vs "hybrid later" clearly in the plan.
 
+#### W1 implementation plan (recorded 2026-09-10, before coding)
+
+This is the concrete W1 build plan the implementation follows. It is recorded here so the
+code review and the plan-log (§13) can be checked against an intent, not reconstructed after.
+
+**Library: `better-sqlite3`** (dependency already added at W1 kickoff). It is synchronous,
+which is a feature here: an embedded single-writer store wants simple serialized access, and
+sync methods satisfy the `StoreBackend`/`DeviceBackend` contracts (`void | Promise<void>` —
+the API layer awaits everything either way). Prepared statements are reused; the DB handle is
+opened once per hub process.
+
+**Where the code lives: `packages/api/src/sqlite/`** — mirroring `packages/api/src/pg/` — with
+one deliberate asymmetry: core keeps several *Postgres* store impls (`PostgresRouteStore`,
+`PostgresDedupStore`, …) because they predate the split, but all *SQLite* impls are
+centralized in the api package so `@integration-hub/core` stays dependency-light domain logic
+(a native module like better-sqlite3 must not leak into it). SQLite impls:
+
+| Seam (contract) | SQLite class | File |
+| --- | --- | --- |
+| `StoreBackend` + `MessageSink` + mappings | `SqliteMessageStore` | `sqlite-store.ts` |
+| `DeviceBackend` | `SqliteDeviceRegistry` | `sqlite-devices.ts` |
+| `RouteStore` | `SqliteRouteStore` | `sqlite-core-stores.ts` |
+| `DedupStore` | `SqliteDedupStore` | `sqlite-core-stores.ts` |
+| `OrderRegistry` + `AdmissionRegistry` | `SqliteOrderRegistry` / `SqliteAdmissionRegistry` | `sqlite-core-stores.ts` |
+| `AlertStore` | `SqliteAlertStore` | `sqlite-core-stores.ts` |
+| `ProfileStore` | `SqliteProfileStore` | `sqlite-core-stores.ts` |
+| `WebhookSubscriptionStore` | `SqliteWebhookStore` | `sqlite-core-stores.ts` |
+| `OutboxReader` + `OutboxWriter` (D11) | `SqliteOutbox` | `sqlite-outbox.ts` |
+| `KeyStore` + `AuditStore` (M2) | `SqliteKeyStore` / `SqliteAuditStore` | `sqlite-security.ts` |
+| schema + migrations | `openSqliteDatabase` / `runSqliteMigrations` | `schema.ts` |
+
+**Schema:** SQLite-dialect DDL in `schema.ts` (the PG migration files are not valid SQLite —
+`jsonb`, `now()`, `timestamptz`), tracked in a `schema_migrations` table with the same
+apply-in-order / record-version runner pattern as the PG runner. Table and column names mirror
+the PG schema (0001–0015) so the mental model is identical: `messages`, `message_attempts`,
+`devices`, `orders`, `admissions`, `route_destinations`, `route_rules`, `dedup_keys`,
+`alert_rules`, `alerts`, `profiles`, `api_keys`, `audit_log`, `webhook_subscriptions`,
+`outbox`, `config` (JSON columns are TEXT holding JSON). `org_id`/`facility_id` columns exist
+from day one (null on a single-tenant edge) so the W4 cloud-pairing write-through is a
+data change, not a schema change.
+
+**Durability pragmas:** `journal_mode = WAL` (crash-safe, readers don't block the writer),
+`synchronous = FULL` (an acknowledged write survives power loss — the edge-resilience §7.G2
+bar; NORMAL is the tempting-but-wrong default for clinical results), `foreign_keys = ON`,
+`busy_timeout` set. One file under the state dir (`hub.sqlite`), created on first boot.
+
+**D11 outbox on SQLite:** same shape as `PostgresOutbox` — AUTOINCREMENT `seq`, `acked`
+flag, `listUnacked`/`markAcked`/`maxSeq`/`pendingCount`. `append` ignores the transaction
+`client` handle (allowed by the `OutboxWriter` contract): because better-sqlite3 is
+synchronous, the store methods wrap each write + outbox append in one
+`db.transaction(...)` — the no-dual-write invariant holds by construction. `OutboxSyncer`
+(core) drives it unchanged: the edge sync story is the same code path for PG and SQLite
+edges.
+
+**startHub wiring:** a third backend mode alongside PG and memory —
+`opts.sqlite?: { file?: string }`, env fallback `DB=sqlite` (+ `HUB_SQLITE_FILE`).
+Precedence: explicit `opts.sqlite` > `DB=sqlite` > `DATABASE_URL` (PG) > in-memory.
+`Hub.db` reports `{ kind: 'postgres' | 'sqlite' }`. Profile/mapping/alert seeding and the
+admin-key bootstrap run identically on all three backends (the seed paths already go through
+the store seams). Auth, routing, dedup, matching, HELD, retry/DLQ, webhooks, console —
+nothing else changes; that is the point of the seams.
+
+**W1 exit proof (tests, all Docker-free so they run in CI everywhere):**
+
+1. Store-contract parity suite (`packages/api/src/sqlite/sqlite.test.ts`): every seam above —
+   lifecycle mark/attempts/DLQ, dedup expiry, matching, alerts fire/resolve, profile CRUD with
+   read-back validation, key create/findBySecret/rotate, audit, webhook write-through, outbox
+   append→ship-shaped read→ack, and **persistence across reopen** (close the handle, reopen,
+   data intact, migrations not re-applied).
+2. No-Docker e2e (`packages/server/src/sqlite-hub.test.ts`): `startHub` on a temp SQLite file,
+   analyzer simulated end-to-end (parse → canonicalize → match → route → deliver), API auth
+   with the generated admin key, webhook fire → stop → restart on the same file → state
+   survived. That is the §8.1 "fully-local, no-Docker run" gate.
+
+**Explicitly deferred (later W phases):** Windows service wrapper + installer (W2), Orthanc
+bundling (W3), pairing artifact + update delivery (W4). W1 delivers the storage seam + the
+local-run proof only.
+
 ### 8.2 Phase W2 — Windows service + packaging skeleton
 
 - Wrap the hub as a Windows service / supervised process: auto-start, crash recovery, safe shutdown, logs, uninstall.

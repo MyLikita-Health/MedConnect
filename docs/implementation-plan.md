@@ -1870,6 +1870,49 @@ enablement is wired, real-fleet verification pending).
 
 ---
 
+### 13.18 W1 — SQLite edge backend: status
+
+Shipped September 2026 — the Windows-desktop local track kickoff (decision
+D12; docs/windows-desktop-installer.md §8.1, with the implementation plan
+recorded there before coding). The embedded single-file SQLite store now sits
+behind the same `StoreBackend`/`DeviceBackend` seams as the in-memory and PG
+backends — a third backend mode, not a fork:
+
+1. ✅ **Schema + runner** (`packages/api/src/sqlite/schema.ts`): SQLite-dialect
+   DDL mirroring PG migrations 0001–0015 (same table/column names; `org_id`/
+   `facility_id` columns exist from day one so the W4 cloud-pairing write-
+   through is a data change, not a schema change), tracked in
+   `schema_migrations` with the same apply-in-order runner pattern. Durability
+   pragmas: WAL + `synchronous = FULL` (an acknowledged write survives power
+   loss — the §7.G2 edge bar), foreign keys, busy timeout.
+2. ✅ **All store seams** (`sqlite-store.ts`, `sqlite-devices.ts`,
+   `sqlite-core-stores.ts`, `sqlite-security.ts`, `sqlite-outbox.ts`):
+   `SqliteMessageStore` (lifecycle/DLQ/attempts/mappings + clinical rows),
+   `SqliteDeviceRegistry` (auto-register + state flips), route/dedup/
+   order/admission/alert/profile/webhook stores, key + audit stores, and
+   `SqliteOutbox` (D11 edge role: AUTOINCREMENT seq, unacked FIFO, ack).
+   better-sqlite3 is synchronous; the write-through appends the sync entry
+   inside the same `db.transaction(...)` as the source row — the no-dual-write
+   invariant (G4) holds by construction. `OutboxSyncer` (core) drives the
+   SQLite outbox unchanged: one sync code path for PG and SQLite edges.
+3. ✅ **startHub wiring**: `opts.sqlite` > `DB=sqlite` env > `DATABASE_URL` >
+   in-memory. `Hub.sqlite` reports `{ db, file }`; seeding + admin-key
+   bootstrap run identically on all three backends. `Hub.db` unchanged for PG.
+4. ✅ **Exit proof (Docker-free, runs anywhere)**: store-contract parity suite
+   (15 tests incl. persistence across close/reopen with migrations NOT
+   re-applied) + the no-Docker e2e (`sqlite-hub.test.ts`): startHub on a temp
+   file, analyzer over the wire → parse → canonicalize → match (HELD) → store,
+   admin-key auth, stop → restart on the same file with all state intact.
+5. ✅ **Runtime alignment**: `.nvmrc` pins Node 22 — matching the Dockerfile
+   (`node:22-alpine`) and `better-sqlite3@13` (engines `>=22`; Node 21 has no
+   prebuilds and segfaults). The engines constraint is also now explicit in
+   `package.json`.
+
+Deferred to later W phases (unchanged): Windows service + installer (W2),
+Orthanc bundling (W3), pairing artifact + update delivery (W4).
+
+---
+
 ## 14. Plan maintenance
 
 - Version this document; record changes in a changelog section at the end.

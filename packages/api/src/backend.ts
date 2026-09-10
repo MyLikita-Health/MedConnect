@@ -10,8 +10,8 @@ import type { DeviceRecord, RegisterDeviceInput } from './devices.js';
 import type { MessageFilter, StoreStats } from './store.js';
 import type { OutboxWriter } from '@integration-hub/core';
 
-export type StoreKind = 'memory' | 'postgres';
-export type DeviceKind = 'memory' | 'postgres';
+export type StoreKind = 'memory' | 'postgres' | 'sqlite';
+export type DeviceKind = 'memory' | 'postgres' | 'sqlite';
 
 export interface MarkFields {
   dlqAt?: string;

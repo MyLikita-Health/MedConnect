@@ -41,6 +41,7 @@ export { createDbPool, closeDbPool, DEFAULT_DATABASE_URL } from './pg/pool.js';
 export { runMigrations } from './pg/migrate.js';
 export { PostgresOrgStore, PostgresFacilityStore, bootstrapCloudOrg, type CloudContext, RLS, type BootstrapResult, withCloudContext, } from './pg/pg-tenancy.js';
 export { PostgresOutbox, PostgresIngestStore, type SyncedMessageRow, type SyncedDeviceRow, type IngestCursor } from './pg/pg-outbox.js';
+export * from './sqlite/index.js';
 export { InMemoryFeatureFlagStore, InMemoryQuotaStore, InMemoryLicenseStore, evaluateEntitlement, type Entitlement, type FacilityQuota, type FeatureFlag, type FeatureFlagStore, type FleetRoutesOptions, type LicenseRecord, type LicenseStore, type QuotaStore } from './fleet.js';
 export { PUBLIC_ROUTES } from './security.js';
 

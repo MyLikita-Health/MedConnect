@@ -6,7 +6,8 @@
  * and devices in PostgreSQL (migrations auto-applied) and serves the default
  * mapping table from the DB; otherwise it falls back to the in-memory stores.
  */
-import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryFeatureFlagStore, InMemoryKeyStore, InMemoryLicenseStore, InMemoryQuotaStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresIngestStore, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, PostgresOutbox, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type StoreBackend } from '@integration-hub/api';
+import BetterSqlite3 from 'better-sqlite3';
+import { closeDbPool, createDbPool, runMigrations, ApiServer, DeviceRegistry, InMemoryAuditStore, InMemoryFeatureFlagStore, InMemoryKeyStore, InMemoryLicenseStore, InMemoryQuotaStore, MessageStore, PostgresAuditStore, PostgresDeviceRegistry, PostgresIngestStore, PostgresKeyStore, PostgresMessageStore, PostgresOrgStore, PostgresFacilityStore, PostgresOutbox, SqliteAuditStore, SqliteAdmissionRegistry, SqliteAlertStore, SqliteDeviceRegistry, SqliteDedupStore, SqliteKeyStore, SqliteMessageStore, SqliteOrderRegistry, SqliteOutbox, SqliteProfileStore, SqliteRouteStore, SqliteWebhookStore, openSqliteDatabase, bootstrapCloudOrg, type AuditStore, type DeviceBackend, type KeyStore, type SqliteDb, type StoreBackend } from '@integration-hub/api';
 import { AstmGateway } from '@integration-hub/gateway';
 import { DicomOrthancAdapter } from '@integration-hub/dicom';
 import { deliverHl7, Hl7Gateway, MllpConnectionPool } from '@integration-hub/hl7';
@@ -38,6 +39,16 @@ export interface HubOptions {
   mappings?: Record<string, string>;
   /** PostgreSQL connection string; falls back to the DATABASE_URL env var. */
   databaseUrl?: string;
+  /**
+   * W1 SQLite edge backend (D12): the embedded single-file store — the
+   * Windows-desktop/local-edge mode with no Docker and no DB service.
+   * `file` defaults to `<stateDir?> /hub.sqlite` (or HUB_SQLITE_FILE).
+   * Precedence: explicit `sqlite` > `DB=sqlite` > `databaseUrl` > in-memory.
+   */
+  sqlite?: {
+    /** DB file path (env HUB_SQLITE_FILE); default `./hub.sqlite` under stateDir. */
+    file?: string;
+  };
   /** Disable the patient/order matching hold (safety bypass; tests only). */
   matchOnUnmatched?: 'hold' | 'deliver';
   /** Skip seeding the default alert rules (tests/demos bring their own). */
@@ -179,13 +190,19 @@ export interface Hub {
   syncer?: OutboxSyncer | undefined;
   /** Present when running on PostgreSQL. */
   db?: { pool: Pool } | undefined;
+  /** Present when running on the embedded SQLite store (W1 edge mode). */
+  sqlite?: { db: SqliteDb; file: string } | undefined;
   stop(): Promise<void>;
   cloudContext?: { orgId: string; facilityId: string; admin: boolean } | undefined;
 }
 
 export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const host = opts.host ?? '127.0.0.1';
-  const databaseUrl = opts.databaseUrl ?? process.env.DATABASE_URL;
+  // W1 backend selection (D12): explicit SQLite opts > DB=sqlite env > PG
+  // (DATABASE_URL) > in-memory. SQLite is checked first because a local edge
+  // must never accidentally reach for a DB server that is not there.
+  const sqliteRequested = opts.sqlite !== undefined || process.env.DB === 'sqlite';
+  const databaseUrl = sqliteRequested ? undefined : opts.databaseUrl ?? process.env.DATABASE_URL;
 
   let store: StoreBackend;
   let devices: DeviceBackend;
@@ -200,10 +217,12 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   let keys: KeyStore | undefined;
   let audit: AuditStore | undefined;
   let cloudContext: { orgId: string; facilityId: string; admin: boolean } | undefined;
+  let sqliteDb: SqliteDb | undefined;
 
   const authDisabled = opts.authDisabled ?? process.env.AUTH_DISABLED === '1';
   const adminKeySecret = opts.adminKey ?? process.env.HUB_ADMIN_KEY;
   const stateDir = opts.stateDir ?? process.env.HUB_STATE_DIR;
+  const sqliteFile = opts.sqlite?.file ?? process.env.HUB_SQLITE_FILE ?? (stateDir ? `${stateDir}/hub.sqlite` : 'hub.sqlite');
   const updateSource = opts.updateSource ?? process.env.UPDATE_SOURCE;
   const updatePublicKey = opts.updatePublicKey ?? process.env.UPDATE_PUBLIC_KEY;
   const orthancUrl = opts.orthanc?.baseUrl ?? process.env.ORTHANC_URL;
@@ -224,7 +243,37 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
   const orthancPollMs = opts.orthanc?.pollMs ?? (Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : 60_000);
   const tls = opts.tls ?? (await loadTlsFromEnv());
 
-  if (databaseUrl) {
+  if (sqliteRequested) {
+    // W1 SQLite edge mode (D12): the embedded single-file store. No Docker,
+    // no DB service — the file IS the store. Same seams, same seeding, same
+    // auth bootstrap as the PG path below.
+    sqliteDb = openSqliteDatabase((file) => new BetterSqlite3(file), sqliteFile, { log: (line) => console.log(line) });
+    console.log(`[db] sqlite edge store: ${sqliteFile}`);
+    const sqliteStore = new SqliteMessageStore(sqliteDb);
+    const sqliteDevices = new SqliteDeviceRegistry(sqliteDb);
+    store = sqliteStore;
+    devices = sqliteDevices;
+    routes = new SqliteRouteStore(sqliteDb);
+    dedup = new SqliteDedupStore(sqliteDb);
+    orders = new SqliteOrderRegistry(sqliteDb);
+    admissions = new SqliteAdmissionRegistry(sqliteDb);
+    alertStore = new SqliteAlertStore(sqliteDb);
+    profileStore = new SqliteProfileStore(sqliteDb);
+    if (!authDisabled) {
+      keys = new SqliteKeyStore(sqliteDb);
+      audit = new SqliteAuditStore(sqliteDb);
+    }
+    // Seed the default mapping table so edge mappings match scaffold defaults.
+    if (!opts.mappings) sqliteStore.setMappings(DEFAULT_MAPPINGS);
+    mappings = opts.mappings ?? sqliteStore.getMappings();
+    // D11 write-through on a paired edge: the outbox is the sync backlog AND
+    // the local crash-recovery journal (same-transaction append, G4).
+    if (cloudSyncOpts) {
+      const outbox = new SqliteOutbox(sqliteDb);
+      sqliteStore.outbox = outbox;
+      sqliteDevices.outbox = outbox;
+    }
+  } else if (databaseUrl) {
     pool = createDbPool(databaseUrl);
     const applied = await runMigrations(pool);
     if (applied.length > 0) console.log(`[db] applied migrations: ${applied.join(', ')}`);
@@ -877,6 +926,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
     audit,
     ports: { device: devicePort, ...(hl7Port !== undefined ? { hl7: hl7Port } : {}), http: httpPort },
     db: pool ? { pool } : undefined,
+    ...(sqliteDb ? { sqlite: { db: sqliteDb, file: sqliteFile } } : {}),
     stop: async () => {
       if (mwl) await mwl.stop();
       if (modalities) await modalities.stop();
@@ -888,6 +938,7 @@ export async function startHub(opts: HubOptions = {}): Promise<Hub> {
       if (hl7Gateway) await hl7Gateway.stop();
       await hl7OutboundPool.close();
       if (pool) await closeDbPool(pool);
+      sqliteDb?.close();
     },
     cloudContext,
     ...(fleetRegistry ? { fleetRegistry } : {}),

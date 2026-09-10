@@ -245,6 +245,14 @@ Backend choice is a wiring decision in `packages/server/src/index.ts` — set
 durable. The gateway awaits async sinks and surfaces persistence failures as
 session errors rather than dropping messages silently.
 
+**SQLite edge mode (W1)**: a third backend — the embedded single-file store
+for fully-local, no-Docker runs (Windows-desktop local mode, decision D12).
+`DB=sqlite` (+ optional `HUB_SQLITE_FILE`) or `sqlite: { file }` in
+`startHub`; same seams, same console/API, WAL + `synchronous = FULL` for
+crash-safe local durability, and the D11 outbox is included so a local edge
+can pair to the cloud later (see `docs/windows-desktop-installer.md`). The
+repo pins Node 22 (`.nvmrc`) to match `better-sqlite3@13`.
+
 - Console UI: <http://127.0.0.1:3000/> — live dashboard, devices, message
   viewer (raw + parsed + canonical payload + pipeline timeline), replay.
 - REST API: <http://127.0.0.1:3000/api/v1/health>
@@ -252,7 +260,7 @@ session errors rather than dropping messages silently.
 Other commands:
 
 ```bash
-npm test           # 383 tests: codec, sessions, pipeline, matching/validation,
+npm test           # 400 tests: codec, sessions, pipeline, matching/validation,
                    #   alerts (incl. profile-drift), profiles/conformance +
                    #   version stamping, HL7 MLLP framing + ACK + inbound
                    #   Hl7Gateway + ORM order feed + ADT admission feed +
@@ -273,8 +281,10 @@ npm test           # 383 tests: codec, sessions, pipeline, matching/validation,
                    #   D11 outbox syncer (ship/ack/redelivery),
                    #   fleet surface (H3 pairing + gateway-credential
                    #   isolation + H2 overview + H4 flags/quotas + H5
-                   #   licenses/entitlements/analytics) (31 DB-gated skip)
-npm run test:db    # 383 tests: same + PostgreSQL integration (needs db:up)
+                   #   licenses/entitlements/analytics),
+                   #   SQLite edge backend (W1: store contracts + no-Docker
+                   #   hub e2e) (32 DB-gated skip)
+npm run test:db    # 400 tests: same + PostgreSQL integration (needs db:up)
 npm run build      # tsc -b (project references) — also the typecheck
 npm run simulate -- --count 10 --interval 200
 npm run simulate -- --corrupt-rate 0.5   # exercise NAK + retry on the wire
