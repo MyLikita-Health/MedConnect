@@ -9,3 +9,5 @@ dist/
 .hub-state/
 tls/
 .venv/
+packaging/generated/
+packaging/installer/build/

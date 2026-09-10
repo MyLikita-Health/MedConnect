@@ -219,6 +219,71 @@ nothing else changes; that is the point of the seams.
 bundling (W3), pairing artifact + update delivery (W4). W1 delivers the storage seam + the
 local-run proof only.
 
+#### W2.5 implementation plan (recorded 2026-09-10, before coding)
+
+**Scope (§7.1 + the packaging/README checklist):** turn the W2 skeleton into a real
+Windows installer build: pick the installer technology, bundle the runtime payload, and
+wire the firewall rule — without touching the supervision semantics (they stay
+`HubSupervisor`'s) or the first-boot setup flow (W2, already shipped).
+
+**1. Installer technology: NSIS (resolved).**
+
+- **Why not MSI/WiX:** authoring a trustworthy MSI needs the WiX toolset, which only runs
+  on Windows — every build would require a Windows host. NSIS compiles cross-platform
+  (`makensis` has an official macOS/Linux build), which matches the repo's dev-parity
+  story (the W2 service CLI already emits launchd/systemd definitions from the same code
+  path).
+- **Why not MSIX:** MSIX identity/signing assumes a store or enterprise certificate
+  distribution story this product does not have yet; a classic installer plus the existing
+  signed-update machinery (G3) is the deploy path facilities actually use.
+- **Consequence:** the installer is a single `IntegrationHub-<version>-setup.exe` that
+  installs to `C:\Program Files\IntegrationHub`, writes the payload under
+  `%ProgramData%\IntegrationHub`, registers the service, adds the firewall rule, and
+  offers a data-backup prompt on uninstall.
+- Code signing (Authenticode) stays a distribution-time step (W4/delivery), not a build
+  gate here — `makensis` can pass a signing command when a cert exists.
+
+**2. Runtime bundling (the payload).** The hub runs from source via tsx (the same way the
+Docker image runs it), so the payload is: `node.exe` (Node 22, matching `.nvmrc` and
+`better-sqlite3@13`), the npm workspace sources, a production `npm ci` **with tsx
+retained** (it is the runtime loader, not just a dev tool), and the **win32-x64
+better-sqlite3 prebuild** — a staging run on macOS would otherwise fetch the Darwin
+binary. The service entry (`service-cli.ts`) runs unchanged on top of that payload.
+
+**3. Service registration: WinSW, not bare `sc.exe`.** A `binPath=` pointing directly at
+`node.exe` cannot serve the Windows SCM control protocol — the SCM starts it, waits for
+`StartServiceCtrlDispatcher`, gets nothing, and kills the service (error 1053). W2.5
+replaces the W2 `sc.exe create` template with the **WinSW** wrapper: `IntegrationHub.exe`
+(WinSW-x64.exe renamed) + `IntegrationHub.yaml` (the service definition: the node command,
+env contract, `startmode automatic`, failure `restart`), exactly the service-control
+reponsibility split of W2 (the OS keeps ONE process alive; supervision semantics stay in
+`HubSupervisor`). The `hub-service install` template and `docs/windows-service.md` are
+updated to the same mechanism so dev-generated definitions match the installer.
+
+**4. Firewall rule.** The installer creates an inbound rule for the ASTM device listener
+port (default 5000, profile `private` — conservative LAN default; domain/private only,
+no public) with `netsh advfirewall firewall add rule`. Scope per the installer README:
+conservative default, and the user can tighten it further in Windows Firewall.
+
+**5. Build pipeline (`packaging/installer/`).** `build.sh` stages `build/stage/` (payload
++ WinSW + node.exe) from a checkout (run it on a machine with network; it fetches node +
+WinSW + the sqlite prebuild into `build/dl/`, git-ignored), then `makensis hub.nsi`
+produces `build/IntegrationHub-<version>-setup.exe`. Uninstall behavior: service stop +
+unregister, payload removal, and a data-backup prompt (export `%ProgramData%\IntegrationHub`
+or delete it) — the W2 uninstall contract, now in the installer.
+
+**W2.5 exit proof (Docker-free, machine-local):**
+
+1. `npm run installer:build` compiles the NSIS script (when `makensis` is available; the
+   staging half runs anywhere) and emits `IntegrationHub-<version>-setup.exe`.
+2. `packaging/installer/installer.test.ts` pins the build inputs: hub.nsi references the
+   real payload dirs, the service YAML/WinSW block matches the service-cli contract, the
+   firewall rule targets the device listener port with a conservative profile, and the
+   uninstall sequence stops the service BEFORE touching the data dir.
+
+**Explicitly deferred:** Authenticode signing (distribution-time), Orthanc bundling (W3),
+pairing artifact + update delivery (W4).
+
 #### W2 implementation plan (recorded 2026-09-10, before coding)
 
 **Scope (§8.2):** the OS service wrapper, the installer skeleton, and the first-boot config

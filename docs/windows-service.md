@@ -47,10 +47,23 @@ npx tsx scripts/service-cli.ts status
 npx tsx scripts/service-cli.ts uninstall
 ```
 
-- **Windows** — `install` writes `packaging/generated/install-service.ps1`
-  (generated `sc.exe create` with `start= auto` + `failure … actions= restart/…`).
-  Run it as Administrator. Service stop maps to SIGTERM in the entry, which
-  drains the supervisor (final outbox flush + clean SQLite close).
+- **Windows** — `install` writes `packaging/generated/IntegrationHub.yaml` (a
+  **WinSW** service definition: `startmode: automatic`, restart-on-failure
+  delays, baked-in install dir + data dir + env contract) alongside the
+  **IntegrationHub.exe** shim (WinSW-x64.exe renamed; pass `--winsw <file>` to
+  copy one you already downloaded, or fetch it from
+  github.com/winsw/winsw/releases). Run `IntegrationHub.exe install` as
+  Administrator, then `IntegrationHub.exe start`.
+
+  Why not plain `sc.exe`: the SCM starts the `binPath=` process and waits for
+  it to report status via the service-control protocol — `node.exe` never
+  calls `StartServiceCtrlDispatcher`, so the SCM gives up and tears the
+  service down (error **1053**). WinSW is the tiny shim that owns that
+  protocol; supervision semantics stay in `HubSupervisor` (the OS keeps
+  exactly ONE process alive — the shim's child is the supervisor).
+  Service stop maps to SIGTERM in the entry, which drains the supervisor
+  (final outbox flush + clean SQLite close). The W2.5 installer embeds the
+  same mechanism (`packaging/installer/hub.nsi`).
 - **macOS** — a launchd plist (`KeepAlive`, `RunAtLoad`) is generated; load it
   with `launchctl load -w`. Dev machines exercise the identical code path.
 - **Linux** — a systemd unit (`Restart=always`, `RestartSec=5`).

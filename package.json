@@ -13,8 +13,8 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b",
-    "test": "tsx --test --test-concurrency=1 \"packages/**/*.test.ts\"",
-    "test:db": "TEST_DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx --test --test-concurrency=1 \"packages/**/*.test.ts\"",
+    "test": "tsx --test --test-concurrency=1 \"{packages,packaging,scripts}/**/*.test.ts\"",
+    "test:db": "TEST_DATABASE_URL=postgres://hub:hub@localhost:5434/hub tsx --test --test-concurrency=1 \"{packages,packaging,scripts}/**/*.test.ts\"",
     "start": "tsx packages/server/src/cli.ts",
     "simulate": "tsx packages/simulator/src/cli.ts",
     "simulate:hl7": "tsx packages/simulator/src/cli-hl7.ts",
@@ -33,6 +33,8 @@
     "key-cli": "tsx scripts/key-cli.ts",
     "tls:gen": "tsx scripts/gen-certs.ts",
     "image:build": "docker build -t medconnect-hub:0.1.0 .",
+    "installer:build": "bash packaging/installer/build.sh",
+    "installer:stage": "bash packaging/installer/build.sh --stage",
     "up:stack": "docker compose up -d --build hub",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down"

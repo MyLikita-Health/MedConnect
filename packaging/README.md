@@ -1,31 +1,68 @@
-# Installer skeleton (W2)
+# Installer skeleton (W2) → real build (W2.5)
 
-Input artifacts for the real installer build (MSI / MSIX / NSIS decision is a
-W2.5 pass — the building blocks are settled, see
-`docs/windows-desktop-installer.md` §7.1 and `docs/windows-service.md`).
+**W2.5 resolved: the installer is NSIS** (`packaging/installer/hub.nsi`, built by
+`packaging/installer/build.sh` / `npm run installer:build`). Rationale recorded in
+`docs/windows-desktop-installer.md` §W2.5: NSIS compiles cross-platform (`makensis`
+has an official macOS/Linux build — no Windows host required for CI-style builds),
+while MSI/WiX is Windows-only to author and MSIX assumes a certificate/store story
+this product does not have yet. Code signing (Authenticode) remains a
+distribution-time step (W4/delivery), not a build gate.
 
-## What's here (generated at control time)
+## What the installer does
 
-`scripts/service-cli.ts install` writes per-platform service definitions into
-`generated/`:
+`IntegrationHub-<version>-setup.exe`:
+
+1. Installs the payload to `C:\Program Files\IntegrationHub` (node.exe + workspace
+   sources + prod node_modules with the **win32-x64 better-sqlite3 prebuild** — the
+   hub runs from source via tsx exactly like the Docker image).
+2. Writes the service wrapper to the payload dir: `IntegrationHub.exe` (**WinSW**,
+   the service control shim) + `IntegrationHub.yaml` (service definition: node
+   command, env contract, `startmode: automatic`, restart-on-failure). WinSW exists
+   because a bare `sc.exe binPath=node.exe` service cannot answer the SCM control
+   handshake — it dies with error 1053 at start.
+3. Registers the Windows service (`integration-hub`) and starts it.
+4. Creates the inbound firewall rule for the ASTM device listener port (default
+   5000, profile `private` — conservative LAN default, never `public`).
+5. Data dir `%ProgramData%\IntegrationHub` (`hub.sqlite`, `state\`, `logs\`) is
+   created by the service entry on first boot; the console then runs the W2 setup
+   wizard (facility → domains → admin key shown once).
+6. Uninstall: stop + delete the service FIRST, remove the payload, then prompt for
+   the data dir (export/backup vs delete) — the W2 uninstall contract.
+
+## Build
+
+```bash
+npm run installer:build          # stages payload + compiles the NSIS script
+# → packaging/installer/build/IntegrationHub-<version>-setup.exe
+```
+
+`build.sh` fetches node.exe, WinSW and the sqlite win32 prebuild into
+`build/dl/` (git-ignored) — run it on a machine with network access. It stages
+into `build/stage/` and compiles with `makensis` when available (macOS:
+`brew install makensis`; Windows: the NSIS distribution; Linux: the `nsis`
+package or `makensis` from the NSIS site).
+
+## Service control CLI (W2, dev parity)
+
+`scripts/service-cli.ts install` still generates per-platform service definitions
+into `generated/` — now matching the installer's mechanism on Windows (WinSW
+files, not raw `sc.exe`):
 
 | Platform | File | Registers via |
 | --- | --- | --- |
-| Windows | `generated/install-service.ps1` | `sc.exe create … start= auto` + failure-recovery restarts (run as Administrator) |
+| Windows | `generated/IntegrationHub.exe` + `generated/IntegrationHub.yaml` | WinSW shim → SCM (`startmode: automatic`, failure restart) |
 | macOS | `generated/io.integration-hub.local.plist` | launchd (`KeepAlive` + `RunAtLoad`) |
 | Linux | `generated/integration-hub.service` | systemd (`Restart=always`) |
 
-All three run the same entry (`packages/server/src/service-cli.ts`), which
-drives `HubSupervisor` with local defaults (SQLite under the data dir, signed-
-update state, file logging, first-boot setup surface).
+All three run the same entry (`packages/server/src/service-cli.ts`), which drives
+`HubSupervisor` with local defaults (SQLite under the data dir, signed-update
+state, file logging, first-boot setup surface). Supervision semantics stay in
+`HubSupervisor` — the OS keeps exactly ONE process alive.
 
-## W2.5 packaging checklist (deferred)
+## Remaining checklist (W3/W4)
 
-- [ ] Pick installer tech (MSI via WiX vs NSIS vs MSIX) + code-signing cert path.
-- [ ] Bundle the hub runtime (Node 22 + compiled packages) — no external deps.
-- [ ] Data dir under the OS app-data location; `hub.sqlite`, `state/`, `logs/`.
-- [ ] Firewall rule for the device listener port (conservative default: LAN only).
-- [ ] Uninstall: service unregister → backup prompt → data-dir removal.
-- [ ] First-boot smoke: service starts → console reachable → setup wizard →
-      admin key minted once → simulated analyzer message lands.
-- [ ] Update delivery story on top of the signed-update supervisor (W4).
+- [ ] Orthanc bundling as a separate Windows process (W3, AGPL boundary: out-of-process, REST-only).
+- [ ] Authenticode code signing + the distribution story (W4/delivery).
+- [ ] Update delivery on top of the signed-update supervisor (W4).
+- [ ] First-boot smoke on a real Windows box: install → service starts → console
+      setup wizard → admin key minted once → simulated analyzer message lands.
