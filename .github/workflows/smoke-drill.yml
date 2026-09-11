@@ -101,6 +101,27 @@ jobs:
       - name: Service `integration-hub` reaches RUNNING
         shell: pwsh
         run: |
+          $exe = 'C:\Program Files\IntegrationHub\IntegrationHub.exe'
+          $svc = Get-Service -Name 'integration-hub' -ErrorAction SilentlyContinue
+          if (-not $svc) {
+            # DRILL FINDING (v0.1.0-rc.1): the silent installer's WinSW install
+            # call failed WITHOUT surfacing anything (hub.nsi pops nsExec results
+            # into $tmp and never checks them). Re-run the registration HERE with
+            # full output capture so the failure mode lands in the log, then let
+            # the drill continue on the manually-registered service.
+            Write-Host '== service missing after install — manual registration with output =='
+            Write-Host '== `IntegrationHub.exe help` (proves the WinSW shim executes) =='
+            & $exe help 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "help exit: $LASTEXITCODE"
+            Write-Host '== `IntegrationHub.exe install` =='
+            & $exe install 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "install exit: $LASTEXITCODE"
+            & $exe start 2>&1 | ForEach-Object { Write-Host "$_" }
+            Write-Host "start exit: $LASTEXITCODE"
+            Start-Sleep -Seconds 3
+            $svc = Get-Service -Name 'integration-hub' -ErrorAction SilentlyContinue
+            if (-not $svc) { throw 'manual registration ALSO failed — see captured output above' }
+          }
           $deadline = (Get-Date).AddSeconds(90)
           do {
             $svc = Get-Service -Name 'integration-hub' -ErrorAction SilentlyContinue

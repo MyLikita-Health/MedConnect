@@ -263,18 +263,38 @@ Section "Install"
 !endif
 
   ; 3. Register + start the service(s) (WinSW serves the SCM protocol).
+  ;    A FAILED registration must fail the installer — a silent miss here
+  ;    produces an installed payload with NO service (found by the W5
+  ;    smoke drill on the hosted x64 runner), so every result code is
+  ;    checked and any failure aborts with a visible message.
 !ifdef ORTHANC
   DetailPrint "Registering the Orthanc (imaging) service…"
   nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" install'
-  Pop $tmp
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "Registering the Orthanc service FAILED (exit $0). See the installer log."
+    Abort
+  ${EndIf}
   nsExec::ExecToLog '"$INSTDIR\orthanc\OrthancHub.exe" start'
-  Pop $tmp
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "Starting the Orthanc service FAILED (exit $0). See the installer log."
+    Abort
+  ${EndIf}
 !endif
   DetailPrint "Registering the Integration Hub service…"
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" install'
-  Pop $tmp
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "Registering the Integration Hub service FAILED (exit $0). See the installer log for the WinSW output."
+    Abort
+  ${EndIf}
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" start'
-  Pop $tmp
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "Starting the Integration Hub service FAILED (exit $0). See the installer log for the WinSW output."
+    Abort
+  ${EndIf}
 
   ; 4. Start-menu shortcuts: the console (the setup wizard runs there on
   ;    first boot) and the uninstaller.
