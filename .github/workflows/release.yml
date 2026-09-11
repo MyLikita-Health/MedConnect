@@ -8,11 +8,16 @@
 #     Windows SDK) driven by the env-driven wrapper — when signing vars exist;
 #     otherwise the publish is documented as UNSIGNED (D13: the certificate
 #     is purchased when the first pilot demands it),
-#   - SHA256SUMS.txt over both exes,
+#   - SHA256SUMS.txt over the SIGNED exes,
 #   - an update manifest (update-cli release) — Ed25519-signed when
 #     UPDATE_SIGNING_KEY is set — pointing at the release asset URLs: what a
 #     paired edge's UPDATE_SOURCE consumes,
 #   - a GitHub Release carrying all of the above.
+#
+# Job split (deliberate): the ONLY Windows work is signtool. npm never runs on
+# Windows — `npm ci` here pulls better-sqlite3, whose node-gyp build cannot
+# find a usable Visual Studio on hosted windows runners — so the manifest +
+# release publishing run on ubuntu with a plain npm ci.
 #
 # Configuration (all optional — absence = unsigned publish, loudly):
 #   vars.SIGN_COMMAND_TEMPLATE  printf-style signing invocation with exactly
@@ -98,33 +103,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  sign-and-publish:
+  sign:
     needs: compile
     runs-on: windows-latest
     env:
       TSA_URL: ${{ vars.TSA_URL || 'http://timestamp.digicert.com' }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      # update-cli (manifest step) imports @integration-hub/core through tsx —
-      # the workspace deps must exist on this runner too.
-      - name: Install workspace dependencies
-        run: npm ci
-
-      - name: Compute the version
-        id: ver
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Download the compiled installers
         uses: actions/download-artifact@v4
@@ -135,8 +120,9 @@ jobs:
       # D13: signing is configuration, not code. The wrapper (sign.sh) is the
       # single signing implementation on every host: it expands the template,
       # enforces the RFC-3161 timestamp flag, signs every file, and verifies
-      # the result. No vars.SIGN_COMMAND_TEMPLATE → loud warning, unsigned
-      # publish.
+      # the result. No vars.SIGN_COMMAND_TEMPLATE → nothing happens here and
+      # the publish is loudly documented as unsigned. This is the ONLY step
+      # that must ever run on Windows: bash (Git Bash) + signtool, no npm.
       - name: Sign the installers (Authenticode via sign.sh)
         if: vars.SIGN_COMMAND_TEMPLATE != ''
         shell: bash
@@ -151,8 +137,47 @@ jobs:
           export SIGN_FILES=$(ls IntegrationHub-*setup.exe | tr '\n' ' ')
           bash "$GITHUB_WORKSPACE/packaging/installer/sign.sh"
 
+      - name: Upload the (signed) installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-signed
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # update-cli imports @integration-hub/core through tsx (workspace dep).
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Compute the version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the (signed) installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers-signed
+          path: artifacts
+
+      # Checksums over the SIGNED artifacts — what an operator compares
+      # against after download.
       - name: Checksums
-        shell: bash
         working-directory: artifacts
         run: |
           sha256sum IntegrationHub-*setup.exe > SHA256SUMS.txt
@@ -163,7 +188,6 @@ jobs:
       # edge verifies against. Unsigned manifest → edges with a pinned key
       # refuse it (by design), and the release body says so.
       - name: Generate + sign the update manifest
-        shell: bash
         working-directory: artifacts
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -196,7 +220,6 @@ jobs:
           cat manifest.signed.json
 
       - name: Create the GitHub Release
-        shell: bash
         working-directory: artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,7 +230,12 @@ jobs:
           else
             SIGN_NOTE="UNSIGNED publish: Authenticode vars and/or UPDATE_SIGNING_KEY are not configured (decision D13). Edges with UPDATE_PUBLIC_KEY set will refuse the manifest."
           fi
+          PRERELEASE_FLAG=""
+          case "$VERSION" in
+            *-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
           gh release create "v$VERSION" \
             --title "Integration Hub v$VERSION" \
+            $PRERELEASE_FLAG \
             --notes "Installers: base + imaging bundle. SHA256SUMS.txt carries the artifact checksums. $SIGN_NOTE" \
             IntegrationHub-*setup.exe SHA256SUMS.txt manifest.signed.json
