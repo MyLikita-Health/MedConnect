@@ -23,6 +23,7 @@
  * single-tenant edge mode, so policies arrive with the cloud tenancy mechanism.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { slugify } from '../devices.js';
 
@@ -56,11 +57,14 @@ export class PostgresOrgStore {
   constructor(private readonly pool: Pool) {}
 
   async create(input: { name: string; slug?: string }): Promise<OrgRow> {
+    // The schema (0014) has no id default — generate it here so any database
+    // state works (same pattern as the key store in pg-security.ts).
+    const id = randomUUID();
     const slug = input.slug ?? slugify(input.name);
     const { rows } = await this.pool.query<OrgRow>(
-      `INSERT INTO orgs (name, slug) VALUES ($1, $2) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+      `INSERT INTO orgs (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
        RETURNING id, name, slug, created_at`,
-      [input.name, slug],
+      [id, input.name, slug],
     );
     return rows[0]!;
   }
@@ -96,17 +100,21 @@ export class PostgresOrgStore {
       await client.query('BEGIN');
       // orgs — an org admin can read all orgs in their org (by org id); everyone
       // else sees nothing. For the bootstrap path we set a permissive policy on
-      // the org the caller is operating in.
-      await client.query(`CREATE POLICY IF NOT EXISTS org_read_own ON orgs FOR SELECT USING (id = current_setting('app.tenant_org_id', true)::text)`);
+      // the org the caller is operating in. (PostgreSQL has no CREATE POLICY
+      // IF NOT EXISTS — DROP-guarded CREATE makes this re-runnable.)
+      await client.query(`DROP POLICY IF EXISTS org_read_own ON orgs`);
+      await client.query(`CREATE POLICY org_read_own ON orgs FOR SELECT USING (id = current_setting('app.tenant_org_id', true)::text)`);
       // facilities — scoped to the requesting facility unless the caller is an
       // org admin (set via app.tenant_admin = 't').
+      await client.query(`DROP POLICY IF EXISTS facility_read_scope ON facilities`);
+      await client.query(`DROP POLICY IF EXISTS facility_write_scope ON facilities`);
       await client.query(
-        `CREATE POLICY IF NOT EXISTS facility_read_scope ON facilities FOR SELECT
+        `CREATE POLICY facility_read_scope ON facilities FOR SELECT
          USING (org_id = current_setting('app.tenant_org_id', true)::text
                AND (current_setting('app.tenant_admin', true)::boolean IS TRUE OR id = current_setting('app.tenant_facility_id', true)::text))`,
       );
       await client.query(
-        `CREATE POLICY IF NOT EXISTS facility_write_scope ON facilities FOR ALL
+        `CREATE POLICY facility_write_scope ON facilities FOR ALL
          USING (org_id = current_setting('app.tenant_org_id', true)::text
                AND (current_setting('app.tenant_admin', true)::boolean IS TRUE))`,
       );
@@ -150,11 +158,13 @@ export class PostgresFacilityStore {
   constructor(private readonly pool: Pool) {}
 
   async create(orgId: string, input: { name: string; slug?: string }): Promise<FacilityRow> {
+    // Same as the org store: the id is generated in the store (no DB default).
+    const id = randomUUID();
     const slug = input.slug ?? slugify(input.name);
     const { rows } = await this.pool.query<FacilityRow>(
-      `INSERT INTO facilities (org_id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (org_id, slug) DO UPDATE SET name = EXCLUDED.name
+      `INSERT INTO facilities (id, org_id, name, slug) VALUES ($1, $2, $3, $4) ON CONFLICT (org_id, slug) DO UPDATE SET name = EXCLUDED.name
        RETURNING id, org_id, name, slug, state, created_at`,
-      [orgId, input.name, slug],
+      [id, orgId, input.name, slug],
     );
     return rows[0]!;
   }
@@ -209,17 +219,19 @@ export async function withCloudContext<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect();
-  const settings = [
-    `SET app.tenant_org_id = ${client.escapeLiteral(ctx.orgId)}`,
-    `SET app.tenant_facility_id = ${client.escapeLiteral(ctx.facilityId)}`,
-    `SET app.tenant_admin = ${ctx.admin ? 'true' : 'false'}`,
+  // Track the setting NAME and the SET statement separately — the RESET must
+  // name the GUC only (`RESET app.tenant_org_id`), not replay the SET prefix.
+  const settings: { name: string; set: string }[] = [
+    { name: RLS.orgId, set: `SET ${RLS.orgId} = ${client.escapeLiteral(ctx.orgId)}` },
+    { name: RLS.facilityId, set: `SET ${RLS.facilityId} = ${client.escapeLiteral(ctx.facilityId)}` },
+    { name: RLS.admin, set: `SET ${RLS.admin} = ${ctx.admin ? 'true' : 'false'}` },
   ];
-  for (const s of settings) await client.query(s);
+  for (const s of settings) await client.query(s.set);
   try {
     return await fn(client);
   } finally {
     for (const s of settings) {
-      await client.query(`RESET ${s.split(' = ')[0]!}`);
+      await client.query(`RESET ${s.name}`);
     }
     client.release();
   }
@@ -238,8 +250,12 @@ export interface BootstrapResult {
 }
 
 /** Bootstrap the cloud org + its first facility on a PG-backed store. Idempotent:
- *  if an org already exists the first facility is created under it; if both exist
- *  the existing org + first facility are returned.
+ *  the org is looked up BY NAME first — calling it twice with the same names
+ *  returns the same org + facility. An EXPLICIT orgName with no match creates
+ *  that org (a different name = a different org: the multi-org bootstrap);
+ *  the DEFAULT name attaches to the installation's existing org when one
+ *  exists — the one-org-per-installation default (D5) — and otherwise creates
+ *  it. The facility is matched/created under the org the same way.
  *
  *  This is the H1 "onboarding" seam — in production it is driven by the H3
  *  pairing flow; here it is the get-started path for a cloud instance.
@@ -251,9 +267,14 @@ export async function bootstrapCloudOrg(
 ): Promise<BootstrapResult> {
   const orgName = opts.orgName ?? 'Default Organization';
   const facilityName = opts.facilityName ?? 'Default Facility';
-  let org = (await orgStore.list())[0];
+  const orgs = await orgStore.list();
+  let org = orgs.find((o) => o.name === orgName);
   if (!org) {
-    org = await orgStore.create({ name: orgName });
+    if (opts.orgName === undefined && orgs.length > 0) {
+      org = orgs[0]!;
+    } else {
+      org = await orgStore.create({ name: orgName });
+    }
   }
   const facilities = await facilityStore.list(org.id);
   let facility = facilities.find((f) => f.slug === slugify(facilityName));

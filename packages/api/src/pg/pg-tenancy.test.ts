@@ -21,6 +21,7 @@ import {
   withCloudContext,
   RLS,
 } from './pg-tenancy.js';
+import { PostgresProfileStore, ACME_CHEM_200_PROFILE } from '@integration-hub/core';
 
 const DB_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const skipReason = DB_URL ? false : 'TEST_DATABASE_URL/DATABASE_URL not set (npm run db:up && npm run test:db)';
@@ -85,6 +86,14 @@ test('org + facility bootstrap + org_id/facility_id write-through on devices + m
   // Devices stamped with org_id/facility_id through a cloud context.
   const ctx: CloudContext = { orgId: boot.org.id, facilityId: boot.facility.id, admin: true };
 
+  // The devices.profile_id FK (migration 0008) requires the profile row —
+  // seed it, then bind the device to it (same pattern as pg-devices.test.ts).
+  await new PostgresProfileStore(pool!).upsert(ACME_CHEM_200_PROFILE);
+
+  // The H1 write-through: with tenancy set on the registry, registered rows
+  // are stamped with the org/facility (the same seam the D11 sync rides).
+  devices.tenancy = { orgId: boot.org.id, facilityId: boot.facility.id };
+
   await withCloudContext(pool!, ctx, async (client) => {
     const dev = await devices.register({
       name: 'Chemistry Analyzer A',
@@ -103,6 +112,14 @@ test('org + facility bootstrap + org_id/facility_id write-through on devices + m
   const device = await devices.get('chemistry-analyzer-a');
   assert.ok(device, 'device findable by slug');
   assert.deepStrictEqual(device.state, 'unknown');
+
+  // The write-through actually landed: the row carries the org/facility stamps.
+  const { rows: stamped } = await pool!.query<{ org_id: string; facility_id: string }>(
+    `SELECT org_id, facility_id FROM devices WHERE id = $1`,
+    ['chemistry-analyzer-a'],
+  );
+  assert.equal(stamped[0]!.org_id, boot.org.id, 'device stamped with org_id');
+  assert.equal(stamped[0]!.facility_id, boot.facility.id, 'device stamped with facility_id');
 
   // Messages written through the PG store should carry org_id/facility_id when
   // a cloud context is set on the client. We prove the device write-through is

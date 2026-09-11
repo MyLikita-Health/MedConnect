@@ -12,6 +12,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createDbPool, closeDbPool } from './pool.js';
 import { runMigrations } from './migrate.js';
 import { PostgresMessageStore } from './pg-store.js';
@@ -29,6 +30,12 @@ let edgePool: Pool | undefined;
 let store: PostgresMessageStore;
 let devices: PostgresDeviceRegistry;
 let outbox: PostgresOutbox;
+
+// The `messages.id` column is a uuid (migration 0001); the outbox pk IS the
+// message id, so the fixtures use uuids from the start.
+const MSG_1 = randomUUID();
+const MSG_2 = randomUUID();
+const MSG_B1 = randomUUID();
 
 function labMessage(id: string, status: CanonicalMessage['status'] = 'RECEIVED'): CanonicalMessage {
   return {
@@ -95,22 +102,32 @@ after(async () => {
 });
 
 test('edge write-through: recording a message appends the outbox row in the same transaction', { skip: !DB_URL }, async () => {
-  await store.record(labMessage('sync-m-1'));
+  await store.record(labMessage(MSG_1));
   const pending = await outbox.listUnacked(100);
   assert.equal(pending.length, 1, 'one sync entry for one message');
   assert.equal(pending[0]!.table, 'messages');
-  assert.equal(pending[0]!.pk, 'sync-m-1');
+  assert.equal(pending[0]!.pk, MSG_1);
   assert.equal(pending[0]!.facilityId, 'fac-edge', 'tenancy stamped');
   const payload = pending[0]!.payload as { id: string; status: string };
-  assert.equal(payload.id, 'sync-m-1');
+  assert.equal(payload.id, MSG_1);
   assert.equal(payload.status, 'RECEIVED');
 });
 
 test('edge→cloud convergence: syncer ships, ingest applies, cloud row matches the edge row', { skip: !DB_URL }, async () => {
   // A second message + status transition on the edge.
-  await store.record(labMessage('sync-m-2'));
-  await store.mark('sync-m-2', 'ROUTED', 'delivered to console');
+  await store.record(labMessage(MSG_2));
+  await store.mark(MSG_2, 'ROUTED', 'delivered to console');
   await devices.upsertFromConnection({ id: 'EDGE-1', state: 'connected' });
+
+  // The UPDATE + device sync entries are appended fire-and-forget by design
+  // ("sync must never fail a lifecycle transition") — wait for them to land
+  // instead of racing the appends: record/marked entry + 2 async ones.
+  async function waitForPending(min: number): Promise<void> {
+    for (let i = 0; i < 100 && (await outbox.pendingCount()) < min; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  await waitForPending(3);
 
   // The cloud ingest store (same PG instance, different DB role).
   const ingest = new PostgresIngestStore(pool!);
@@ -130,7 +147,7 @@ test('edge→cloud convergence: syncer ships, ingest applies, cloud row matches 
   // Cloud copy converges: message with the ROUTED status, device connected.
   const { rows: cloudMsg } = await pool!.query<{ status: string; facility_id: string | null }>(
     `SELECT status, facility_id FROM messages WHERE id = $1`,
-    ['sync-m-2'],
+    [MSG_2],
   );
   assert.equal(cloudMsg[0]!.status, 'ROUTED', 'status transition converged');
   assert.equal(cloudMsg[0]!.facility_id, 'fac-edge', 'tenancy stamps rode the sync entry');
@@ -151,15 +168,18 @@ test('redelivery is a cloud-side no-op: ingest dedups on (facility_id, seq)', { 
   assert.equal(batch.length, 0);
 
   // Force a redelivery: the edge lost its ack (crash before markAcked).
-  await pool!.query(`UPDATE outbox SET acked = false`);
+  // NOTE: the outbox lives on the EDGE database (edgePool) — the cloud db has
+  // its own (empty) outbox table from migration 0015, so resetting through the
+  // cloud pool would silently no-op.
+  await edgePool!.query(`UPDATE outbox SET acked = false`);
   const batch2 = await outbox.listUnacked(200);
   assert.ok(batch2.length > 0);
   const appliedThrough = await ingest.applyBatch(batch2);
   assert.equal(appliedThrough, 0, 'nothing NEW applied — every (facility, seq) already present');
-  await outbox.markAcked(appliedThrough === 0 ? Number((await pool!.query<{ m: string }>(`SELECT max(seq) AS m FROM outbox`)).rows[0]!.m) : appliedThrough);
+  await outbox.markAcked(appliedThrough === 0 ? Number((await edgePool!.query<{ m: string }>(`SELECT max(seq) AS m FROM outbox`)).rows[0]!.m) : appliedThrough);
 
   // Cloud still has exactly one copy.
-  const { rows } = await pool!.query<{ n: string }>(`SELECT count(*) AS n FROM messages WHERE id = $1`, ['sync-m-1']);
+  const { rows } = await pool!.query<{ n: string }>(`SELECT count(*) AS n FROM messages WHERE id = $1`, [MSG_1]);
   assert.equal(Number(rows[0]!.n), 1, 'no duplicate cloud rows');
   assert.equal(await outbox.pendingCount(), 0, 'edge outbox acked again');
 });
@@ -171,15 +191,15 @@ test('two facilities isolated in the cloud ingest: facility B cannot see facilit
     seq: 1,
     table: 'messages',
     op: 'INSERT',
-    pk: 'sync-m-B1',
-    payload: { id: 'sync-m-B1', protocol: 'ASTM', direction: 'inbound', receivedAt: new Date().toISOString(), raw: 'H|', status: 'RECEIVED', errors: [], timeline: [] },
+    pk: MSG_B1,
+    payload: { id: MSG_B1, protocol: 'ASTM', direction: 'inbound', receivedAt: new Date().toISOString(), raw: 'H|', status: 'RECEIVED', errors: [], timeline: [] },
     facilityId: 'fac-B',
     createdAt: new Date().toISOString(),
   };
   const applied = await ingest.applyBatch([other]);
   assert.equal(applied, 1);
 
-  const { rows } = await pool!.query(`SELECT facility_id FROM messages WHERE id = 'sync-m-B1'`);
+  const { rows } = await pool!.query(`SELECT facility_id FROM messages WHERE id = $1`, [MSG_B1]);
   assert.equal(rows[0]!.facility_id, 'fac-B');
   // The ledger keeps both facilities' entries apart.
   const cursors = await ingest.cursors();
