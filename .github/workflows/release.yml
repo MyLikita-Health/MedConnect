@@ -111,6 +111,11 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      # update-cli (manifest step) imports @integration-hub/core through tsx —
+      # the workspace deps must exist on this runner too.
+      - name: Install workspace dependencies
+        run: npm ci
+
       - name: Compute the version
         id: ver
         shell: bash
