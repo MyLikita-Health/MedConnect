@@ -1,0 +1,221 @@
+# W5 — first-boot smoke drill on REAL Windows (docs/windows-desktop-installer.md
+# §8.5 "exit proof 5"; packaging/README.md checklist). Manual dispatch with the
+# release tag to drill.
+#
+# What it proves, end to end, on a hosted x64 Windows runner:
+#   1. The RELEASED installer runs silently (NSIS /S) and writes the payload
+#      under $PROGRAMFILES64\IntegrationHub.
+#   2. The WinSW service `integration-hub` registers with the SCM and reaches
+#      RUNNING; the console answers on :3000 with the first-boot surface on.
+#   3. The setup flow mints the admin key exactly once (the W2 fail-closed
+#      contract: 201 while unconfigured, then locked).
+#   4. A simulated analyzer (the payload's own simulator, speaking real ASTM
+#      framing to the device listener on :5000) produces a message that is
+#      queryable through the authenticated API — the analyzer-to-console loop.
+#   5. The signature baseline: the released build is UNSIGNED (decision D13 —
+#      recorded here as the comparison point for the post-certificate world).
+#   6. Silent uninstall (NSIS /S) removes payload + service registration and
+#      KEEPS the data dir (the W2 uninstall contract).
+#
+# The runner VM is ephemeral, so the once-shown admin key never outlives the
+# job; the drill writes it to $RUNNER_TEMP and never echoes it into the log.
+name: smoke-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to drill (e.g. v0.1.0-rc.1)'
+        required: true
+      variant:
+        description: 'Installer variant'
+        required: false
+        default: 'base'
+        type: choice
+        options:
+          - base
+          - orthanc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-drill-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the released installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          VARIANT="${{ github.event.inputs.variant }}"
+          if [ "$VARIANT" = "orthanc" ]; then
+            ASSET="IntegrationHub-${TAG#v}-orthanc-setup.exe"
+          else
+            ASSET="IntegrationHub-${TAG#v}-setup.exe"
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" --clobber
+          test -f "$ASSET" || { echo "::error::asset $ASSET not found on $TAG"; exit 1; }
+          echo "installer=$ASSET" >> "$GITHUB_ENV"
+          echo "installer=$ASSET"
+
+      # D13 baseline: before the certificate exists, the released exe must be
+      # unsigned — and this is recorded as the SmartScreen comparison point.
+      - name: Signature baseline (expect UNSIGNED — D13)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Filter 'IntegrationHub-*setup.exe' | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          "D13 baseline: $($exe.Name) → Authenticode status = $($sig.Status)"
+          if ($sig.Status -ne 'NotSigned') { throw "expected an UNSIGNED installer, got $($sig.Status)" }
+
+      - name: Silent install (NSIS /S → default ports 5000/3000)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Filter 'IntegrationHub-*setup.exe' | Select-Object -First 1
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          "installer finished with exit code 0"
+
+      - name: Payload + firewall rule landed
+        shell: pwsh
+        run: |
+          $files = @(
+            'C:\Program Files\IntegrationHub\node.exe',
+            'C:\Program Files\IntegrationHub\IntegrationHub.exe',
+            'C:\Program Files\IntegrationHub\IntegrationHub.xml',
+            'C:\Program Files\IntegrationHub\app\packages\server\src\service-cli.ts'
+          )
+          foreach ($f in $files) { if (-not (Test-Path $f)) { throw "missing: $f" } }
+          Get-NetFirewallRule -DisplayName 'Integration Hub device listener' -ErrorAction Stop | Out-Null
+          "payload + private-profile firewall rule OK"
+
+      - name: Service `integration-hub` reaches RUNNING
+        shell: pwsh
+        run: |
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            $svc = Get-Service -Name 'integration-hub' -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') { break }
+            Start-Sleep -Seconds 2
+          } while ((Get-Date) -lt $deadline)
+          if (-not $svc) { throw "service 'integration-hub' never registered with the SCM" }
+          if ($svc.Status -ne 'Running') { throw "service is $($svc.Status), expected Running" }
+          "service integration-hub: Running"
+
+      - name: Console answers with the first-boot surface on
+        shell: pwsh
+        run: |
+          $deadline = (Get-Date).AddSeconds(60)
+          $health = $null
+          do {
+            try {
+              $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/api/v1/health'
+              break
+            } catch { Start-Sleep -Seconds 2 }
+          } while ((Get-Date) -lt $deadline)
+          if (-not $health) { throw 'console never answered on :3000' }
+          $status = Invoke-RestMethod -Uri 'http://127.0.0.1:3000/api/v1/setup/status'
+          if (-not $status.firstBoot) { throw "expected firstBoot=true — got $($status | ConvertTo-Json -Compress)" }
+          "console OK on :3000; firstBoot=$($status.firstBoot)"
+
+      - name: Complete setup — admin key minted exactly once
+        shell: pwsh
+        run: |
+          $body = @{
+            facility = @{ name = 'Runner Smoke Facility'; orgSlug = 'runner-smoke' }
+            domains  = @{ lab = $true; imaging = $false }
+          } | ConvertTo-Json
+          # The one unauthenticated write allowed while unconfigured (W2):
+          # 201 + the minted admin key. Never echoed — written to RUNNER_TEMP.
+          $r = Invoke-WebRequest -UseBasicParsing -Method Post `
+                 -Uri 'http://127.0.0.1:3000/api/v1/setup/complete' `
+                 -ContentType 'application/json' -Body $body -SkipHttpErrorCheck
+          if ($r.StatusCode -ne 201) { throw "setup/complete returned $($r.StatusCode): $($r.Content)" }
+          $out = $r.Content | ConvertFrom-Json
+          if (-not $out.adminKey.secret) { throw 'no admin key in the completion response' }
+          $out.adminKey.secret | Out-File -NoNewline "$env:RUNNER_TEMP\hub-admin-key"
+          # Fail-closed re-check: the route must be locked now.
+          $again = Invoke-WebRequest -UseBasicParsing -Method Post `
+                     -Uri 'http://127.0.0.1:3000/api/v1/setup/complete' `
+                     -ContentType 'application/json' -Body $body -SkipHttpErrorCheck
+          if ($again.StatusCode -lt 400) { throw "re-completion returned $($again.StatusCode) — expected 401/403 (fail closed)" }
+          "setup complete (facility: $($out.facility.name)); completion is now fail-closed ($($again.StatusCode))"
+
+      - name: Analyzer message lands end to end (simulator → :5000 → API)
+        shell: pwsh
+        run: |
+          $key = (Get-Content "$env:RUNNER_TEMP\hub-admin-key" -Raw).Trim()
+          $hdr = @{ Authorization = "Bearer $key" }
+          # GET /api/v1/messages returns a BARE JSON ARRAY (store.list());
+          # PowerShell turns an empty [] into $null, so null-guard the wrap.
+          $raw = Invoke-RestMethod -Headers $hdr -Uri 'http://127.0.0.1:3000/api/v1/messages?limit=50'
+          $before = if ($null -eq $raw) { @() } else { @($raw) }
+          $count = $before.Count
+          "messages before: $count"
+          Push-Location 'C:\Program Files\IntegrationHub\app'
+          try {
+            & 'C:\Program Files\IntegrationHub\node.exe' --import tsx `
+              packages\simulator\src\cli.ts --host 127.0.0.1 --port 5000 --count 1 --fixed
+            if ($LASTEXITCODE -ne 0) { throw "simulator exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+          $deadline = (Get-Date).AddSeconds(60)
+          $n = $count
+          do {
+            Start-Sleep -Seconds 3
+            $raw = Invoke-RestMethod -Headers $hdr -Uri 'http://127.0.0.1:3000/api/v1/messages?limit=50'
+            $list = if ($null -eq $raw) { @() } else { @($raw) }
+            $n = $list.Count
+          } while ($n -le $count -and (Get-Date) -lt $deadline)
+          if ($n -le $count) { throw "no new message landed (before=$count after=$n)" }
+          $m = $list[0]
+          "message LANDED (before=$count after=$n) — latest: id=$($m.id) device=$($m.deviceId) status=$($m.status)"
+
+      - name: Service log evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $logDir = 'C:\ProgramData\IntegrationHub\logs'
+          if (Test-Path $logDir) {
+            Get-ChildItem $logDir | Format-Table Name,Length | Out-String | Write-Host
+            foreach ($f in Get-ChildItem $logDir) {
+              "--- tail of $($f.Name) ---"
+              Get-Content $f.FullName -Tail 40 | Write-Host
+            }
+          } else { Write-Host "no log dir at $logDir" }
+
+      - name: Silent uninstall (keeps the data dir)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath 'C:\Program Files\IntegrationHub\uninstall.exe' -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exit code $($p.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Get-Service 'integration-hub' -ErrorAction SilentlyContinue) { throw 'service still registered after uninstall' }
+          if (Test-Path 'C:\Program Files\IntegrationHub\IntegrationHub.exe') { throw 'payload still present after uninstall' }
+          if (-not (Test-Path 'C:\ProgramData\IntegrationHub')) { throw 'data dir removed — silent uninstall must KEEP it (W2 contract)' }
+          "uninstall clean; service gone, payload gone, data dir kept"
+
+      - name: Drill summary
+        if: always()
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          $variant = "${{ github.event.inputs.variant }}"
+          $lines = @(
+            "## Windows smoke drill — $tag ($variant)",
+            "",
+            "- Runner: windows-latest (real x64 Windows)",
+            "- Signature baseline: UNSIGNED (D13 — recorded for the post-certificate comparison)",
+            "- Steps: silent install → service RUNNING → first-boot console → admin key minted once",
+            "  → ASTM simulator message → authenticated API query → silent uninstall (data kept)",
+            ""
+          )
+          $lines | Out-File $env:GITHUB_STEP_SUMMARY -Append
