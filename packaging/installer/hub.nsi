@@ -38,13 +38,22 @@ ManifestDPIAware true
 !endif
 
 ; ------------------------------------------------------------------ metadata
+; NSIS VIProductVersion requires strict X.X.X.X — strip any semver
+; pre-release suffix (e.g. 0.1.0-rc.1 → 0.1.0.0) so pre-release tags can
+; compile; the FULL version stays in the file name + ProductVersion key.
+!searchparse /noerrors "${VERSION}" "-" NSIS_PREREL
+!ifndef NSIS_PREREL
+  !define NSIS_BASE "${VERSION}"
+!else
+  !searchparse /noerrors "${VERSION}" "" NSIS_BASE "-"
+!endif
 OutFile "build\IntegrationHub-${VERSION}-setup.exe"
 Name "Integration Hub ${VERSION}"
-VIProductVersion "${VERSION}.0"
+VIProductVersion "${NSIS_BASE}.0"
 VIAddVersionKey ProductName "Integration Hub"
 VIAddVersionKey FileDescription "Integration Hub — local edge installer (W2.5)"
 VIAddVersionKey LegalCopyright ""
-VIAddVersionKey FileVersion "${VERSION}.0"
+VIAddVersionKey FileVersion "${NSIS_BASE}.0"
 VIAddVersionKey ProductVersion "${VERSION}"
 
 InstallDir "$PROGRAMFILES64\IntegrationHub"

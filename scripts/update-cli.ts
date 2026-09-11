@@ -34,7 +34,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   generateUpdateKeyPair,
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
 // release tests import buildReleaseManifest and must not trigger main().
 const invokedDirectly = (() => {
   try {
-    return realpathSync(process.argv[1] ?? '') === realpathSync(pathToFileURL(import.meta.url).fsPath);
+    return realpathSync(process.argv[1] ?? '') === realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
