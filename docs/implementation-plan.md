@@ -567,7 +567,13 @@ added by partner without core team.
   StoreBackend/DeviceBackend seams + prove a fully-local no-Docker run), then W2 (Windows
   service + installer skeleton + first-boot config UI), then W3 (imaging + LAN/network
   polish), then W4 (cloud-pairing readiness + Windows update delivery on top of the
-existing signed-update supervisor). This track is parallel to M4 cloud, not a blocker.
+existing signed-update supervisor), then W5 (signed distribution + the release
+pipeline — Authenticode as an env-driven step + GitHub Releases + the
+update-manifest loop, decision D13; buildable without a certificate). This
+track is parallel to M4 cloud, not a blocker. Status: W1–W4 shipped
+(§13.19); W5 shipped in the same window (docs/windows-desktop-installer.md
+§8.5) — the track's remaining items are the certificate purchase itself and
+the real-Windows smoke drill.
 
 ---
 
@@ -2010,17 +2016,24 @@ W4 `172b5a3`.
    `x-hub-gateway` + the paired org/facility stamps, and acks drain the
    backlog. (c) `installer.test.ts` pins the UPDATES env lines on both
    sides (NSIS writer + `startHub` reader). On Node 22 the full suite
-   is 416 tests with all non-DB-gated tests green (DB-gated tests need
-   `npm run db:up`; CI runs them with a Postgres service).
+   is green with the DB up (416 tests at the W2–W4 close; 422 after W5
+   added its 6 invariants — DB-gated tests need `npm run db:up`; CI runs
+   them with a Postgres service).
 
 **Windows-track gate status**: W1–W4 ✅ — the §8.2a sequencing (W1→W4) is
-complete. What remains is operational/distribution, not build: Authenticode
-code signing + the distribution story, the first-boot smoke on real Windows
-hardware (install → service → wizard → simulated analyzer message), and the
-M4-gate operational criteria a paired edge now needs a deployed cloud for
-(reference vendor unaided, 48 h offline soak, production RLS verification).
-Next milestone on the plan: M5 (§8.1) — ecosystem, certification program,
-OEM API, broader-device profiles.
+complete. The distribution remainder then shipped as **W5** (§8.2a
+sequencing; docs/windows-desktop-installer.md §8.5, decision D13): the
+env-driven Authenticode signing step + GitHub Releases + the
+`update-cli release` manifest loop are built — signing activates by
+configuration when a certificate is purchased, no code changes. What
+remains on the track is operational, not build: the certificate purchase +
+CI secrets (the only piece blocked on a purchase), the first-boot smoke on
+real Windows hardware (install → service → wizard → simulated analyzer
+message — now extended with the signature story), and the M4-gate
+operational criteria a paired edge needs a deployed cloud for (reference
+vendor unaided, 48 h offline soak, production RLS verification). Next
+milestone on the plan: M5 (§8.1) — ecosystem, certification program, OEM
+API, broader-device profiles.
 
 ---
 
