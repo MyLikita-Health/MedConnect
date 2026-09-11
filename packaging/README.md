@@ -91,6 +91,14 @@ then:
 - [x] Update delivery on top of the signed-update supervisor (W4 — `!ifdef UPDATES` wires `UPDATE_SOURCE`/`UPDATE_PUBLIC_KEY` into the service env; the supervised agent swaps the hub child with health gate + rollback).
 - [x] W5: env-driven signing wrapper (`installer:sign`, SHA-256 + RFC-3161, loud no-op when unsigned) + release workflow (tag → both exes + `SHA256SUMS.txt` + Ed25519-signed update manifest on GitHub Releases) + `update-cli release` manifest generation — **built, without a certificate** (D13).
 - [ ] W5: certificate purchase + CI secrets when the first pilot demands it (Azure Artifact Signing preferred, OV token fallback — D13); signing then activates by configuration (`vars.SIGN_COMMAND_TEMPLATE` + the cert secrets; the wrapper enforces the rest).
+- [x] Dry-run release: `v0.1.0-rc.1` published end-to-end by the workflow
+      (compile → sign no-op → checksums → manifest → GitHub Release); both
+      released EXEs hash-verify against `SHA256SUMS.txt` and the manifest's
+      `artifact.sha256`/`size` match the released base installer. Two pipeline
+      bugs it shook out, now fixed: NSIS `VIProductVersion` rejects a semver
+      pre-release suffix (strict X.X.X.X), and `npm ci` cannot run on hosted
+      Windows runners (better-sqlite3 node-gyp vs. VS) — the workflow now runs
+      npm only on ubuntu.
 - [ ] First-boot smoke on a real Windows box: install → service starts → console
       setup wizard → admin key minted once → simulated analyzer message lands —
       extended with the signature story (Digital Signatures tab when signed;
