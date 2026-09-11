@@ -682,6 +682,7 @@ M3 imaging only with a committed radiology pilot.
 | D9 | Marketplace timing vs M5 pull | demand check with distributors | M4 |
 | D10 | Orthanc bundled vs customer-provided default | **RESOLVED (M3.5) — bundled-by-default** (pinned multi-arch derived image for pilot/demo) **+ customer-provided supported**: `ORTHANC_URL` already points at any Orthanc (facility-managed, vendor appliance), so deployments that already run Orthanc ship none; the §7.5.5 AGPL boundary is identical either way (REST only). | **Resolved** (M3.5) |
 | D11 | Edge durable queue / cloud queue swap | **RESOLVED (M4 cloud kickoff) — edge outbox = the cloud sync outbox, cloud adds a Redis+BullMQ worker**. The in-process dispatcher today writes to the edge SQL store (the edge-outbox shape, §4.2/§13.2); no recovery on restart yet. Cloud M4 adds (1) an explicit `outbox` table + write-through on the same local writes, and (2) a BullMQ worker that reads unacked outbox rows and ships them to the cloud platform over the outbound-only secure channel (PRD §42), acking on success. The dispatcher seam (`MessageSink` / `Dispatcher`) stays the same — BullMQ is a swap behind the existing delivery seam, not a rewrite. In-memory mode keeps the in-process delivery; PG mode with no cloud sync keeps the outbox as a no-op log until a sync worker is wired. |
+| D13 | Windows Authenticode signing + distribution | **RESOLVED (W5 kickoff, 2026-09-11) — build the pipeline now, buy the certificate when the first pilot demands it.** The sign step is a pluggable, env-driven wrapper (`SIGN_COMMAND`; SHA-256 + mandatory RFC-3161 timestamping) with a loud no-op when unsigned, so adding a cert later is configuration, not code. Expected cert route: **Azure Artifact Signing** (keys in Microsoft's cloud HSM, signs from CI with Entra credentials, ~$9.99/mo Basic; caveats: needs a paid Azure subscription + identity validation and Microsoft has throttled sign-ups before) with a CA-issued **OV** token cert as fallback (EV's historical SmartScreen advantage no longer justifies the same token burden, post-2024 reputation rules). Distribution: **GitHub Releases** (signed exes + SHA256SUMS + an Ed25519-signed update manifest per release); signing runs in **CI** on a windows runner with a local-script parity path for hotfixes. The update agent consumes the release manifest via the existing `UPDATE_SOURCE`/`UPDATE_PUBLIC_KEY` env — no new architecture. Full plan: docs/windows-desktop-installer.md §8.5. |
 
 ---
 
@@ -1910,6 +1911,116 @@ backends — a third backend mode, not a fork:
 
 Deferred to later W phases (unchanged): Windows service + installer (W2),
 Orthanc bundling (W3), pairing artifact + update delivery (W4).
+
+---
+
+### 13.19 Windows desktop track — W2 service + setup, W2.5 NSIS
+      installer, W3 imaging bundle, W4 cloud pairing + updates: status
+
+Shipped September 2026 — the rest of the Windows-desktop local track
+(decision D12; docs/windows-desktop-installer.md §8.2–§8.4, where each
+phase's implementation plan was recorded before coding and resolved after).
+W1 (§13.18) delivered the SQLite edge backend; W2–W4 packaged it as a
+single-box product. Commits: W2 `b007701`, W2.5 `2011752`, W3 `19a9cfa`,
+W4 `172b5a3`.
+
+1. ✅ **W2 — Windows service + first-boot setup.** The service entry
+   (`packages/server/src/service-cli.ts`) is a headless launcher driving
+   `HubSupervisor` with LOCAL defaults — SQLite at `<dataDir>/hub.sqlite`,
+   update state at `<dataDir>/state`, file logging (console is unreliable
+   under a service context), `DB=sqlite` pinned so an inherited
+   `DATABASE_URL` can't flip the service to PG, SIGINT/SIGTERM →
+   `supervisor.stop()`. Supervision semantics stay in ONE place: the OS
+   keeps the process alive, `HubSupervisor` owns crash/health/rollback.
+   Dev parity: `scripts/service-cli.ts` (`hub-service install|uninstall|
+   status`) emits WinSW YAML (Windows), a launchd plist (macOS) and a
+   systemd unit (Linux) from the same env contract — templates under
+   `packaging/`, so the service wrapper is exercised on every dev machine.
+   First-boot config (`packages/api/src/setup.ts` +
+   `sqlite/sqlite-settings.ts`): `GET /api/v1/setup/status` (public,
+   screen-picker, no secrets), `POST /api/v1/setup/complete` (public ONLY
+   while unconfigured — fail-closed in the route AND the auth hook; the
+   completion mints the admin API key shown exactly once, the H3 pattern),
+   `GET/PATCH /api/v1/setup/settings` under `config:write`. Settings live
+   in the `local_settings` key/value store through the store seam (same
+   durability as everything else); the console renders a setup wizard
+   instead of the dashboard while `firstBoot`; startHub auto-enables the
+   surface for the SQLite backend (`HUB_LOCAL_SETUP`).
+2. ✅ **W2.5 — the real installer: NSIS.** Resolved against MSI/WiX
+   (WiX is Windows-only tooling; NSIS `makensis` compiles cross-platform,
+   matching the repo's dev-parity story) and MSIX (identity/signing
+   assumes a store/cert distribution story the product doesn't have).
+   `packaging/installer/` (`hub.nsi` + `build.sh`): stages the payload
+   (node.exe 22 per `.nvmrc`, the npm workspace sources, a production
+   `npm ci` with tsx RETAINED — it is the runtime loader, and the
+   win32-x64 `better-sqlite3` prebuild), installs to
+   `C:\Program Files\IntegrationHub` with data under
+   `%ProgramData%\IntegrationHub`, registers the service via **WinSW**
+   (a bare `sc.exe binPath=node.exe` cannot serve the SCM handshake —
+   error 1053), adds the private-profile firewall rule for the device
+   port, and on uninstall stops the service BEFORE the data-dir
+   backup/delete prompt. Code signing stayed out (W4/delivery).
+   Exit proofs: `installer.test.ts` pins the build inputs (payload dirs,
+   WinSW/service contract, firewall profile, uninstall ordering),
+   `npm run installer:build` compiles the exe, and CI
+   (`.github/workflows/ci.yml`, the repo's first workflow) builds BOTH
+   installer variants as artifacts and runs the full suite with Postgres
+   up, Node pinned from `.nvmrc`.
+3. ✅ **W3 — imaging bundle + LAN polish.** `--orthanc` stages the official
+   Windows Orthanc build + the prebuilt `ModalityWorklists.dll` beside the
+   payload; `hub.nsi` registers Orthanc as its OWN service (WinSW,
+   `integration-hub-orthanc`) with its own config/data dirs, REST bound
+   localhost-only (`RemoteAccessAllowed=false` — the hub is the only
+   client) and DICOM 4242 on the private-profile firewall; the hub service
+   env carries `ORTHANC_URL=http://127.0.0.1:8042`. The AGPL boundary is
+   unchanged: adjacent process, REST-only (§3.2). First-boot settings now
+   apply on every restart (env still wins, the W3 precedence): the wizard
+   collects the Orthanc REST URL + network host at completion and the hub
+   re-applies them at boot; the setup status route echoes the stored
+   config plus `runtime` — the listeners this process actually bound — so
+   LAN reach is verifiable from the console.
+4. ✅ **W4 — cloud-pairing readiness + update delivery.** Pairing
+   (`packages/api/src/pairing.ts`): the H3 claim flow driven from the
+   edge console — `GET /api/v1/pairing/status` (public, identity + sync
+   endpoint, never the key), `POST /api/v1/pairing/claim` (public ONLY
+   while unpaired, the W2 pattern; proxies the `ihp_…` code to
+   `<cloudBaseUrl>/api/v1/provision/claim`, maps cloud errors
+   410/401/409/501→502/timeout→504, validates + persists the bundle),
+   `POST /api/v1/pairing/unpair` (`config:write`). The gateway key
+   (`ihk_gw_…`) is stored at rest in the SQLite file and NEVER echoed
+   back over the API — it is for the syncer, not the operator. Sync: on
+   boot startHub applies the stored bundle (opts > env > stored),
+   attaches the W1 SQLite outbox + H1 tenancy stamps, and runs the SAME
+   `OutboxSyncer` the PG edge uses against `SqliteOutbox` — one code
+   path; the outbox attaches at boot, so pairing takes effect on the
+   next restart (the service model). Updates: the installer takes
+   `!ifdef UPDATES` (`UPDATE_SOURCE` / `UPDATE_PUBLIC_KEY`) and writes
+   both into the hub service env; the agent runs inside the supervised
+   service, so a staged signed release swaps the hub child in-place with
+   health gate + auto-rollback, never touching the SCM registration.
+   Keygen/sign/verify remains `scripts/update-cli.ts`.
+5. ✅ **Exit proofs (Docker-free).** (a) `pairing.test.ts`: full claim
+   surface against a mock cloud — bundle persisted at rest, no secret in
+   any response, fail-closed re-claim, RBAC'd unpair, restart persistence
+   via store close/reopen. (b) the extended `sqlite-hub.test.ts`:
+   boot unconfigured → complete setup (incl. imaging) → restart with
+   stored settings applied (MWL monitor against the stored Orthanc URL,
+   stored LAN host as bind host) → pair → restart → the syncer boots
+   from stored settings alone, ships the write-through with
+   `x-hub-gateway` + the paired org/facility stamps, and acks drain the
+   backlog. (c) `installer.test.ts` pins the UPDATES env lines on both
+   sides (NSIS writer + `startHub` reader). On Node 22 the full suite
+   is 416 tests with all non-DB-gated tests green (DB-gated tests need
+   `npm run db:up`; CI runs them with a Postgres service).
+
+**Windows-track gate status**: W1–W4 ✅ — the §8.2a sequencing (W1→W4) is
+complete. What remains is operational/distribution, not build: Authenticode
+code signing + the distribution story, the first-boot smoke on real Windows
+hardware (install → service → wizard → simulated analyzer message), and the
+M4-gate operational criteria a paired edge now needs a deployed cloud for
+(reference vendor unaided, 48 h offline soak, production RLS verification).
+Next milestone on the plan: M5 (§8.1) — ecosystem, certification program,
+OEM API, broader-device profiles.
 
 ---
 

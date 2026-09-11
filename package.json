@@ -35,6 +35,7 @@
     "image:build": "docker build -t medconnect-hub:0.1.0 .",
     "installer:build": "bash packaging/installer/build.sh",
     "installer:stage": "bash packaging/installer/build.sh --stage",
+    "installer:sign": "bash packaging/installer/sign.sh",
     "up:stack": "docker compose up -d --build hub",
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down"

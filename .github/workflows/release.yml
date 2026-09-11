@@ -1,0 +1,208 @@
+# W5 — signed distribution + update delivery (docs/windows-desktop-installer.md
+# §8.5; decision D13).
+#
+# Trigger: a v* tag (or manual dispatch for a hotfix) produces:
+#   - BOTH installer variants (base + --orthanc), compiled exactly like CI
+#     (docker-makensis on ubuntu — no Windows needed for the compile),
+#   - Authenticode signing on a WINDOWS runner (signtool ships with the
+#     Windows SDK) driven by the env-driven wrapper — when signing vars exist;
+#     otherwise the publish is documented as UNSIGNED (D13: the certificate
+#     is purchased when the first pilot demands it),
+#   - SHA256SUMS.txt over both exes,
+#   - an update manifest (update-cli release) — Ed25519-signed when
+#     UPDATE_SIGNING_KEY is set — pointing at the release asset URLs: what a
+#     paired edge's UPDATE_SOURCE consumes,
+#   - a GitHub Release carrying all of the above.
+#
+# Configuration (all optional — absence = unsigned publish, loudly):
+#   vars.SIGN_COMMAND_TEMPLATE  printf-style signing invocation with exactly
+#                               one %s = the file path; MUST contain an
+#                               RFC-3161 timestamp flag (/tr, e.g.
+#                               'signtool sign /fd SHA256 /tr %TSA% /td SHA256
+#                               /a /n MyCert %s' — the wrapper enforces it).
+#   vars.TSA_URL                timestamp authority (default digicert).
+#   secrets.UPDATE_SIGNING_KEY  Ed25519 private key PEM (update-cli keygen);
+#                               unset → the manifest is published UNSIGNED
+#                               with a warning (edges with UPDATE_PUBLIC_KEY
+#                               refuse it).
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.2.0) — hotfix releases'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Compute the version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same staging + compile recipe as ci.yml's installer job: stage ONCE
+      # with --orthanc (the superset payload), compile the bundle first, then
+      # the base — makensis inside debian:bookworm-slim, no Windows needed.
+      - name: Stage the payload (incl. the orthanc bundle)
+        run: bash packaging/installer/build.sh --stage --orthanc
+
+      - name: Compile both installers
+        run: |
+          VERSION=${{ steps.ver.outputs.version }}
+          docker run --rm \
+            -v "$PWD/packaging/installer:/src" -w /src \
+            debian:bookworm-slim \
+            bash -c "apt-get update -qq \
+              && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nsis nsis-common \
+              && makensis -V2 -DVERSION=$VERSION -DORTHANC hub.nsi \
+              && mv build/IntegrationHub-$VERSION-setup.exe build/IntegrationHub-$VERSION-orthanc-setup.exe \
+              && makensis -V2 -DVERSION=$VERSION hub.nsi"
+
+      - name: Verify the artifacts
+        run: |
+          VERSION=${{ steps.ver.outputs.version }}
+          test -f "packaging/installer/build/IntegrationHub-$VERSION-setup.exe"
+          test -f "packaging/installer/build/IntegrationHub-$VERSION-orthanc-setup.exe"
+          ls -la packaging/installer/build/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers
+          path: |
+            packaging/installer/build/IntegrationHub-*setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-publish:
+    needs: compile
+    runs-on: windows-latest
+    env:
+      TSA_URL: ${{ vars.TSA_URL || 'http://timestamp.digicert.com' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Compute the version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the compiled installers
+        uses: actions/download-artifact@v4
+        with:
+          name: installers
+          path: artifacts
+
+      # D13: signing is configuration, not code. The wrapper (sign.sh) is the
+      # single signing implementation on every host: it expands the template,
+      # enforces the RFC-3161 timestamp flag, signs every file, and verifies
+      # the result. No vars.SIGN_COMMAND_TEMPLATE → loud warning, unsigned
+      # publish.
+      - name: Sign the installers (Authenticode via sign.sh)
+        if: vars.SIGN_COMMAND_TEMPLATE != ''
+        shell: bash
+        working-directory: artifacts
+        env:
+          SIGN_COMMAND_TEMPLATE: ${{ vars.SIGN_COMMAND_TEMPLATE }}
+        run: |
+          # Expand the one %s of the template against a placeholder file name
+          # to build the concrete command sign.sh will re-expand per file.
+          # signtool.exe is on PATH on windows-latest (Windows SDK).
+          export SIGN_COMMAND="$(printf "$SIGN_COMMAND_TEMPLATE" 'PLACEHOLDER.exe' | sed 's|PLACEHOLDER.exe|%s|')"
+          export SIGN_FILES=$(ls IntegrationHub-*setup.exe | tr '\n' ' ')
+          bash "$GITHUB_WORKSPACE/packaging/installer/sign.sh"
+
+      - name: Checksums
+        shell: bash
+        working-directory: artifacts
+        run: |
+          sha256sum IntegrationHub-*setup.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # The update manifest for the W4 update agent: UPDATE_SOURCE points at
+      # this file; UPDATE_PUBLIC_KEY (the Ed25519 public half) is what the
+      # edge verifies against. Unsigned manifest → edges with a pinned key
+      # refuse it (by design), and the release body says so.
+      - name: Generate + sign the update manifest
+        shell: bash
+        working-directory: artifacts
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          VERSION=${{ steps.ver.outputs.version }}
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION"
+          EXE="IntegrationHub-$VERSION-setup.exe"
+          SHA="$(sha256sum "$EXE" | cut -d' ' -f1)"
+          SIZE="$(stat -c%s "$EXE")"
+          if [ -n "$UPDATE_SIGNING_KEY" ]; then
+            # Write the PEM to a private temp file (never echoed, never logged).
+            KEYFILE="$(mktemp)"
+            printf '%s' "$UPDATE_SIGNING_KEY" > "$KEYFILE"
+            npx tsx "$GITHUB_WORKSPACE/scripts/update-cli.ts" release \
+              --version "$VERSION" \
+              --url "$BASE_URL/$EXE" \
+              --sha256 "$SHA" \
+              --size "$SIZE" \
+              --key "$KEYFILE" \
+              -o manifest.signed.json
+            rm -f "$KEYFILE"
+          else
+            npx tsx "$GITHUB_WORKSPACE/scripts/update-cli.ts" release \
+              --version "$VERSION" \
+              --url "$BASE_URL/$EXE" \
+              --sha256 "$SHA" \
+              --size "$SIZE" \
+              -o manifest.signed.json
+          fi
+          cat manifest.signed.json
+
+      - name: Create the GitHub Release
+        shell: bash
+        working-directory: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ steps.ver.outputs.version }}
+          if [ -f manifest.signed.json ] && grep -q '"signature"' manifest.signed.json; then
+            SIGN_NOTE="Update manifest is Ed25519-signed."
+          else
+            SIGN_NOTE="UNSIGNED publish: Authenticode vars and/or UPDATE_SIGNING_KEY are not configured (decision D13). Edges with UPDATE_PUBLIC_KEY set will refuse the manifest."
+          fi
+          gh release create "v$VERSION" \
+            --title "Integration Hub v$VERSION" \
+            --notes "Installers: base + imaging bundle. SHA256SUMS.txt carries the artifact checksums. $SIGN_NOTE" \
+            IntegrationHub-*setup.exe SHA256SUMS.txt manifest.signed.json

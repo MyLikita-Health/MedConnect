@@ -482,8 +482,148 @@ install/uninstall behavior and the data-dir layout (`hub.sqlite`, state dir, log
   the syncer boots from stored settings (no env), ships the device
   write-through with `x-hub-gateway` + the claimed key and the paired
   org/facility stamps, and acks drain the backlog; (c) `installer.test.ts`
-  pins the `UPDATES` env lines on both sides (NSIS writer + `startHub`
-  reader).
+  pins the `UPDATES` env lines on both   sides (NSIS writer + `startHub` reader).
+
+### 8.5 Phase W5 — signed distribution + update delivery (the W4/delivery remainder)
+
+- The last unchecked items of the W4 checklist: Authenticode signing and the
+  distribution story. Decisions are recorded as **D13** (plan §12): the
+  pipeline is built now with a **pluggable signing step** — no certificate
+  purchase required to build — and the certificate itself is bought when the
+  first pilot demands it. Expected route: **Azure Artifact Signing** (keys in
+  Microsoft's cloud HSM, signing from CI with Entra credentials, no token or
+  HSM hardware to manage; Basic tier $9.99/mo) with a CA-issued **OV** token
+  cert as the fallback (EV's historical SmartScreen advantage no longer
+  justifies its same token burden). Distribution = **GitHub Releases**;
+  signing runs in **CI** (windows runner) with a local-script parity path for
+  hotfix builds.
+
+#### W5 implementation plan (recorded 2026-09-11, before coding)
+
+**1. Signing seam (`packaging/installer/sign.sh`, `npm run installer:sign`) —
+env-driven, no-op when unset.**
+
+- After `makensis`, `build.sh` invokes the signing wrapper for BOTH artifacts
+  (base + `--orthanc` variant). The wrapper reads its command from the
+  environment — a `SIGN_COMMAND` template (a `signtool sign /fd SHA256 /tr
+  <RFC-3161 TSA> /td SHA256 …` invocation for a CA cert, or the Azure Artifact
+  Signing plugin invocation for the cloud route) — so adding a certificate
+  later is configuration, not code.
+- **RFC-3161 timestamping is mandatory** in any configured command: signatures
+  must remain valid after the certificate expires, or every deployed edge
+  breaks on cert rotation day.
+- Without signing env, the wrapper prints a loud warning and skips (exit 0):
+  unsigned CI builds and dev runs stay green; the release notes state the
+  unsigned status.
+- A verify pass follows whenever signing ran (`signtool verify /pa` or
+  `osslsigncode verify`): a requested-but-failed signature fails the build.
+
+**2. Release pipeline (`.github/workflows/release.yml`) — a tag produces
+signed exes + checksums + a signed manifest.**
+
+- Trigger: tag `v*` (+ manual dispatch for hotfixes). Jobs:
+  1. **compile** (ubuntu — the W2.5 docker-makensis recipe): both installer
+     variants, uploaded as job artifacts.
+  2. **sign+publish** (windows-latest — signtool ships with the Windows SDK):
+     download the artifacts, run the same env-driven signing wrapper (secrets
+     supply the future cert credentials; absent secrets → documented unsigned
+     publish), `sha256sum` → `SHA256SUMS.txt`, generate the update manifest
+     (below), then create the **GitHub Release** with: base exe, orthanc exe,
+     `SHA256SUMS.txt`, `manifest.signed.json`.
+- The existing push/PR CI is untouched — signing/publishing happens only on
+  release tags.
+
+**3. Update-manifest generation (`scripts/update-cli.ts release`) — close the
+G3 loop onto real assets.**
+
+- A `release` subcommand builds the manifest the update agent already consumes
+  (the update-cli manifest schema: `schemaVersion`, `release{ id, version,
+  platform, minHubVersion, payload.env }`, `artifact`) from release inputs
+  (`--version`, `--url` of the exe asset, `--sha256`, `--min-hub-version`),
+  then signs it through the existing Ed25519 `sign` path — one
+  keygen/sign/verify loop, now pointed at real release assets instead of a
+  hand-written fixture.
+- An edge installed with the W4 `!ifdef UPDATES` build points `UPDATE_SOURCE`
+  at the release manifest URL; `UPDATE_PUBLIC_KEY` pins the Ed25519 key. No
+  new agent architecture — the M2 signed-update machinery (health gate,
+  rollback, in-place swap by the supervised service) is unchanged; W5 only
+  automates manifest production.
+- Release procedure (documented in `packaging/README.md`): keygen once → the
+  Ed25519 private key lives with release managers (GitHub secret for CI,
+  local for hotfixes) → tag → the workflow publishes everything.
+
+**4. Exit proofs (Docker-free).**
+
+1. `packaging/installer/release.test.ts` pins the invariants in the
+   installer-test style: the workflow exists with the tag trigger, both
+   variants, checksums and the manifest step; the sign wrapper uses SHA-256 +
+   an RFC-3161 timestamp and no-ops loudly without env; a `release`-generated
+   manifest round-trips `verifyManifestSignature` (the existing core path).
+2. `npm run installer:sign` without env: warning + exit 0, artifacts
+   untouched.
+3. The update-agent suite consumes a `release`-generated manifest (not just a
+   hand-written fixture) — the same apply/rollback path proven against the
+   automated manifest shape.
+
+**5. First-boot smoke drill on real Windows hardware** (deferred until
+hardware is available; checklist lives in `packaging/README.md`): install →
+service starts → setup wizard → admin key minted once → simulated analyzer
+message lands — extended with the signature story: the Digital Signatures tab
+shows a valid signature when signed, and the SmartScreen baseline of the
+unsigned build is recorded (the D13 purchase decision compares against this
+reality, not the marketing).
+
+**Explicitly deferred:** the certificate purchase + secret configuration (D13
+— the only piece actually blocked on a purchase), MSIX/store distribution
+(unchanged W2.5 rationale), macOS signing parity (dev-only launchd story
+today), an installer-level self-updater (the supervisor story updates the hub
+payload; the installer itself is re-run manually).
+
+#### W5 resolution (implemented)
+
+- **Signing wrapper (`packaging/installer/sign.sh`, `npm run
+  installer:sign`)**: env-driven (`SIGN_FILES` + a `SIGN_COMMAND` printf
+  template with one `%s`), with a VERIFY pass after every signed file
+  (`signtool verify /pa` when present, `osslsigncode verify` on POSIX) — a
+  requested-but-failed signature exits 1; missing files exit 1. The wrapper
+  REFUSES a `SIGN_COMMAND` without an RFC-3161 timestamp flag (`-tr` / `/tr`
+  / `-ts`) — signatures must outlive the certificate, or cert rotation day
+  breaks every deployed edge. Without `SIGN_COMMAND`: loud boxed warning +
+  exit 0 (unsigned dev/CI builds stay green; the release body states the
+  unsigned status). `build.sh` invokes it after `makensis` (escape hatch:
+  `SKIP_SIGN=1`).
+- **Release workflow (`.github/workflows/release.yml`)**: tag `v*` (or
+  manual dispatch for hotfixes) → compile job (the W2.5 docker-makensis
+  recipe, BOTH variants) → sign-and-publish on **windows-latest** (signtool
+  ships with the SDK): signs through the same `sign.sh` when
+  `vars.SIGN_COMMAND_TEMPLATE` exists, writes `SHA256SUMS.txt`, generates the
+  update manifest via `update-cli release` (Ed25519-signed when
+  `secrets.UPDATE_SIGNING_KEY` exists — written to a private temp file, never
+  echoed), and `gh release create` publishes both exes + checksums +
+  `manifest.signed.json`, with an UNSIGNED-publish note in the body when
+  configuration is absent. The push/PR CI is untouched.
+- **`update-cli release`**: builds the release manifest from `--version`,
+  `--url`, `--sha256`, `--size`, `--min-hub-version`, optionally signs in the
+  same step (`--key`), and validates at the boundary via
+  `updateManifestSchema` — an invalid manifest fails at release time, not at
+  an edge's update poll. `buildReleaseManifest` is exported and the CLI
+  module is import-guarded (runs `main()` only when invoked directly) so the
+  tests exercise the same builder the workflow ships. The core manifest
+  schema gained an optional `artifact.url` (backward compatible: the M2
+  fixture manifests have no URL; release manifests always do).
+- **Exit proofs** (`packaging/installer/release.test.ts`, 6 tests — all
+  Docker-free): static invariants pin the wrapper (env contract, timestamp
+  enforcement, loud unsigned no-op, verify pass, build.sh wiring), the
+  workflow (tag trigger, both variants, windows signing host, checksums,
+  manifest, GitHub Release, unsigned note) and the CLI subcommands; live
+  checks round-trip a `release`-generated manifest through the REAL core
+  signature path (keygen → build → sign → verify, tamper rejected). CLI smoke
+  on disk: keygen → release+sign → verify all exit 0. Full suite: 422 tests,
+  422 pass (with DB up).
+- **What is NOT done (by design, D13)**: no certificate purchased, no
+  signing secrets configured — signing activates by configuration when the
+  first pilot demands it; until then releases publish unsigned with the
+  checksums + the Ed25519 manifest as the integrity layer.
 
 ---
 

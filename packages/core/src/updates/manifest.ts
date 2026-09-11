@@ -47,6 +47,11 @@ export const updateManifestSchema = z.object({
     /** sha256 hex of the artifact file (required for file-backed kinds). */
     sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     size: z.number().int().nonnegative().optional(),
+    /** W5: download URL of the release artifact (e.g. the GitHub Releases
+     *  asset). Optional — the M2 fixture manifests have no URL; release-
+     *  generated manifests (update-cli release) always carry one so an edge
+     *  can fetch the installer directly from UPDATE_SOURCE + the manifest. */
+    url: z.string().url().max(500).optional(),
   }),
   signature: z
     .object({

@@ -125,4 +125,15 @@ echo "[w2.5] compiling installer…"
 # POSIX-style -D flags: accepted by Windows makensis too, and REQUIRED by
 # POSIX builds (they reject /D — it parses as a script filename).
 makensis -V2 -DVERSION="$VERSION" -DSTAGE='build\stage' hub.nsi
-echo "[w2.5] done → build/IntegrationHub-$VERSION-setup.exe"
+EXE="build/IntegrationHub-$VERSION-setup.exe"
+echo "[w2.5] done → $EXE"
+
+# 6. W5 signing (decision D13): env-driven wrapper between makensis and
+# publishing. Without SIGN_COMMAND it warns loudly and exits 0 — the build
+# stays green unsigned; with a certificate this step activates by config.
+# Docs: docs/windows-desktop-installer.md §8.5.
+if [ "${SKIP_SIGN:-}" = "1" ]; then
+  echo "[w5]  SKIP_SIGN=1 — skipping the signing step"
+else
+  SIGN_FILES="$EXE" bash "$(dirname "$0")/sign.sh"
+fi

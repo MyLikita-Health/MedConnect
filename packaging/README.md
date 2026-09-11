@@ -84,11 +84,34 @@ then:
   MWL + modality monitors wire up on first boot (M3.2/C6) and Orthanc shows in
   the Devices panel like any other device.
 
-## Remaining checklist (W4)
+## Remaining checklist (W4 → W5, decision D13)
 
 - [x] Orthanc bundling as a separate Windows process (W3 — `--orthanc`; AGPL boundary: out-of-process, REST-only).
 - [x] LAN device-connectivity polish (W3 — private-profile firewall rules for the device + DICOM ports; wizard network/imaging settings apply on restart).
-- [ ] Authenticode code signing + the distribution story (W4/delivery).
-- [ ] Update delivery on top of the signed-update supervisor (W4).
+- [x] Update delivery on top of the signed-update supervisor (W4 — `!ifdef UPDATES` wires `UPDATE_SOURCE`/`UPDATE_PUBLIC_KEY` into the service env; the supervised agent swaps the hub child with health gate + rollback).
+- [x] W5: env-driven signing wrapper (`installer:sign`, SHA-256 + RFC-3161, loud no-op when unsigned) + release workflow (tag → both exes + `SHA256SUMS.txt` + Ed25519-signed update manifest on GitHub Releases) + `update-cli release` manifest generation — **built, without a certificate** (D13).
+- [ ] W5: certificate purchase + CI secrets when the first pilot demands it (Azure Artifact Signing preferred, OV token fallback — D13); signing then activates by configuration (`vars.SIGN_COMMAND_TEMPLATE` + the cert secrets; the wrapper enforces the rest).
 - [ ] First-boot smoke on a real Windows box: install → service starts → console
-      setup wizard → admin key minted once → simulated analyzer message lands.
+      setup wizard → admin key minted once → simulated analyzer message lands —
+      extended with the signature story (Digital Signatures tab when signed;
+      record the unsigned SmartScreen baseline as the D13 comparison point).
+
+## Release procedure (W5 — `.github/workflows/release.yml`)
+
+1. Once: `npx tsx scripts/update-cli.ts keygen --dir keys` — the Ed25519
+   private key stays with release managers (GitHub secret
+   `UPDATE_SIGNING_KEY` for CI, local for hotfixes); the public key is the
+   `UPDATE_PUBLIC_KEY` every edge pins.
+2. Tag `v<version>` (or dispatch the workflow for a hotfix) — CI compiles both
+   installer variants, signs them when `vars.SIGN_COMMAND_TEMPLATE` + cert
+   secrets exist (via `packaging/installer/sign.sh`), writes
+   `SHA256SUMS.txt`, generates + signs the update manifest
+   (`update-cli release`), and publishes everything as a GitHub Release.
+3. A pilot edge installed with the W4 update build points `UPDATE_SOURCE` at
+   the release manifest URL; the agent polls, verifies the Ed25519 signature,
+   stages, and swaps the hub child in-place (health gate + rollback).
+
+`SIGN_COMMAND_TEMPLATE` is a printf-style signing command with one `%s` (the
+file), e.g. `signtool sign /fd SHA256 /tr https://timestamp.digicert.com
+/td SHA256 /a /n "My Company" %s` — it MUST carry the RFC-3161 `/tr` flag
+(`sign.sh` refuses the command otherwise).
