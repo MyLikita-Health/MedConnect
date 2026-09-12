@@ -12,8 +12,9 @@
 /* Dark mode: lighten the brand text color for contrast.
    #2563eb on rgb(27,27,31) measures 3.32:1 (fails WCAG AA 4.5:1);
    #60a5fa measures 6.75:1 (passes AA, close to AAA). Keep buttons and
-   solid fills on the saturated brand blue; lighten only text colors. */
-.dark {
+   solid fills on the saturated brand blue; lighten only text colors.
+   html.dark beats VitePress's own specificity in the bundled cascade. */
+html.dark {
   --vp-c-brand-1: #60a5fa;
   --vp-c-brand-2: #93c5fd;
   --vp-c-brand-3: #60a5fa;
