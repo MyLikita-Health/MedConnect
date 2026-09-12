@@ -351,9 +351,13 @@ Section "Uninstall"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\IntegrationHub"
   DeleteRegKey HKLM "Software\IntegrationHub"
 
-  ; Data dir: keep (backup first!) vs delete — the operator decides.
+  ; Data dir: keep (backup first!) vs delete - the operator decides.
+  ; SILENT MODE NEVER PROMPTS and NEVER DELETES CLINICAL DATA: /S keeps the
+  ; data dir, full stop (the smoke drill hung 24 minutes on this prompt
+  ; before the fix - the job timeout killed the run mid-uninstall).
+  IfSilent KeepData
   MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Delete the hub data directory?$\r$\n$\r$\n$COMMONPROGRAMDATA\IntegrationHub$\r$\n$\r$\nYes  = delete (results, audit, setup are LOST)$\r$\nNo   = keep it (back it up first — copy the folder while the service is stopped)" \
+    "Delete the hub data directory?$\r$\n$\r$\n$COMMONPROGRAMDATA\IntegrationHub$\r$\n$\r$\nYes  = delete (results, audit, setup are LOST)$\r$\nNo   = keep it (back it up first - copy the folder while the service is stopped)" \
     IDYES DeleteData IDNO KeepData
 DeleteData:
   DetailPrint "Deleting the data directory…"

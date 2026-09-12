@@ -46,7 +46,7 @@ concurrency:
 jobs:
   drill:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -216,7 +216,15 @@ jobs:
       - name: Silent uninstall (keeps the data dir)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath 'C:\Program Files\IntegrationHub\uninstall.exe' -ArgumentList '/S' -Wait -PassThru
+          # rc.4 finding: -Wait waited on the uninstaller (and every
+          # descendant) until the JOB timeout - give the uninstaller its own
+          # short leash and dump the service log as evidence if it blows it.
+          $p = Start-Process -FilePath 'C:\Program Files\IntegrationHub\uninstall.exe' -ArgumentList '/S' -PassThru
+          if (-not $p.WaitForExit(180000)) {
+            Get-Content 'C:\ProgramData\IntegrationHub\logs\integration-hub.out.log' -Tail 40 -ErrorAction SilentlyContinue
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw 'silent uninstall did not exit within 180s (hung prompt?)'
+          }
           if ($p.ExitCode -ne 0) { throw "uninstaller exit code $($p.ExitCode)" }
           Start-Sleep -Seconds 3
           if (Get-Service 'integration-hub' -ErrorAction SilentlyContinue) { throw 'service still registered after uninstall' }
