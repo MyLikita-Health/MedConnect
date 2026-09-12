@@ -11,10 +11,24 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg`.replace('//', '/') }],
+    ['link', { rel: 'apple-touch-icon', href: `${base}favicon.svg`.replace('//', '/') }],
+    ['meta', { name: 'theme-color', content: '#2563eb' }],
+  ],
+
   themeConfig: {
     siteTitle: 'Integration Hub Docs',
+    logo: '/logo.svg',
     nav: [
       { text: 'Guide', link: '/guide/overview' },
+      {
+        text: 'Reference',
+        items: [
+          { text: 'Configuration', link: '/reference/configuration' },
+          { text: 'REST API', link: '/reference/rest-api' },
+        ],
+      },
       { text: 'GitHub', link: 'https://github.com/MyLikita-Health/MedConnect' },
     ],
     sidebar: {
@@ -29,6 +43,15 @@ export default defineConfig({
             { text: 'Devices & connections', link: '/guide/devices' },
             { text: 'Usage', link: '/guide/usage' },
             { text: 'Troubleshooting', link: '/guide/troubleshooting' },
+          ],
+        },
+      ],
+      '/reference/': [
+        {
+          text: 'Reference',
+          items: [
+            { text: 'Configuration', link: '/reference/configuration' },
+            { text: 'REST API', link: '/reference/rest-api' },
           ],
         },
       ],

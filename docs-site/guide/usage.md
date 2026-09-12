@@ -25,33 +25,11 @@ status/config side; the right column is the message side.
 | **Messages** | The message viewer: newest first, filterable by status/device; click a row for the detail view |
 | **Message detail** | Status pill, timeline (RECEIVED → … → ROUTED/FAILED), raw + parsed + canonical payload, match outcome, profile stamp, replay / release / retry / discard actions per status. For **imaging** messages: the full study + routing view (performed-study metadata, storage link into Orthanc, resolved destinations, routing timeline, Retry from DLQ on FAILED) |
 
-## Configuration reference (env vars)
+## Configuration
 
-| Env var | Default | Purpose |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | Bind address for all listeners |
-| `PORT` | `3000` | REST API + web console port |
-| `DEVICE_PORT` | `5000` | ASTM device listener port |
-| `HL7_PORT` | *(unset — HL7 off)* | Inbound HL7 v2 MLLP listener port. Set it and the hub also speaks HL7 v2 |
-| `DATABASE_URL` | *(unset — in-memory)* | PostgreSQL connection string. Set → durable store, migrations auto-apply |
-| `DB` | *(unset)* | `sqlite` selects the embedded SQLite edge backend (single-box local mode) |
-| `HUB_SQLITE_FILE` | *(data dir default)* | SQLite database file location |
-| `HUB_ADMIN_KEY` | *(generated at boot)* | Fixed admin API key secret. Pin it to keep the same key across restarts |
-| `AUTH_DISABLED` | *(unset)* | `1` turns off API auth entirely (dev only) |
-| `HUB_TLS_CERT` / `HUB_TLS_KEY` | *(unset — plain TCP/HTTP)* | PEM files; both the REST API (https) and the device listener terminate TLS |
-| `HUB_STATE_DIR` | *(unset)* | State dir for signed updates; set → update agent + `/api/v1/updates/*` live (run under the supervisor) |
-| `UPDATE_SOURCE` | *(unset)* | Signed-manifest source: https URL, `.json` path, or a directory |
-| `UPDATE_PUBLIC_KEY` | *(unset)* | PEM public key that must sign update manifests |
-| `ORTHANC_URL` | *(unset — imaging off)* | Orthanc REST base URL (e.g. `http://127.0.0.1:8042`). Set → MWL monitor, imaging router, modality monitor |
-| `ORTHANC_USER` / `ORTHANC_PASSWORD` | *(unset)* | Orthanc basic-auth credentials |
-| `MWL_POLL_MS` | `60000` | Worklist sync + performed-study poll cadence |
-| `MODALITY_POLL_MS` | `30000` | Modality C-ECHO health-probe cadence |
-| `ORTHANC_FORWARD_PEER` | *(unset)* | Orthanc peer name to forward performed studies to (PACS/archive) |
-| `HUB_GOLDENS_DIR` | `goldens/` | Directory of golden-message conformance files |
-| `HUB_VERSION` | *(from package)* | Override the reported hub version |
-
-CLI flags mirror the port vars: `npm start -- --http-port 8080
---device-port 5001 --hl7-port 6661 --host 0.0.0.0`.
+Every environment variable, CLI flag, port and endpoint — including the
+SQLite edge vars, the TLS material and the update-agent settings — lives
+in the [Configuration reference](/reference/configuration).
 
 > Without `HUB_ADMIN_KEY`, the hub **generates a new admin key at every
 > boot** and prints it once — the most common first-run stumbling block
@@ -97,41 +75,21 @@ replays/retries bypass it.
 ## The REST API
 
 Base: `http://<hub-host>:3000/api/v1` — every route (except `health`)
-requires `Authorization: Bearer <key>`. The complete generated reference
-is the hub's own **OpenAPI 3.1 spec**: `GET /api/v1/openapi.json`
+requires `Authorization: Bearer <key>`. The complete route table lives in
+the [REST API reference](/reference/rest-api); the generated **OpenAPI
+3.1** spec is served by the hub itself at `GET /api/v1/openapi.json`
 (public — point Swagger UI or Postman at it).
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/api/v1/health` | Liveness; reports `storage: memory\|postgres\|sqlite` + version |
-| GET | `/api/v1/version` | Release identity |
-| GET | `/api/v1/me` | Current key + role |
-| GET | `/api/v1/stats` | Totals by status |
-| GET | `/api/v1/mappings` | Active test-code mapping table |
-| GET/POST | `/api/v1/devices` | List / register devices (optional `profileId` binds a device profile) |
-| GET | `/api/v1/messages?status=&deviceId=&dlq=&limit=` | Messages, newest first |
-| GET | `/api/v1/messages/:id` | Message detail (raw, parsed, canonical, timeline) |
-| POST | `/api/v1/messages/:id/replay` | Re-run a message through the pipeline (lab correction flow) |
-| POST | `/api/v1/messages/:id/retry` | Retry a **DLQ'd** message under current route rules (409 if not DLQ'd) |
-| POST | `/api/v1/messages/:id/discard` | Retire a DLQ message (terminal `DISCARDED`) |
-| GET | `/api/v1/dlq` | Dead-letter queue |
-| GET | `/api/v1/held` | HELD exception queue |
-| POST | `/api/v1/messages/:id/release` | Release a HELD message into delivery |
-| GET/POST/DELETE | `/api/v1/orders` | Expected-order registry (the LIS seam) |
-| GET/POST/DELETE | `/api/v1/admissions` | Patient-admission registry (the ADT feed) |
-| GET/POST/DELETE | `/api/v1/destinations` | Outbound destinations + retry policies (`kind`: `console` / `http` / `hl7`) |
-| GET/POST/DELETE | `/api/v1/routes` | Route rules: device/status → destination |
-| GET | `/api/v1/results` | Flattened canonical result rows |
-| GET/POST/DELETE | `/api/v1/profiles` | Device profiles; `GET /api/v1/profiles/:id/conformance` re-runs goldens |
-| GET/POST/DELETE | `/api/v1/alert-rules` | Alert rules |
-| GET | `/api/v1/alerts?firing=&limit=` | Derived alerts: fire/resolve history |
-| GET | `/api/v1/mwl` | MWL study monitor: status + live Orthanc worklist (404 without `ORTHANC_URL`) |
-| GET | `/api/v1/imaging` | Performed-study messages by status (404 without `ORTHANC_URL`) |
-| GET/POST/DELETE | `/api/v1/keys` | API keys (admin; secret shown once at creation) |
-| PATCH/POST/DELETE | `/api/v1/keys/:id` (+ `/rotate`) | Rename / disable / expiry / rotate / revoke (admin) |
-| GET | `/api/v1/audit` | Audit log (admin) |
-| GET | `/api/v1/updates/status` | Signed-update agent state (admin; only when configured) |
-| POST | `/api/v1/updates/check` / `apply` / `rollback` | Signed-update operations (admin) |
+The routes operators touch daily:
+
+| Task | Route |
+| --- | --- |
+| What's running? | `GET /api/v1/health`, `GET /api/v1/stats` |
+| Watch messages | `GET /api/v1/messages`, `GET /api/v1/messages/:id` |
+| Clear the exception queues | `GET /api/v1/held` + release; `GET /api/v1/dlq` + retry/discard |
+| Register what the LIS expects | `GET/POST /api/v1/orders` |
+| Send results onward | `/api/v1/destinations` + `/api/v1/routes` |
+| Check the imaging pipeline | `GET /api/v1/mwl`, `GET /api/v1/imaging` |
 
 ## Routing & destinations
 

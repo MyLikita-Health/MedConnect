@@ -5,6 +5,9 @@ hero:
   name: Integration Hub
   text: Healthcare device interoperability
   tagline: A single-box edge gateway that connects laboratory analyzers, imaging modalities and LIS/HIS systems — ASTM, HL7 v2 and DICOM in, one canonical pipeline, REST API and web console out.
+  image:
+    src: /logo.svg
+    alt: Integration Hub
   actions:
     - theme: brand
       text: Get started

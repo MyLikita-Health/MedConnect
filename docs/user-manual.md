@@ -648,3 +648,5 @@ The on-prem CA isn't trusted by the OS yet. Install `tls/ca.pem` into the OS tru
 - **Known future work** → keep the roadmap pointer in §1's note; the plan (`docs/implementation-plan.md`) holds forward-looking detail, this manual holds what exists today.
 
 Verification: after a feature change, re-read the sections you touched against the running hub — `npm run demo` + `npm start` + a signed-in console pass is the fastest smoke, plus `npm test` / `npm run test:db` for behavior.
+
+**The documentation site must move with the manual.** The public site (`docs-site/`, VitePress — <https://mylikita-health.github.io/MedConnect/>) renders user-facing versions of these same sections. When a slice updates any section above, update the matching page there **in the same change**: the mapping table lives in `docs-site/README.md`. Pages: `guide/overview.md`, `guide/infrastructure.md`, `guide/installation.md`, `guide/setup.md`, `guide/devices.md`, `guide/usage.md`, `guide/troubleshooting.md`, plus the reference pages `reference/configuration.md` (env vars) and `reference/rest-api.md` (API table). After edits, `npm run docs:build` must pass (it dead-link-checks the site).
