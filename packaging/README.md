@@ -132,6 +132,11 @@ then:
    secrets exist (via `packaging/installer/sign.sh`), writes
    `SHA256SUMS.txt`, generates + signs the update manifest
    (`update-cli release`), and publishes everything as a GitHub Release.
+   **Required post-publish gate:** the same run then drills the published
+   release on a real x64 Windows runner (reusable-workflow call:
+   `smoke-drill needs: publish` — install → service → setup → analyzer
+   message → uninstall). A red drill fails the release run; the published
+   release stays up for forensics but is NOT fit for fleet rollout.
 3. A pilot edge installed with the W4 update build points `UPDATE_SOURCE` at
    the release manifest URL; the agent polls, verifies the Ed25519 signature,
    stages, and swaps the hub child in-place (health gate + rollback).

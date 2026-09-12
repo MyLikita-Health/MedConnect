@@ -19,6 +19,7 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const signSh = readFileSync(join(packagingDir, 'installer', 'sign.sh'), 'utf8');
 const buildSh = readFileSync(join(packagingDir, 'installer', 'build.sh'), 'utf8');
 const releaseYml = readFileSync(join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+const drillYml = readFileSync(join(repoRoot, '.github', 'workflows', 'smoke-drill.yml'), 'utf8');
 const updateCli = readFileSync(join(repoRoot, 'scripts', 'update-cli.ts'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
 
@@ -66,6 +67,23 @@ test('release workflow: tag trigger, both variants, windows signing, checksums, 
   assert.match(releaseYml, /UPDATE_SIGNING_KEY/, 'manifest signing key comes from secrets');
   assert.match(releaseYml, /gh release create/, 'publishes a GitHub Release');
   assert.match(releaseYml, /UNSIGNED publish/, 'unsigned publishes are documented in the release body');
+});
+
+test('release workflow: the smoke drill is the required post-publish gate', () => {
+  // The drill must run as a reusable-workflow CALL (needs: publish makes the
+  // ordering real and a drill failure fails the release run) — a bare dispatch
+  // cannot gate anything.
+  const gate = releaseYml.match(/  smoke-drill:\n[\s\S]*$/);
+  assert.ok(gate, 'a smoke-drill job exists in the release workflow');
+  assert.match(gate[0], /needs: publish/, 'it runs after the release is published');
+  assert.match(gate[0], /uses: \.\/\.github\/workflows\/smoke-drill\.yml/, 'it calls the drill as a reusable workflow');
+  assert.match(gate[0], /secrets: inherit/, 'repo secrets are available to the drill');
+  // The drill must consume the PUBLISHED tag — checkout of a sha without the
+  // tag cannot resolve `gh release download <tag>`.
+  assert.match(gate[0], /tag: v\$\{\{ needs\.publish\.outputs\.version \}\}/, 'it drills the published tag via the publish job output');
+  assert.match(releaseYml, /version: \$\{\{ steps\.ver\.outputs\.version \}\}/, 'the publish job exposes the version as an output');
+  // And the drill itself must accept the call.
+  assert.match(drillYml, /workflow_call:/, 'smoke-drill.yml is callable');
 });
 
 // ---------------------------------------------------------------------------

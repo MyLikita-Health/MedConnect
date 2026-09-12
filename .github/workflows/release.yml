@@ -14,10 +14,14 @@
 #     paired edge's UPDATE_SOURCE consumes,
 #   - a GitHub Release carrying all of the above.
 #
-# Job split (deliberate): the ONLY Windows work is signtool. npm never runs on
-# Windows — `npm ci` here pulls better-sqlite3, whose node-gyp build cannot
-# find a usable Visual Studio on hosted windows runners — so the manifest +
-# release publishing run on ubuntu with a plain npm ci.
+# Job split (deliberate): the ONLY Windows work is signtool + the smoke drill.
+# npm never runs on Windows — `npm ci` here pulls better-sqlite3, whose
+# node-gyp build cannot find a usable Visual Studio on hosted windows runners —
+# so the manifest + release publishing run on ubuntu with a plain npm ci.
+#
+# Post-publish gate (required): the smoke drill runs as a reusable-workflow
+# call AFTER the release is published, drilling the PUBLISHED artifacts — the
+# exact bytes an operator downloads. A failed drill fails this run.
 #
 # Configuration (all optional — absence = unsigned publish, loudly):
 #   vars.SIGN_COMMAND_TEMPLATE  printf-style signing invocation with exactly
@@ -148,6 +152,8 @@ jobs:
   publish:
     needs: sign
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -239,3 +245,17 @@ jobs:
             $PRERELEASE_FLAG \
             --notes "Installers: base + imaging bundle. SHA256SUMS.txt carries the artifact checksums. $SIGN_NOTE" \
             IntegrationHub-*setup.exe SHA256SUMS.txt manifest.signed.json
+
+  # Required post-publish gate: drill the PUBLISHED release (the exact assets
+  # an operator downloads) on a real x64 Windows runner — install, service,
+  # first-boot setup, analyzer message end-to-end, uninstall. Reusable call,
+  # not a dispatch: needs: makes the ordering real and a drill failure marks
+  # this release run failed. Checkout must be the TAG (not a sha): the drill
+  # resolves the installer via `gh release download <tag>`.
+  smoke-drill:
+    needs: publish
+    uses: ./.github/workflows/smoke-drill.yml
+    with:
+      tag: v${{ needs.publish.outputs.version }}
+      variant: base
+    secrets: inherit

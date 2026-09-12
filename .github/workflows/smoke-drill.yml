@@ -1,6 +1,9 @@
 # W5 — first-boot smoke drill on REAL Windows (docs/windows-desktop-installer.md
-# §8.5 "exit proof 5"; packaging/README.md checklist). Manual dispatch with the
-# release tag to drill.
+# §8.5 "exit proof 5"; packaging/README.md checklist). Two trigger modes:
+#   - workflow_dispatch: pick any release tag and drill it on demand;
+#   - workflow_call: the release pipeline's REQUIRED post-publish gate
+#     (release.yml's smoke-drill job needs: publish) — a red drill marks the
+#     whole release run failed.
 #
 # What it proves, end to end, on a hosted x64 Windows runner:
 #   1. The RELEASED installer runs silently (NSIS /S) and writes the payload
@@ -35,12 +38,23 @@ on:
         options:
           - base
           - orthanc
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to drill (the just-published release)'
+        required: true
+        type: string
+      variant:
+        description: 'Installer variant'
+        required: false
+        type: string
+        default: 'base'
 
 permissions:
   contents: read
 
 concurrency:
-  group: smoke-drill-${{ github.event.inputs.tag }}
+  group: smoke-drill-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -55,8 +69,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.event.inputs.tag }}"
-          VARIANT="${{ github.event.inputs.variant }}"
+          TAG="${{ inputs.tag }}"
+          VARIANT="${{ inputs.variant }}"
           if [ "$VARIANT" = "orthanc" ]; then
             ASSET="IntegrationHub-${TAG#v}-orthanc-setup.exe"
           else
@@ -244,8 +258,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.tag }}"
-          $variant = "${{ github.event.inputs.variant }}"
+          $tag = "${{ inputs.tag }}"
+          $variant = "${{ inputs.variant }}"
           $lines = @(
             "## Windows smoke drill — $tag ($variant)",
             "",
