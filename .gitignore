@@ -11,3 +11,6 @@ tls/
 .venv/
 packaging/generated/
 packaging/installer/build/
+docs-site/node_modules/
+docs-site/.vitepress/dist/
+docs-site/.vitepress/cache/

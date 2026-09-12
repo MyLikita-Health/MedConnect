@@ -38,7 +38,10 @@
     "installer:sign": "bash packaging/installer/sign.sh",
     "up:stack": "docker compose up -d --build hub",
     "db:up": "docker compose up -d db",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "docs:dev": "npm run dev --prefix docs-site",
+    "docs:build": "npm run build --prefix docs-site",
+    "docs:preview": "npm run preview --prefix docs-site"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
