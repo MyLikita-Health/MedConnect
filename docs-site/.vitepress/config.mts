@@ -89,7 +89,9 @@ export default defineConfig({
             { text: 'Infrastructure', link: '/guide/infrastructure' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Setup', link: '/guide/setup' },
+            { text: 'Service management', link: '/guide/service-management' },
             { text: 'Devices & connections', link: '/guide/devices' },
+            { text: 'Device certification', link: '/guide/certification' },
             { text: 'Usage', link: '/guide/usage' },
             { text: 'Troubleshooting', link: '/guide/troubleshooting' },
           ],
@@ -101,6 +103,7 @@ export default defineConfig({
           items: [
             { text: 'Configuration', link: '/reference/configuration' },
             { text: 'REST API', link: '/reference/rest-api' },
+            { text: 'Licensing (AGPL boundary)', link: '/reference/licensing' },
           ],
         },
       ],
