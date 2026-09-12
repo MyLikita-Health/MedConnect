@@ -94,3 +94,8 @@ in the repository. The full product requirements live in `docs/prd.txt`.
 | [Devices & connections](/guide/devices) | ASTM, HL7, DICOM/Orthanc, device profiles |
 | [Usage](/guide/usage) | Console, API, everyday workflows, alerts |
 | [Troubleshooting](/guide/troubleshooting) | Common problems and their fixes |
+
+Deeper reference material in the repository:
+
+- [`docs/user-manual.md`](https://github.com/MyLikita-Health/MedConnect/blob/main/docs/user-manual.md) — the full operator manual (console, API, routing, imaging detail)
+- [`docs/analyzer-certification-runbook.md`](https://github.com/MyLikita-Health/MedConnect/blob/main/docs/analyzer-certification-runbook.md) — onboarding a real analyzer, end to end
