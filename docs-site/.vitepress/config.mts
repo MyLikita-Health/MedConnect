@@ -26,11 +26,13 @@ export default defineConfig({
     ['meta', { property: 'og:image', content: ogImageUrl }],
     ['meta', { property: 'og:image:width', content: '1200' }],
     ['meta', { property: 'og:image:height', content: '630' }],
+    ['meta', { property: 'og:image:alt', content: 'Integration Hub — pulse-line logo on medical blue, with the tagline “One hub for every device” and the supported protocols: ASTM, HL7 v2, DICOM' }],
     ['meta', { property: 'og:url', content: ogUrl }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:title', content: 'Integration Hub — Documentation' }],
     ['meta', { name: 'twitter:description', content: 'Guides for installing, configuring and operating the healthcare interoperability hub — ASTM, HL7 v2 and DICOM via Orthanc.' }],
     ['meta', { name: 'twitter:image', content: ogImageUrl }],
+    ['meta', { name: 'twitter:image:alt', content: 'Integration Hub — pulse-line logo on medical blue, with the tagline “One hub for every device” and the supported protocols: ASTM, HL7 v2, DICOM' }],
   ],
 
   themeConfig: {
