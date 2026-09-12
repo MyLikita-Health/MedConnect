@@ -565,13 +565,20 @@ G3 loop onto real assets.**
    hand-written fixture) — the same apply/rollback path proven against the
    automated manifest shape.
 
-**5. First-boot smoke drill on real Windows hardware** (deferred until
-hardware is available; checklist lives in `packaging/README.md`): install →
-service starts → setup wizard → admin key minted once → simulated analyzer
-message lands — extended with the signature story: the Digital Signatures tab
-shows a valid signature when signed, and the SmartScreen baseline of the
-unsigned build is recorded (the D13 purchase decision compares against this
-reality, not the marketing).
+**5. First-boot smoke drill — SCRIPTED AND GREEN (2026-09-12, `v0.1.0-rc.6`).**
+The drill runs as a workflow (`.github/workflows/smoke-drill.yml`, dispatch
+with a release tag) on a hosted x64 Windows runner: silent install → service
+RUNNING → first-boot console → admin key minted once → simulator message
+lands (before=0 → after=1, HELD) → Authenticode baseline (UNSIGNED, D13) →
+silent uninstall (service gone, payload gone, data dir kept). It caught five
+real installer bugs in sequence — ANSI em-dash in WinSW XML, unquoted
+`%BASE%` arguments, the platform-optional esbuild missing from the payload,
+the silent-uninstall MessageBox hang, and NSIS's temp-copy uninstall wait
+semantics — each fixed and pinned by an invariant test; full story in
+`packaging/README.md`. **Still deferred:** the interactive SmartScreen /
+Digital-Signatures observation on real pilot hardware — meaningful only once
+a certificate exists (D13), so the purchase decision compares against this
+recorded unsigned baseline.
 
 **Explicitly deferred:** the certificate purchase + secret configuration (D13
 — the only piece actually blocked on a purchase), MSIX/store distribution

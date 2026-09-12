@@ -99,10 +99,27 @@ then:
       pre-release suffix (strict X.X.X.X), and `npm ci` cannot run on hosted
       Windows runners (better-sqlite3 node-gyp vs. VS) — the workflow now runs
       npm only on ubuntu.
-- [ ] First-boot smoke on a real Windows box: install → service starts → console
-      setup wizard → admin key minted once → simulated analyzer message lands —
-      extended with the signature story (Digital Signatures tab when signed;
-      record the unsigned SmartScreen baseline as the D13 comparison point).
+- [x] First-boot smoke drill — scripted (`.github/workflows/smoke-drill.yml`, dispatch with a
+      release tag) on a hosted **x64 Windows runner** against `v0.1.0-rc.6`:
+      silent install → service `integration-hub` RUNNING (WinSW) → first-boot
+      console on :3000 → setup/complete mints the admin key exactly once →
+      payload's ASTM simulator → message LANDED via the authenticated API
+      (before=0 → after=1, status HELD) → Authenticode baseline recorded
+      (UNSIGNED per D13) → silent uninstall clean (service gone, payload gone,
+      data dir kept). **Five real installer bugs caught and fixed** — the drill
+      is now a permanent regression gate: (1) NSIS `FileWrite` is ANSI, so an
+      em-dash in the service XML made WinSW's parser reject the file (service
+      never registered); (2) unquoted `%BASE%` in WinSW `<arguments>` split at
+      `C:\Program ` (ERR_MODULE_NOT_FOUND); (3) esbuild is platform-optional —
+      the payload staged no `@esbuild/win32-x64`, so tsx could not transform on
+      Windows; (4) the uninstaller's data-dir MessageBox hangs a silent (/S)
+      uninstall forever — silent mode now keeps the data dir outright (clinical
+      data is never deleted unattended); (5) NSIS uninstallers copy themselves
+      to %TEMP% and exit immediately — waiters must use `/S _?=$INSTDIR` to run
+      in place, and the uninstaller force-kills stray shims before deleting
+      (graceful stop only signals; locked files delete silently). Still open:
+      the interactive SmartScreen/Digital-Signature observation on real pilot
+      hardware (needs a certificate to be meaningful).
 
 ## Release procedure (W5 — `.github/workflows/release.yml`)
 
