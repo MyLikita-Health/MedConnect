@@ -349,7 +349,7 @@ curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
       `profileId` so a rebuild of the hub restores the binding.
 - [ ] **7-day soak** on Postgres: zero silent drops, zero NAK loops, no
       unexpected HELD/FAILED growth (the `device-offline`, `held-backlog`,
-      `dlq-growth` alert rules cover this).
+      `dlq` alert rules cover this).
 - [ ] Version-discipline note written into the facility's change log: any
       future edit bumps `version` and re-runs the gate.
 

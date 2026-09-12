@@ -78,6 +78,7 @@ export default defineConfig({
           { text: 'REST API', link: '/reference/rest-api' },
         ],
       },
+      { text: 'Changelog', link: '/changelog' },
       { text: 'GitHub', link: 'https://github.com/MyLikita-Health/MedConnect' },
     ],
     sidebar: {

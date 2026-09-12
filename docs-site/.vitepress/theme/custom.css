@@ -53,3 +53,18 @@ html.dark {
     white-space: normal;
   }
 }
+
+/* Getting-started line under the stamp (same slot). Links inherit the
+   brand color for hover/contrast consistency with the rest of the site. */
+.docs-start {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+.docs-start a {
+  color: var(--vp-c-brand-1);
+  font-weight: 500;
+}
+.docs-start a:hover {
+  color: var(--vp-c-brand-2);
+}

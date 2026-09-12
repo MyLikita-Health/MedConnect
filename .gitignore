@@ -14,3 +14,4 @@ packaging/installer/build/
 docs-site/node_modules/
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/
+docs-site/changelog.md

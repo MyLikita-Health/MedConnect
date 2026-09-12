@@ -7,9 +7,16 @@ const { theme } = useData()
 </script>
 
 <template>
-  <p v-if="theme.docsUpdated" class="docs-stamp">
-    <span class="docs-stamp-badge">v{{ theme.docsVersion }}</span>
-    <span class="docs-stamp-dot" aria-hidden="true">&middot;</span>
-    <span>Docs updated {{ theme.docsUpdated }}</span>
-  </p>
+  <div v-if="theme.docsUpdated" class="home-hero-meta">
+    <p class="docs-stamp">
+      <span class="docs-stamp-badge">v{{ theme.docsVersion }}</span>
+      <span class="docs-stamp-dot" aria-hidden="true">&middot;</span>
+      <span>Docs updated {{ theme.docsUpdated }}</span>
+    </p>
+    <p class="docs-start">
+      Evaluating us? Read the
+      <a href="/guide/faq">FAQ</a> and the
+      <a href="/reference/security">security &amp; privacy statement</a>.
+    </p>
+  </div>
 </template>

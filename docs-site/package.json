@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/gen-changelog.mjs || true",
     "dev": "vitepress dev",
+    "prebuild": "node scripts/gen-changelog.mjs || true",
     "build": "vitepress build",
     "preview": "vitepress preview"
   },

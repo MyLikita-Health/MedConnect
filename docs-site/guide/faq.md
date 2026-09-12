@@ -123,9 +123,8 @@ obligates — is documented separately in
 
 Typical shape: one site, one or two analyzer models, the hub installed on
 an on-site Windows box, devices certified via the
-[certification procedure](/guide/certification), a 7-day soak with the
-`held-backlog` / `dlq-growth` / `device-offline` alert rules active, and a
-review of the audit trail. The [setup guide](/guide/setup) walks first
+[certification procedure](/guide/certification), a 7-day soak with the `held-backlog` / `dlq` / `device-offline` alert
+rules active, and a review of the audit trail. The [setup guide](/guide/setup) walks first
 boot to first routed result.
 
 ### What do we need from our side?
