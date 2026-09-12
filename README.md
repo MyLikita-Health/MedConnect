@@ -1,5 +1,6 @@
 # Integration Hub — MVP scaffold
 
+> **Documentation site:** guides for installation, setup, devices, usage and troubleshooting — <https://mylikita-health.github.io/MedConnect/> (source: [`docs-site/`](docs-site/)).
 > **User manual:** setup, configuration, console, API, device connectivity (ASTM + HL7), imaging, routing, alerts, and troubleshooting — see [`docs/user-manual.md`](docs/user-manual.md).
 > **Full-platform roadmap:** see [`docs/implementation-plan.md`](docs/implementation-plan.md) — architecture decisions, workstream plans, phased milestones M0–M5, risks, and the scaffold→production evolution map.
 
