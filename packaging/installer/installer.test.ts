@@ -119,6 +119,22 @@ test('W4 signed-update delivery: installer injects the agent env, agent consumes
   assert.match(serviceTpl, /W4 update delivery/, 'the template documents the UPDATES block');
 });
 
+test('FileWrite output is pure ASCII: NSIS writes ANSI and WinSW XML parsing is strict', () => {
+  // The drill caught this live (v0.1.0-rc.1): an em-dash in the service
+  // <description> landed as a non-UTF-8 byte through NSIS's ANSI FileWrite,
+  // and WinSW died with "Invalid character in the given encoding" before it
+  // could register the service. Comments/UI strings are fine (Unicode
+  // makensis); only FileWrite-consumed content must stay ASCII.
+  const fileWriteLines = nsi.split('\n').filter((l) => /FileWrite \$tmp/.test(l));
+  assert.ok(fileWriteLines.length >= 30, 'the installer writes its service/config files inline');
+  for (const line of fileWriteLines) {
+    // eslint-disable-next-line no-control-regex
+    assert.ok(!/[^\x00-\x7F]/.test(line), `non-ASCII in NSIS-written output: ${line.trim()}`);
+  }
+  // The dev-parity template renders the same XML the installer writes.
+  assert.ok(!/[^\x00-\x7F]/.test(serviceTpl), 'service.xml.tpl carries the same ASCII constraint');
+});
+
 test('package.json wires installer:build / installer:stage', () => {
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts['installer:build'], 'bash packaging/installer/build.sh');

@@ -1,13 +1,16 @@
-<!-- Integration Hub — Windows service definition (W2.5). Rendered by
+<!-- Integration Hub - Windows service definition (W2.5). Rendered by
      build.sh with the picked ports; consumed by the WinSW shim
      (IntegrationHub.exe = WinSW-x64.exe renamed). WinSW serves the SCM
-     control protocol — the reason a bare `sc.exe binPath=node.exe` service
-     dies with error 1053 — while supervision semantics stay in
-     HubSupervisor (the OS keeps exactly ONE process alive). -->
+     control protocol - the reason a bare `sc.exe binPath=node.exe` service
+     dies with error 1053 - while supervision semantics stay in
+     HubSupervisor (the OS keeps exactly ONE process alive). NOTE: this
+     whole file must stay pure ASCII (plain hyphens, no em-dashes): NSIS's
+     FileWrite is an ANSI writer and WinSW's XML parser rejects non-UTF-8
+     bytes (caught live by the v0.1.0-rc.1 smoke drill). -->
 <service>
   <id>integration-hub</id>
   <name>Integration Hub (local)</name>
-  <description>Healthcare device integration hub — local edge service</description>
+  <description>Healthcare device integration hub - local edge service</description>
   <env name="NODE_ENV" value="production"/>
   <env name="HUB_DATA_DIR" value="%ProgramData%\IntegrationHub"/>
   <env name="PORT" value="__HTTP_PORT__"/>
@@ -15,9 +18,9 @@
   <!-- W2 first-boot setup: auto-on for the SQLite local edge -->
   <env name="HUB_LOCAL_SETUP" value="1"/>
   <!-- W4 update delivery (written only when the installer is compiled with
-       /DUPDATES + /DUPDATE_SOURCE=… + /DUPDATE_PUBLIC_KEY=…): the in-hub
-       agent polls the signed-manifest source; the service process IS the
-       supervisor, so swaps are health-gated + auto-rollback in-place. -->
+       /DUPDATES + /DUPDATE_SOURCE=<url> + /DUPDATE_PUBLIC_KEY=<key>): the
+       in-hub agent polls the signed-manifest source; the service process IS
+       the supervisor, so swaps are health-gated + auto-rollback in-place. -->
   <executable>%BASE%\node.exe</executable>
   <arguments>--import tsx %BASE%\app\packages\server\src\service-cli.ts</arguments>
   <workingdirectory>%BASE%\app</workingdirectory>
