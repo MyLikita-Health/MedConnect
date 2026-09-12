@@ -325,6 +325,19 @@ Section "Uninstall"
   Pop $tmp
   nsExec::ExecToLog '"$INSTDIR\IntegrationHub.exe" uninstall'
   Pop $tmp
+  ; Graceful stop only SIGNALS - the shim can linger up to its stoptimeout
+  ; (20s) while the child exits, and a locked IntegrationHub.exe makes the
+  ; file Deletes below fail SILENTLY (the drill proved it: SCM entry gone,
+  ; payload left behind). Force-kill strays before touching files; taskkill
+  ; exits 128 when none remain, which Pop absorbs.
+  nsExec::ExecToLog 'taskkill /F /IM "IntegrationHub.exe"'
+  Pop $tmp
+!ifdef ORTHANC
+  nsExec::ExecToLog 'taskkill /F /IM "OrthancHub.exe"'
+  Pop $tmp
+  nsExec::ExecToLog 'taskkill /F /IM "Orthanc.exe"'
+  Pop $tmp
+!endif
   Sleep 1500
 
   DetailPrint "Removing the firewall rule…"
