@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 // path (see .github/workflows/docs.yml); local dev uses '/'.
 const base = process.env.DOCS_BASE || '/'
 
-const ogImage = `${base}og.png`.replace(/\/{2,}/g, '/')
+const ogImage = '/og.png'
 const ogUrl = 'https://mylikita-health.github.io/MedConnect'
 const ogImageUrl = ogUrl + ogImage
 
