@@ -103,6 +103,7 @@ export default defineConfig({
           items: [
             { text: 'Configuration', link: '/reference/configuration' },
             { text: 'REST API', link: '/reference/rest-api' },
+            { text: 'Security & privacy', link: '/reference/security' },
             { text: 'Licensing (AGPL boundary)', link: '/reference/licensing' },
           ],
         },
