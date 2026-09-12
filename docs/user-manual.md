@@ -82,7 +82,7 @@ The codebase is an npm-workspaces TypeScript monorepo. Layering (each layer depe
 
 ### 3.1 Prerequisites
 
-- **Node.js ≥ 20** and `npm`.
+- **Node.js 22** (`.nvmrc` pins the exact version) and `npm`.
 - **Docker + docker compose** — only for the PostgreSQL-backed dev stack and the Orthanc containers (optional; the hub runs fine without them).
 - macOS note: host port **5000** is used by AirPlay — the compose stack maps the device listener to **5001** for this reason.
 
@@ -509,7 +509,7 @@ With `DATABASE_URL` set, the hub persists everything durably:
 
 - `messages` — envelope + raw + parsed records + canonical payload + timeline (+ `imaging` jsonb for study events), with canonical `patients` / `orders` / `results` tables. One message lands in the DB **atomically** — envelope + clinical rows in a single transaction, so a crash cannot leave a half-persisted result.
 - `devices`, `device_profiles`, `order_registry`, `admission_registry`, `alert_rules` + `alerts`, `api_keys`, `test_mappings`, `destinations` + `route_rules`, audit log.
-- Migrations live in `packages/api/migrations/` (0012 currently) and **apply automatically at startup**. The compose dev DB: `postgres://hub:hub@localhost:5434/hub`.
+- Migrations live in `packages/api/migrations/` (0015 currently) and **apply automatically at startup**. The compose dev DB: `postgres://hub:hub@localhost:5434/hub`.
 
 ```bash
 npm run db:up        # compose: Postgres 16 (host 5434) + Redis (6380)
@@ -555,7 +555,7 @@ API (admin): `POST /api/v1/updates/{check,apply,rollback}`, `GET …/status`. Ve
 | `npm run demo:db` | In-memory demo but persisted to Postgres (`DATABASE_URL` preset) |
 | `npm run demo:update` | Signed-update loop: check → apply → swap → rollback |
 | `npm run simulate` | ASTM analyzer simulator (`--count`, `--interval`, `--corrupt-rate`) |
-| `npm run simulate:hl7` | HL7 simulator (`--kind oru\|orm\|adt`, `--variant <name>` for B4 vendor variants) |
+| `npm run simulate:hl7` | HL7 simulator (`--kind oru\|orm`, `--variant <name>` — `pid6-name`, `obx-swap`, `delimiters`, `pid4-id`, `orc4-id`) |
 
 ---
 

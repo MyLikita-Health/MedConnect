@@ -4,6 +4,9 @@ import { defineConfig } from 'vitepress'
 // path (see .github/workflows/docs.yml); local dev uses '/'.
 const base = process.env.DOCS_BASE || '/'
 
+const ogImage = `${base}og.png`.replace(/\/{2,}/g, '/')
+const ogUrl = 'https://mylikita-health.github.io/MedConnect/'
+
 export default defineConfig({
   base,
   title: 'Integration Hub',
@@ -15,6 +18,18 @@ export default defineConfig({
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg`.replace('//', '/') }],
     ['link', { rel: 'apple-touch-icon', href: `${base}favicon.svg`.replace('//', '/') }],
     ['meta', { name: 'theme-color', content: '#2563eb' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { property: 'og:site_name', content: 'Integration Hub Docs' }],
+    ['meta', { property: 'og:title', content: 'Integration Hub — Documentation' }],
+    ['meta', { property: 'og:description', content: 'Guides for installing, configuring and operating the healthcare interoperability hub — ASTM, HL7 v2 and DICOM via Orthanc.' }],
+    ['meta', { property: 'og:image', content: ogUrl + ogImage }],
+    ['meta', { property: 'og:image:width', content: '1200' }],
+    ['meta', { property: 'og:image:height', content: '630' }],
+    ['meta', { property: 'og:url', content: ogUrl }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:title', content: 'Integration Hub — Documentation' }],
+    ['meta', { name: 'twitter:description', content: 'Guides for installing, configuring and operating the healthcare interoperability hub — ASTM, HL7 v2 and DICOM via Orthanc.' }],
+    ['meta', { name: 'twitter:image', content: ogUrl + ogImage }],
   ],
 
   themeConfig: {

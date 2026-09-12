@@ -118,9 +118,10 @@ npm run simulate:hl7 -- --kind orm                       # ORM order feed
 npm run simulate:hl7 -- --variant pid6-name --kind oru   # vendor-variant transcripts
 ```
 
-Variants (`pid6-name`, `obx-swap`, `delimiters`) emit B4 vendor-deviant
-wire for profile testing. ADT has no simulator — the ADT golden corpus
-runs in CI and the feed is exercised through the demos/tests.
+Variants (`pid6-name`, `obx-swap`, `delimiters`, `pid4-id`, `orc4-id`)
+emit B4 vendor-deviant wire for profile testing. ADT has no simulator —
+the ADT golden corpus runs in CI and the feed is exercised through the
+demos/tests.
 
 HL7 **segment-level profiles** let a device profile pin per-vendor
 PID/OBR/OBX field positions + delimiter overrides; the gateway resolves
