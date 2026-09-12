@@ -1,3 +1,6 @@
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitepress'
 
 // Set DOCS_BASE=/MedConnect/ when deploying to GitHub Pages under the repo
@@ -7,6 +10,29 @@ const base = process.env.DOCS_BASE || '/'
 const ogImage = '/og.png'
 const ogUrl = 'https://mylikita-health.github.io/MedConnect'
 const ogImageUrl = ogUrl + ogImage
+
+// Home-page stamp inputs, computed at build time. Version comes from the
+// root package.json (single source of truth with the hub itself); the docs
+// date from the last commit that touched docs-site. CI must check out with
+// fetch-depth: 0 or the date silently falls back to "today".
+const siteRoot = fileURLToPath(new URL('..', import.meta.url))
+const docsVersion = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version
+
+let docsCommit = 'source'
+let docsUpdated = new Date().toISOString().slice(0, 10)
+try {
+  docsCommit = execSync('git log -1 --format=%h -- .', { cwd: siteRoot, encoding: 'utf8' }).trim() || docsCommit
+  const iso = execSync('git log -1 --format=%cs -- .', { cwd: siteRoot, encoding: 'utf8' }).trim()
+  if (iso) docsUpdated = iso
+} catch {
+  // e.g. a build without git history — keep the fallbacks above
+}
+const docsUpdatedLabel = new Date(docsUpdated + 'T00:00:00Z').toLocaleDateString('en-US', {
+  day: 'numeric',
+  month: 'long',
+  timeZone: 'UTC',
+  year: 'numeric',
+})
 
 export default defineConfig({
   base,
@@ -38,6 +64,11 @@ export default defineConfig({
   themeConfig: {
     siteTitle: 'Integration Hub Docs',
     logo: '/logo.svg',
+    // Custom keys consumed by theme/HomeStamp.vue (serialized into the
+    // client payload; absent from the default theme's types — expected).
+    docsVersion,
+    docsUpdated: docsUpdatedLabel,
+    docsCommit,
     nav: [
       { text: 'Guide', link: '/guide/overview' },
       {
@@ -73,6 +104,10 @@ export default defineConfig({
           ],
         },
       ],
+    },
+    lastUpdated: {
+      text: 'Updated',
+      formatOptions: { dateStyle: 'long', locale: 'en-US' },
     },
     search: { provider: 'local' },
     editLink: {
