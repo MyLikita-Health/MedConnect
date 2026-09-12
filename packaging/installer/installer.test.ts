@@ -30,7 +30,7 @@ test('hub.nsi installs the staged payload: node.exe, WinSW shim, app/ workspace'
   for (const env of ['NODE_ENV', 'HUB_DATA_DIR', 'PORT', 'DEVICE_PORT', 'HUB_LOCAL_SETUP']) {
     assert.match(nsi, new RegExp(`<env name="${env}"`), `service XML env: ${env}`);
   }
-  assert.match(nsi, /--import tsx %BASE%\\\\app\\\\packages\\\\server\\\\src\\\\service-cli\.ts/, 'the service runs the W2 service entry via tsx');
+  assert.match(nsi, /--import tsx "%BASE%\\\\app\\\\packages\\\\server\\\\src\\\\service-cli\.ts/, 'the service runs the W2 service entry via tsx (quoted: Program Files has a space)');
 });
 
 test('service definition: automatic start + restart-on-failure (supervisor stays single)', () => {
@@ -80,6 +80,26 @@ test('service-cli Windows template matches the WinSW mechanism (no bare sc.exe)'
   assert.doesNotMatch(serviceCli, /sc\.exe create/, 'the broken bare sc.exe create is gone');
   assert.match(serviceDoc, /WinSW/, 'docs describe the WinSW mechanism');
   assert.match(serviceDoc, /1053/, 'docs explain why sc.exe alone fails');
+});
+
+test('WinSW <arguments> paths are quoted: %BASE% lives under Program Files (spaces)', () => {
+  // The drill caught this live (v0.1.0-rc.2): WinSW tokenizes <arguments> as
+  // a Windows command line, so an unquoted path under C:\Program Files\...
+  // splits at the space and Node tried to import 'C:\\Program'.
+  const argumentsLines = nsi.split('\n').filter((l) => /<arguments>/.test(l));
+  assert.ok(argumentsLines.length >= 2, 'both services define their arguments');
+  for (const line of argumentsLines) {
+    const m = line.match(/<arguments>([\s\S]*?)<\/arguments>/);
+    assert.ok(m, 'arguments element parses');
+    const content = m[1];
+    if (/%BASE%/.test(content)) {
+      assert.match(content, /"%BASE%[^\"]*"/, `path with %BASE% must be quoted: ${content}`);
+    }
+  }
+  // The dev-parity template renders the same arguments the installer writes.
+  const tplArgs = serviceTpl.match(/<arguments>([\s\S]*?)<\/arguments>/);
+  assert.ok(tplArgs, 'template defines its arguments');
+  assert.match(tplArgs[1], /"%BASE%[^\"]*"/, 'template quotes the %BASE% path too');
 });
 
 test('W3 orthanc bundle: staged beside the payload, own service, AGPL boundary intact', () => {

@@ -168,7 +168,7 @@ Section "Install"
   FileWrite $tmp '  <env name="UPDATE_PUBLIC_KEY" value="${UPDATE_PUBLIC_KEY}"/>$\r$\n'
 !endif
   FileWrite $tmp '  <executable>%BASE%\\node.exe</executable>$\r$\n'
-  FileWrite $tmp '  <arguments>--import tsx %BASE%\\app\\packages\\server\\src\\service-cli.ts</arguments>$\r$\n'
+  FileWrite $tmp '  <arguments>--import tsx "%BASE%\\app\\packages\\server\\src\\service-cli.ts"</arguments>$\r$\n'
   FileWrite $tmp '  <workingdirectory>%BASE%\\app</workingdirectory>$\r$\n'
   FileWrite $tmp '  <startmode>Automatic</startmode>$\r$\n'
   FileWrite $tmp '  <onfailure action="restart" delay="5 sec"/>$\r$\n'
@@ -233,7 +233,7 @@ Section "Install"
   FileWrite $tmp '  <name>Integration Hub Orthanc (local)</name>$\r$\n'
   FileWrite $tmp '  <description>AGPL DICOM engine for Integration Hub - adjacent REST service</description>$\r$\n'
   FileWrite $tmp '  <executable>%BASE%\\Orthanc.exe</executable>$\r$\n'
-  FileWrite $tmp '  <arguments>%BASE%\\orthanc.json</arguments>$\r$\n'
+  FileWrite $tmp '  <arguments>"%BASE%\\orthanc.json"</arguments>$\r$\n'
   FileWrite $tmp '  <workingdirectory>%BASE%</workingdirectory>$\r$\n'
   FileWrite $tmp '  <startmode>Automatic</startmode>$\r$\n'
   FileWrite $tmp '  <onfailure action="restart" delay="5 sec"/>$\r$\n'
