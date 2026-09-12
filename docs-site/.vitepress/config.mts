@@ -94,6 +94,7 @@ export default defineConfig({
             { text: 'Device certification', link: '/guide/certification' },
             { text: 'Usage', link: '/guide/usage' },
             { text: 'Troubleshooting', link: '/guide/troubleshooting' },
+            { text: 'FAQ', link: '/guide/faq' },
           ],
         },
       ],
