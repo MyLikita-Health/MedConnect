@@ -100,7 +100,8 @@ then:
       Windows runners (better-sqlite3 node-gyp vs. VS) — the workflow now runs
       npm only on ubuntu.
 - [x] First-boot smoke drill — scripted (`.github/workflows/smoke-drill.yml`, dispatch with a
-      release tag) on a hosted **x64 Windows runner** against `v0.1.0-rc.6`:
+      release tag, plus a required post-publish gate in the release workflow) on a hosted
+      **x64 Windows runner**; final full pass against `v0.1.0-rc.7`:
       silent install → service `integration-hub` RUNNING (WinSW) → first-boot
       console on :3000 → setup/complete mints the admin key exactly once →
       payload's ASTM simulator → message LANDED via the authenticated API
@@ -120,6 +121,15 @@ then:
       (graceful stop only signals; locked files delete silently). Still open:
       the interactive SmartScreen/Digital-Signature observation on real pilot
       hardware (needs a certificate to be meaningful).
+      **Gated-release verification (`v0.1.0-rc.7`, 2026-09-12):** one tag, one
+      run, all four jobs green (compile → sign no-op → publish → required
+      drill); independent re-drill of the published tag from scratch (15/15
+      steps) plus the operator download path re-proven (released exe
+      hash-verified against `SHA256SUMS.txt`; manifest `artifact.sha256`/
+      `size`/`url` cross-checked against the published assets). The superseded
+      `v0.1.0-rc.1`–`rc.6` releases and tags were deleted afterward (metadata +
+      checksums archived first; no operator ever downloaded a superseded
+      build) — `v0.1.0-rc.7` is the sole remaining release.
 
 ## Release procedure (W5 — `.github/workflows/release.yml`)
 

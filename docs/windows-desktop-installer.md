@@ -565,7 +565,8 @@ G3 loop onto real assets.**
    hand-written fixture) — the same apply/rollback path proven against the
    automated manifest shape.
 
-**5. First-boot smoke drill — SCRIPTED AND GREEN (2026-09-12, `v0.1.0-rc.6`).**
+**5. First-boot smoke drill — SCRIPTED AND GREEN (2026-09-12, `v0.1.0-rc.6`
+→ `v0.1.0-rc.7`).**
 The drill runs as a workflow (`.github/workflows/smoke-drill.yml`, dispatch
 with a release tag) on a hosted x64 Windows runner: silent install → service
 RUNNING → first-boot console → admin key minted once → simulator message
@@ -575,7 +576,15 @@ real installer bugs in sequence — ANSI em-dash in WinSW XML, unquoted
 `%BASE%` arguments, the platform-optional esbuild missing from the payload,
 the silent-uninstall MessageBox hang, and NSIS's temp-copy uninstall wait
 semantics — each fixed and pinned by an invariant test; full story in
-`packaging/README.md`. **Still deferred:** the interactive SmartScreen /
+`packaging/README.md`. **Gated-release verification (2026-09-12):** the
+drill then became the release workflow's required post-publish gate
+(reusable-workflow call, `smoke-drill needs: publish`) and `v0.1.0-rc.7`
+verified the whole chain in one run — compile → sign no-op → publish →
+drill (15/15 steps green, run 34684592250 for the independent re-drill) —
+plus the operator download path (released exe hash-verified against
+`SHA256SUMS.txt`; manifest cross-checked against the published assets).
+The superseded `v0.1.0-rc.1`–`rc.6` releases/tags were deleted afterward
+(metadata + checksums archived first). **Still deferred:** the interactive SmartScreen /
 Digital-Signatures observation on real pilot hardware — meaningful only once
 a certificate exists (D13), so the purchase decision compares against this
 recorded unsigned baseline.

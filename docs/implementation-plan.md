@@ -2025,11 +2025,16 @@ complete. The distribution remainder then shipped as **W5** (§8.2a
 sequencing; docs/windows-desktop-installer.md §8.5, decision D13): the
 env-driven Authenticode signing step + GitHub Releases + the
 `update-cli release` manifest loop are built — signing activates by
-configuration when a certificate is purchased, no code changes. What
-remains on the track is operational, not build: the certificate purchase +
-CI secrets (the only piece blocked on a purchase), the first-boot smoke on
-real Windows hardware (install → service → wizard → simulated analyzer
-message — now extended with the signature story), and the M4-gate
+configuration when a certificate is purchased, no code changes. The
+first-boot smoke is now scripted AND gated: the drill runs on real hosted
+x64 Windows as the release workflow's required post-publish gate, and the
+`v0.1.0-rc.7` candidate verified the full chain in one run (compile →
+sign no-op → publish → drill 15/15) with the operator download path
+re-proven; superseded rc.1–rc.6 releases were pruned (docs/
+windows-desktop-installer.md §8.5). What remains on the track is
+operational, not build: the certificate purchase + CI secrets (the only
+piece blocked on a purchase), the interactive SmartScreen observation
+on pilot hardware, and the M4-gate
 operational criteria a paired edge needs a deployed cloud for (reference
 vendor unaided, 48 h offline soak, production RLS verification). Next
 milestone on the plan: M5 (§8.1) — ecosystem, certification program, OEM
