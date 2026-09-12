@@ -216,10 +216,14 @@ jobs:
       - name: Silent uninstall (keeps the data dir)
         shell: pwsh
         run: |
-          # rc.4 finding: -Wait waited on the uninstaller (and every
-          # descendant) until the JOB timeout - give the uninstaller its own
-          # short leash and dump the service log as evidence if it blows it.
-          $p = Start-Process -FilePath 'C:\Program Files\IntegrationHub\uninstall.exe' -ArgumentList '/S' -PassThru
+          # NSIS uninstallers COPY THEMSELVES to %TEMP% and exit immediately;
+          # the real work happens in the temp copy. Waiting on uninstall.exe
+          # races the uninstall (rc.5/rc.6 finding: assertions ran mid-delete
+          # of 135MB of node_modules). The `_?=$INSTDIR` form runs the
+          # uninstaller IN PLACE: the process we wait on lives until the work
+          # is done and the exit code is real. Known tradeoff: in this mode
+          # uninstall.exe cannot delete itself and remains - expected.
+          $p = Start-Process -FilePath 'C:\Program Files\IntegrationHub\uninstall.exe' -ArgumentList '/S','_?=C:\Program Files\IntegrationHub' -PassThru
           if (-not $p.WaitForExit(180000)) {
             Get-Content 'C:\ProgramData\IntegrationHub\logs\integration-hub.out.log' -Tail 40 -ErrorAction SilentlyContinue
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -234,7 +238,7 @@ jobs:
             throw 'payload still present after uninstall'
           }
           if (-not (Test-Path 'C:\ProgramData\IntegrationHub')) { throw 'data dir removed — silent uninstall must KEEP it (W2 contract)' }
-          "uninstall clean; service gone, payload gone, data dir kept"
+          "uninstall clean; service gone, payload gone, data dir kept (uninstall.exe itself remains: _?= mode)"
 
       - name: Drill summary
         if: always()
