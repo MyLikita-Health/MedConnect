@@ -12,7 +12,9 @@
 # via tsx, so the payload is node.exe + the workspace sources + a production
 # npm ci WITH tsx retained (it is the runtime loader, not a dev-only tool).
 # No compilation of better-sqlite3 is needed for Windows: the npm tarball
-# ships prebuilds/win32-x64.node (all platforms in one package).
+# ships prebuilds/win32-x64.node (all platforms in one package). tsx's
+# esbuild, however, is a PLATFORM-OPTIONAL split (@esbuild/win32-x64) - step
+# 4a lays the Windows binary into the payload explicitly.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -83,6 +85,23 @@ cp ../../docs/user-manual.md ../../docs/analyzer-certification-runbook.md "$APP/
 echo "[w2.5] installing production node_modules (keeping tsx)…"
 ( cd "$APP" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund )
 ( cd "$APP" && npm install --no-save --ignore-scripts --no-audit --no-fund tsx@^4.19.0 )
+
+# 4a. The staging host is NOT Windows, and esbuild (tsx's engine) ships its
+#     native binary as a platform-OPTIONAL dependency: the installs above lay
+#     down only the host's binary, so the Windows payload would die at boot
+#     with "Cannot find module @esbuild/win32-x64" (the smoke drill caught
+#     this live on v0.1.0-rc.3). npm install --os/--cpu refuses cross-platform
+#     optional deps (EBADPLATFORM), so fetch the exact-version tarball and lay
+#     it into the payload's node_modules directly - it carries esbuild.exe,
+#     and --ignore-scripts means it is pure files.
+ESBUILD_VERSION=$( cd "$APP" && node -p "require('esbuild/package.json').version" )
+ESBUILD_DIR="$APP/node_modules/@esbuild/win32-x64"
+mkdir -p "$ESBUILD_DIR"
+( cd "$APP" && npm pack "@esbuild/win32-x64@$ESBUILD_VERSION" --pack-destination node_modules/@esbuild/win32-x64 >/dev/null )
+tar -xzf "$ESBUILD_DIR/esbuild-win32-x64-$ESBUILD_VERSION.tgz" -C "$ESBUILD_DIR" --strip-components=1
+rm "$ESBUILD_DIR/esbuild-win32-x64-$ESBUILD_VERSION.tgz"
+test -f "$ESBUILD_DIR/esbuild.exe" || { echo "[w2.5] ERROR: esbuild.exe missing from the payload" >&2; exit 1; }
+echo "[w2.5] staged the Windows esbuild binary (@$ESBUILD_VERSION)"
 echo "[w2.5] staged: node.exe, WinSW, app/ ($(du -sh "$APP" | cut -f1))"
 
 # 4b. W3 Orthanc bundle (--orthanc): official Orthanc.exe + the prebuilt

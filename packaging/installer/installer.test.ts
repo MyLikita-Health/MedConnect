@@ -155,6 +155,16 @@ test('FileWrite output is pure ASCII: NSIS writes ANSI and WinSW XML parsing is 
   assert.ok(!/[^\x00-\x7F]/.test(serviceTpl), 'service.xml.tpl carries the same ASCII constraint');
 });
 
+test('payload staging lays down the Windows esbuild binary (platform-optional dep)', () => {
+  // tsx's esbuild ships its native binary as a platform-OPTIONAL dependency:
+  // a macOS/linux staging host never lays down @esbuild/win32-x64, and the
+  // supervised hub died at boot without it (caught live on v0.1.0-rc.3).
+  // better-sqlite3 needs no such step - its tarball ships every platform's
+  // prebuild (prebuilds/win32-x64.node) in one package.
+  assert.match(buildSh, /@esbuild\/win32-x64/, 'the Windows esbuild binary is staged explicitly');
+  assert.match(buildSh, /test -f .*esbuild\.exe/, 'the staged binary is verified before packaging');
+});
+
 test('package.json wires installer:build / installer:stage', () => {
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts['installer:build'], 'bash packaging/installer/build.sh');
