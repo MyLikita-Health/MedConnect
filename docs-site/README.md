@@ -48,6 +48,7 @@ Other repo docs → site page mapping:
 | `docs/windows-service.md` | `guide/service-management.md` (+ `guide/installation.md`) |
 | `docs/windows-desktop-installer.md` (install/smoke) | `guide/installation.md` |
 | `README.md` quickstarts/API table | `guide/overview.md` + `reference/rest-api.md` |
+| Auth/RBAC/TLS/updates behavior (`security.ts`, `HUB_TLS_*`, updates) | `reference/security.md` (keep its verify-in-repo table accurate) |
 | Root `package.json` version | re-build (the home-page version badge reads it) |
 
 (`docs/implementation-plan.md` and the PRD are internal — intentionally not
